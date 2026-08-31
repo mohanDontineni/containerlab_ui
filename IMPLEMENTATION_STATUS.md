@@ -14,6 +14,7 @@
 - Professional project, lab, image, topology-editor, runtime, console, diagnostics, configuration, import/export, and settings workflows outside Django admin.
 - Session-bound browser consoles, reliable per-device restart, bounded ping diagnostics, authenticated PCAP capture/download, and bidirectional live link controls.
 - Live link latency, disable, and restore validation against the deployed two-node lab, with persisted conditions, idempotent operations, and audit events.
+- Resumable 4 MiB image archive onboarding with pause/resume/cancel UX, optional expected checksum, server-side SHA-256, quarantine inspection, per-project deduplication, and audit events.
 
 ## Acceptance results
 
@@ -21,7 +22,7 @@
 |---|---|---|---|
 | 1 | GUI through 30444 | PASS | TLS admin login returned HTTP 200 at `192.168.1.148:30444`. |
 | 2 | Authentication/project authorization | PASS | Django admin login deployed; API guessed-UUID and viewer-write tests pass. |
-| 3 | Supported upload/preparation | BLOCKED | Upload/inspection implemented and unit-tested; registry publication workflow is not integrated. |
+| 3 | Supported upload/preparation | PASS | A real 8,585,216-byte Alpine Docker archive was resumed across three chunks, checksum-matched, safely identified, validated, audited, and deduplicated; malformed input remained unsupported. |
 | 4 | Invalid formats stay undeployable | PASS | Unit tests verify malformed data and traversal archives are unsupported. |
 | 5 | Published images pull through runtime layers | BLOCKED | Clabernetes public pulls proved; private worker-trusted TLS registry prerequisite not completed. |
 | 6 | Layout persists | PASS | Editor draft save/load persists node positions, annotations, interfaces, links, images, and encrypted startup configurations. |
@@ -40,7 +41,7 @@
 | 19 | Existing workloads unaffected | PASS | Trading workloads remained running during inspection/deployment. |
 | 20 | Backup/restore | NOT RUN | Commands supplied; destructive restore exercise not performed on live instance. |
 
-Automated tests: **50 passed**. Django checks and migration drift checks: **pass**. React TypeScript/Vite production build: **pass in the clean multi-stage image build**. Helm lint/render: **pass**. Native runtime ping: **3 transmitted, 3 received, 0% loss, 0.445 ms average RTT**. Bidirectional 120 ms link condition: **240.563 ms average RTT**. Disabled link: **100% loss**. Restored qdiscs: **native `noqueue` on both endpoints**.
+Automated tests: **56 passed**. Django checks and migration drift checks: **pass**. React TypeScript/Vite production build: **pass in the clean multi-stage image build**. Helm lint/render: **pass**. Native runtime ping: **3 transmitted, 3 received, 0% loss, 0.445 ms average RTT**. Bidirectional 120 ms link condition: **240.563 ms average RTT**. Disabled link: **100% loss**. Restored qdiscs: **native `noqueue` on both endpoints**.
 
 ## Known limitations
 
