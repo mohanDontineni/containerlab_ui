@@ -22,6 +22,7 @@
 - Production BGP reference lab using a resumably uploaded and locally published FRR 10.4.1 image, two configured routers, explicit eth1 link endpoints, established eBGP, learned loopback routes, and bidirectional routed reachability.
 - Production nftables firewall reference lab using a dedicated checksum-published appliance, encrypted policy delivery, default-deny forwarding, permitted ICMP, denied TCP/8080, and named policy counters.
 - Audited node-local image repair workflow with explicit operator intent, reconciling/failed states, and appliance-container readiness probes that prevent false-green deployments.
+- Verified live configuration collection for FRR and nftables appliances with template-scoped commands, immutable encrypted versions, persistent deployment history, content-free audit records, and operator-only no-store downloads.
 
 ## Acceptance results
 
@@ -54,8 +55,9 @@
 | 25 | Firewall reference lab | PASS | Routed ICMP passed 3/3 with 0% loss; a locally verified TCP/8080 listener was unreachable through the firewall; nftables recorded 1 allowed ICMP flow and 3 denied TCP SYNs. |
 | 26 | Node-local image repair | PASS | A missing FRR node image was republished through the authenticated audited product operation, restored to containerd, and enabled waiting launchers without manual runtime import. |
 | 27 | Appliance readiness | PASS | Reconciliation probes the nested appliance container and keeps the deployment in `deploying` when Clabernetes reports a ready Node without a running device. |
+| 28 | Live configuration collection | PASS | FRR and firewall collection operations succeeded; repeated firewall collection created v2; three versions remained encrypted at rest; downloaded payload checksums matched and responses used `no-store`/`nosniff`. |
 
-Automated tests: **79 passed**. Django checks and migration drift checks: **pass**. React TypeScript/Vite production build: **pass in the clean multi-stage image build**. Helm lint/render: **pass**. Native runtime ping: **3 transmitted, 3 received, 0% loss, 0.445 ms average RTT**. Bidirectional 120 ms link condition: **240.563 ms average RTT**. Disabled link: **100% loss**. Restored qdiscs: **native `noqueue` on both endpoints**.
+Automated tests: **81 passed**. Django checks and migration drift checks: **pass**. React TypeScript/Vite production build: **pass in the clean multi-stage image build**. Helm lint/render: **pass**. Native runtime ping: **3 transmitted, 3 received, 0% loss, 0.445 ms average RTT**. Bidirectional 120 ms link condition: **240.563 ms average RTT**. Disabled link: **100% loss**. Restored qdiscs: **native `noqueue` on both endpoints**.
 
 ## Known limitations
 
