@@ -1,8 +1,13 @@
 import uuid
 import pytest
+from django.conf import settings
 from rest_framework.test import APIClient
 from studio.models import (DeviceTemplateVersion, ImageArtifact, Lab, LabInterface, LabNode, LabRevision,
     Project, ProjectMembership, PublishedImage, User)
+from studio.tasks import execute_operation
+
+def test_web_process_uses_configured_celery_broker():
+    assert execute_operation.app.conf.broker_url == settings.CELERY_BROKER_URL
 
 @pytest.mark.django_db
 def test_guessed_project_uuid_is_not_visible():
