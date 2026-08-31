@@ -10,7 +10,8 @@ from rest_framework.response import Response
 from rest_framework.views import exception_handler as drf_exception_handler
 from . import models, serializers
 from .permissions import ProjectAccess, project_role
-from .tasks import execute_operation
+from .runtime import ClabernetesAdapter
+from .tasks import execute_operation, reconcile_deployment
 from .uploads import UploadError, append_chunk, finalize
 
 def exception_handler(exc,context):
@@ -33,6 +34,29 @@ class LabViewSet(viewsets.ModelViewSet):
         project=serializer.validated_data["project"]
         if project_role(self.request.user,project) not in ("administrator","editor"): from rest_framework.exceptions import PermissionDenied; raise PermissionDenied()
         serializer.save()
+    @action(detail=True,methods=["post"])
+    def deploy(self,request,pk=None):
+        lab=self.get_object()
+        if project_role(request.user,lab.project) not in ("administrator","editor"):
+            from rest_framework.exceptions import PermissionDenied; raise PermissionDenied()
+        key=request.headers.get("Idempotency-Key")
+        if not key: return Response({"error":{"code":"idempotency_key_required"}},status=400)
+        existing=models.OperationJob.objects.filter(owner=request.user,idempotency_key=key).select_related("deployment").first()
+        if existing: return Response({"deployment":serializers.DeploymentSerializer(existing.deployment).data,"operation":serializers.OperationSerializer(existing).data},status=202)
+        with transaction.atomic():
+            lab=models.Lab.objects.select_for_update().select_related("current_draft","project").get(pk=lab.pk)
+            revision=lab.current_draft
+            if not revision or not revision.nodes.exists(): return Response({"error":{"code":"empty_topology","details":"Save at least one device before deployment."}},status=422)
+            errors=ClabernetesAdapter.validate_topology(revision)
+            if errors: return Response({"error":{"code":"topology_not_deployable","details":errors}},status=422)
+            revision.immutable=True; revision.save(update_fields=["immutable","updated_at"])
+            lab.current_draft=None; lab.save(update_fields=["current_draft","updated_at"])
+            deployment_id=uuid.uuid4()
+            deployment=models.LabDeployment.objects.create(id=deployment_id,revision=revision,namespace=f"clab-{deployment_id.hex[:20]}",
+                cluster_identity="kubernetes-admin@kubernetes",runtime_version="0.8.0",observed_state=models.LabDeployment.State.PENDING)
+            job=models.OperationJob.objects.create(deployment=deployment,owner=request.user,operation_type="deploy_lab",target_id=deployment.id,idempotency_key=key,state="scheduled")
+            transaction.on_commit(lambda: execute_operation.delay(str(job.id)))
+        return Response({"deployment":serializers.DeploymentSerializer(deployment).data,"operation":serializers.OperationSerializer(job).data},status=202)
 
 class UploadViewSet(viewsets.ModelViewSet):
     serializer_class=serializers.UploadSessionSerializer
@@ -61,6 +85,13 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class=serializers.DeploymentSerializer
     def get_queryset(self): return models.LabDeployment.objects.filter(revision__lab__project__in=visible_projects(self.request.user))
     @action(detail=True,methods=["post"])
+    def refresh(self,request,pk=None):
+        deployment=self.get_object()
+        if project_role(request.user,deployment.revision.lab.project) not in ("administrator","editor"):
+            from rest_framework.exceptions import PermissionDenied; raise PermissionDenied()
+        reconcile_deployment.delay(str(deployment.id))
+        return Response({"state":"scheduled"},status=202)
+    @action(detail=True,methods=["post"])
     def operations(self,request,pk=None):
         deployment=self.get_object(); op=request.data.get("operation")
         if op not in ("deploy_lab","stop_lab","delete_runtime"): return Response({"error":{"code":"unsupported_operation"}},status=422)
@@ -72,4 +103,3 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
             job=models.OperationJob.objects.filter(owner=request.user,idempotency_key=key).first()
             if not job: return Response({"error":{"code":"operation_conflict"}},status=409)
         execute_operation.delay(str(job.id)); return Response(serializers.OperationSerializer(job).data,status=202)
-

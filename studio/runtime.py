@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import yaml
 from django.conf import settings
 from kubernetes import client, config
 from kubernetes.client.exceptions import ApiException
@@ -17,7 +18,8 @@ class ClabernetesAdapter:
             try: config.load_incluster_config()
             except config.ConfigException: config.load_kube_config()
         self.custom=custom_api or client.CustomObjectsApi(); self.core=core_api or client.CoreV1Api()
-    def validate_topology(self, revision):
+    @staticmethod
+    def validate_topology(revision):
         errors=[]
         for node in revision.nodes.select_related("template_version","published_image"):
             if not node.published_image: errors.append(f"{node.name}: no immutable published image")
@@ -27,9 +29,10 @@ class ClabernetesAdapter:
         revision=deployment.revision
         nodes={n.name:{"kind":n.template_version.containerlab_kind,"image":n.published_image.registry_digest} for n in revision.nodes.select_related("template_version","published_image")}
         links=[{"endpoints":[f"{l.endpoint_a.node.name}:{l.endpoint_a.name}",f"{l.endpoint_b.node.name}:{l.endpoint_b.name}"]} for l in revision.links.select_related("endpoint_a__node","endpoint_b__node")]
+        definition=yaml.safe_dump({"name":f"lab-{str(deployment.id)[:8]}","topology":{"nodes":nodes,"links":links}},sort_keys=False)
         body={"apiVersion":f"{API_GROUP}/{API_VERSION}","kind":"Topology","metadata":{"name":"topology","namespace":deployment.namespace,
             "labels":{"app.kubernetes.io/managed-by":"containerlab-studio","studio.containerlab.io/deployment":str(deployment.id)}},
-            "spec":{"definition":{"containerlab":{"topology":{"nodes":nodes,"links":links}}}}}
+            "spec":{"definition":{"containerlab":definition},"naming":"prefixed","expose":{"disableExpose":True,"exposeType":"LoadBalancer"}}}
         return Plan(deployment.namespace,"topology",body)
     def deploy_lab(self,deployment):
         errors=self.validate_topology(deployment.revision)
@@ -53,4 +56,3 @@ class ClabernetesAdapter:
     def collect_configuration(self,*_): raise CapabilityError("Template does not provide a verified collector")
     def start_capture(self,*_): raise CapabilityError("Capture requires verified runtime interface mapping")
     def set_link_condition(self,*_): raise CapabilityError("Clabernetes v0.8.0 does not expose a supported live impairment API")
-
