@@ -1,11 +1,15 @@
 from django.contrib import admin
 from django.urls import include, path
+from django.views.generic import RedirectView
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 from studio.views import dashboard
 from studio import portal_views
 
 urlpatterns = [
-    path("admin/", admin.site.urls), path("accounts/", include("django.contrib.auth.urls")),
+    path("admin/", admin.site.urls),
+    path("accounts/password_change/",RedirectView.as_view(pattern_name="portal-settings",permanent=False)),
+    path("accounts/password_change/done/",RedirectView.as_view(pattern_name="portal-settings",permanent=False)),
+    path("accounts/", include("django.contrib.auth.urls")),
     path("api/v1/schema/", SpectacularAPIView.as_view(), name="schema"),
     path("api/v1/docs/", SpectacularSwaggerView.as_view(url_name="schema")),
     path("api/v1/", include("studio.urls")), path("", dashboard, name="dashboard"),

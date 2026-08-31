@@ -1,2 +1,26 @@
-{% extends "studio/base.html" %}{% block title %}Settings · ContainerLab Studio{% endblock %}{% block breadcrumb %}Settings{% endblock %}{% block content %}<section class="page-heading"><div><p class="eyebrow">PLATFORM</p><h1>Settings</h1><p>Runtime identity, access, and environment information.</p></div></section><div class="settings-grid"><section class="panel settings-card"><p class="eyebrow">ACCOUNT</p><h2>{{ request.user.username }}</h2><p>Your session is managed by Django with CSRF protection and secure cookies.</p><a class="secondary-button" href="/accounts/password_change/">Change password</a></section><section class="panel settings-card"><p class="eyebrow">RUNTIME</p><h2>Home Lab</h2><dl><div><dt>Kubernetes</dt><dd>192.168.1.148</dd></div><div><dt>Clabernetes</dt><dd>v0.8.0</dd></div><div><dt>Metrics</dt><dd>Unavailable</dd></div></dl></section>{% if request.user.is_superuser %}<section class="panel settings-card maintenance"><p class="eyebrow">MAINTENANCE</p><h2>Django administration</h2><p>Low-level database administration. Normal product workflows should use Studio pages.</p><a class="secondary-button" href="/admin/">Open maintenance admin</a></section>{% endif %}</div>{% endblock %}
-
+{% extends "studio/base.html" %}{% load static %}
+{% block title %}Account & security · ContainerLab Studio{% endblock %}{% block breadcrumb %}Account & security{% endblock %}
+{% block content %}
+<section class="page-heading"><div><p class="eyebrow">IDENTITY & ACCESS</p><h1>Account & security</h1><p>Manage your Studio identity, local time zone, and sign-in credential without leaving the product.</p></div><span class="account-identity"><b>{{ request.user.username }}</b>{% if request.user.is_superuser %}Platform administrator{% else %}Studio operator{% endif %}</span></section>
+{% if messages %}<div class="settings-messages" role="status">{% for message in messages %}<p class="{{ message.tags }}">{{ message }}</p>{% endfor %}</div>{% endif %}
+<div class="account-settings-grid">
+  <form method="post" class="panel account-form" novalidate>{% csrf_token %}<input type="hidden" name="action" value="profile">
+    <header><span class="settings-icon">◎</span><div><p class="eyebrow">PROFILE</p><h2>Personal information</h2><p>Used to identify your activity and display local timestamps.</p></div></header>
+    {% if profile_form.non_field_errors %}<div class="settings-error">{{ profile_form.non_field_errors }}</div>{% endif %}
+    <div class="account-fields two-column">
+      {% for field in profile_form %}<label class="{% if field.name == 'timezone' or field.name == 'email' %}wide{% endif %}"><span>{{ field.label }}</span>{{ field }}{% for error in field.errors %}<em>{{ error }}</em>{% endfor %}</label>{% endfor %}
+    </div>
+    <footer><small>Username <code>{{ request.user.username }}</code> is managed by an administrator.</small><button class="primary-button" type="submit">Save profile</button></footer>
+  </form>
+  <form method="post" class="panel account-form security-form" novalidate>{% csrf_token %}<input type="hidden" name="action" value="password">
+    <header><span class="settings-icon secure">⌁</span><div><p class="eyebrow">SECURITY</p><h2>Change password</h2><p>Confirm your existing password before replacing it.</p></div></header>
+    {% if password_form.non_field_errors %}<div class="settings-error">{{ password_form.non_field_errors }}</div>{% endif %}
+    <div class="password-policy"><strong>Credential policy</strong><span>12+ characters</span><span>Not common</span><span>Not numeric-only</span><span>Not similar to profile</span></div>
+    <div class="account-fields">
+      {% for field in password_form %}<label><span>{{ field.label }}</span>{{ field }}{% if field.help_text %}<small>{{ field.help_text|safe }}</small>{% endif %}{% for error in field.errors %}<em>{{ error }}</em>{% endfor %}</label>{% endfor %}
+    </div>
+    <footer><small>Changing your password keeps this verified browser session active.</small><button class="primary-button" type="submit">Update password</button></footer>
+  </form>
+</div>
+<section class="panel account-runtime"><div><p class="eyebrow">SESSION & PLATFORM</p><h2>Security posture</h2></div><dl><div><dt>Session protection</dt><dd>Secure · HTTP-only · SameSite</dd></div><div><dt>Request forgery protection</dt><dd>CSRF enforced</dd></div><div><dt>Runtime</dt><dd>Kubernetes · Clabernetes 0.8.0</dd></div><div><dt>API identity</dt><dd>Session scoped</dd></div></dl>{% if request.user.is_superuser %}<a class="secondary-button" href="/admin/">Maintenance administration</a>{% endif %}</section>
+{% endblock %}

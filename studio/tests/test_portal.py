@@ -2,6 +2,7 @@ import json
 import uuid
 import pytest
 from django.db.models import F
+from django.test import Client
 from studio.models import AuditEvent, DeviceTemplateVersion, ImageArtifact, Lab, LabDeployment, LabLink, LabNode, LabRevision, Project, ProjectMembership, PublishedImage, User
 
 @pytest.mark.django_db
@@ -29,6 +30,48 @@ def test_native_portal_pages_render(client, path):
     user = User.objects.create_user(f"user-{path.strip('/').replace('/', '-') or 'home'}", password="long-enough-password")
     client.force_login(user)
     assert client.get(path).status_code == 200
+
+@pytest.mark.django_db
+def test_native_account_profile_update_validates_timezone_and_is_audited(client):
+    user=User.objects.create_user("profile-user",password="Original-Password-2026!",email="old@example.test")
+    client.force_login(user)
+    invalid=client.post("/settings/",{"action":"profile","profile-first_name":"Mohan","profile-last_name":"D",
+        "profile-email":"MOHAN@EXAMPLE.TEST","profile-timezone":"Invalid/Zone"})
+    assert invalid.status_code==200 and b"Select a valid choice" in invalid.content
+    user.refresh_from_db();assert user.timezone=="UTC" and user.email=="old@example.test"
+    response=client.post("/settings/",{"action":"profile","profile-first_name":"Mohan","profile-last_name":"Dontineni",
+        "profile-email":"MOHAN@EXAMPLE.TEST","profile-timezone":"America/Chicago"},follow=True)
+    assert response.status_code==200 and b"Profile settings saved" in response.content
+    user.refresh_from_db();assert (user.first_name,user.last_name,user.email,user.timezone)==("Mohan","Dontineni","mohan@example.test","America/Chicago")
+    event=AuditEvent.objects.get(action="account.profile_updated",target_id=user.id)
+    assert set(event.metadata["changed_fields"])=={"first_name","last_name","email","timezone"} and event.project_id is None
+
+@pytest.mark.django_db
+def test_native_password_change_requires_current_password_applies_policy_keeps_session_and_audits(client):
+    old="Original-Password-2026!";new="Zebra-Routing-2026!"
+    user=User.objects.create_user("security-user",password=old)
+    client.force_login(user)
+    wrong=client.post("/settings/",{"action":"password","password-old_password":"wrong-password",
+        "password-new_password1":new,"password-new_password2":new})
+    assert wrong.status_code==200 and b"old password was entered incorrectly" in wrong.content
+    weak=client.post("/settings/",{"action":"password","password-old_password":old,
+        "password-new_password1":"short","password-new_password2":"short"})
+    assert weak.status_code==200 and b"at least 12 characters" in weak.content
+    changed=client.post("/settings/",{"action":"password","password-old_password":old,
+        "password-new_password1":new,"password-new_password2":new},follow=True)
+    assert changed.status_code==200 and b"current session remains active" in changed.content and changed.wsgi_request.user.is_authenticated
+    user.refresh_from_db();assert user.check_password(new) and not user.check_password(old)
+    event=AuditEvent.objects.get(action="account.password_changed",target_id=user.id)
+    assert event.metadata=={} and event.project_id is None
+
+@pytest.mark.django_db
+def test_account_mutations_require_csrf_and_legacy_password_page_redirects_to_native_settings():
+    user=User.objects.create_user("csrf-account",password="Original-Password-2026!")
+    protected=Client(enforce_csrf_checks=True);protected.force_login(user)
+    assert protected.post("/settings/",{"action":"profile","profile-timezone":"UTC"}).status_code==403
+    regular=Client();regular.force_login(user)
+    response=regular.get("/accounts/password_change/")
+    assert response.status_code==302 and response.url=="/settings/"
 
 @pytest.mark.django_db
 def test_topology_workspace_persists_device_interfaces_and_links(client):

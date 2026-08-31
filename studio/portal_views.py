@@ -1,5 +1,6 @@
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
+from django.contrib.auth import update_session_auth_hash
 import hashlib
 import json
 import uuid
@@ -9,7 +10,7 @@ from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_http_methods
-from .forms import LabForm, ProjectForm, RegistryImageForm
+from .forms import LabForm, ProfileForm, ProjectForm, RegistryImageForm, StudioPasswordChangeForm
 from .models import (AuditEvent, ConfigurationVersion, DeviceTemplate, DeviceTemplateVersion, ImageArtifact, Lab, LabDeployment,
                      LabInterface, LabLink, LabNode, LabRevision, OperationJob, Project,
                      ProjectMembership, PublishedImage)
@@ -243,5 +244,25 @@ def operations(request):
         "description": "Inspect accepted, scheduled, running, completed, and failed background work."})
 
 @login_required
+@require_http_methods(["GET","POST"])
 def settings_view(request):
-    return render(request, "studio/settings.html")
+    profile_form=ProfileForm(instance=request.user,prefix="profile")
+    password_form=StudioPasswordChangeForm(request.user,prefix="password")
+    if request.method=="POST":
+        action=request.POST.get("action")
+        if action=="profile":
+            profile_form=ProfileForm(request.POST,instance=request.user,prefix="profile")
+            if profile_form.is_valid():
+                changed=list(profile_form.changed_data);profile_form.save()
+                AuditEvent.objects.create(actor=request.user,action="account.profile_updated",target_type="User",target_id=request.user.id,
+                    correlation_id=getattr(request,"correlation_id",""),metadata={"changed_fields":changed})
+                messages.success(request,"Profile settings saved.");return redirect("portal-settings")
+        elif action=="password":
+            password_form=StudioPasswordChangeForm(request.user,request.POST,prefix="password")
+            if password_form.is_valid():
+                user=password_form.save();update_session_auth_hash(request,user)
+                AuditEvent.objects.create(actor=user,action="account.password_changed",target_type="User",target_id=user.id,
+                    correlation_id=getattr(request,"correlation_id",""),metadata={})
+                messages.success(request,"Password changed. Your current session remains active.");return redirect("portal-settings")
+        else: messages.error(request,"Unknown settings action.")
+    return render(request,"studio/settings.html",{"profile_form":profile_form,"password_form":password_form})

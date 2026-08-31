@@ -1,6 +1,27 @@
 from django import forms
+from django.contrib.auth.forms import PasswordChangeForm
 from django.db.models import Q
-from .models import Lab, Project
+from zoneinfo import available_timezones
+from .models import Lab, Project, User
+
+class ProfileForm(forms.ModelForm):
+    timezone=forms.ChoiceField(choices=[(value,value) for value in sorted(available_timezones())])
+    class Meta:
+        model=User
+        fields=("first_name","last_name","email","timezone")
+        widgets={
+            "first_name":forms.TextInput(attrs={"autocomplete":"given-name"}),
+            "last_name":forms.TextInput(attrs={"autocomplete":"family-name"}),
+            "email":forms.EmailInput(attrs={"autocomplete":"email"}),
+        }
+    def clean_email(self): return self.cleaned_data["email"].strip().lower()
+
+class StudioPasswordChangeForm(PasswordChangeForm):
+    def __init__(self,*args,**kwargs):
+        super().__init__(*args,**kwargs)
+        self.fields["old_password"].widget.attrs.update({"autocomplete":"current-password"})
+        self.fields["new_password1"].widget.attrs.update({"autocomplete":"new-password"})
+        self.fields["new_password2"].widget.attrs.update({"autocomplete":"new-password"})
 
 class ProjectForm(forms.ModelForm):
     class Meta:

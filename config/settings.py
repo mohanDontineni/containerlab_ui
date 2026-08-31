@@ -29,7 +29,12 @@ if os.environ.get("POSTGRES_HOST"):
         "HOST": os.environ["POSTGRES_HOST"], "PORT": os.environ.get("POSTGRES_PORT", "5432"), "CONN_MAX_AGE": 60}}
 else:
     DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": BASE_DIR / "db.sqlite3"}}
-AUTH_PASSWORD_VALIDATORS = [{"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator", "OPTIONS": {"min_length": 12}}]
+AUTH_PASSWORD_VALIDATORS = [
+    {"NAME":"django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
+    {"NAME":"django.contrib.auth.password_validation.MinimumLengthValidator","OPTIONS":{"min_length":12}},
+    {"NAME":"django.contrib.auth.password_validation.CommonPasswordValidator"},
+    {"NAME":"django.contrib.auth.password_validation.NumericPasswordValidator"},
+]
 AUTH_USER_MODEL = "studio.User"
 LANGUAGE_CODE = "en-us"
 TIME_ZONE = "UTC"
