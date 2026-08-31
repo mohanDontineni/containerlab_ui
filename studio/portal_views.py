@@ -9,7 +9,7 @@ from django.http import Http404, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_http_methods
-from .forms import LabForm, ProjectForm
+from .forms import LabForm, ProjectForm, RegistryImageForm
 from .models import (DeviceTemplate, DeviceTemplateVersion, ImageArtifact, Lab, LabDeployment,
                      LabInterface, LabLink, LabNode, LabRevision, OperationJob, Project,
                      ProjectMembership, PublishedImage)
@@ -73,6 +73,14 @@ def topology_catalog(request):
         "resources": row.resource_requirements, "capabilities": row.capabilities} for row in rows]})
 
 @login_required
+@require_http_methods(["GET"])
+def topology_images(request, lab_id):
+    lab=get_object_or_404(Lab.objects.filter(project__in=visible_projects(request.user)),id=lab_id)
+    rows=PublishedImage.objects.filter(artifact__project=lab.project,lifecycle_status__in=("ready","verified","unverified")).select_related("artifact").order_by("artifact__vendor","artifact__version")
+    return JsonResponse({"images":[{"id":str(row.id),"name":f"{row.artifact.vendor or row.artifact.category or 'Image'} {row.artifact.version}".strip(),
+        "digest":row.registry_digest,"architecture":row.architecture,"status":row.lifecycle_status,"compatibility":row.compatibility_result} for row in rows]})
+
+@login_required
 @require_http_methods(["GET", "PUT"])
 def topology_document(request, lab_id):
     lab = get_object_or_404(Lab.objects.filter(project__in=visible_projects(request.user)), id=lab_id)
@@ -80,7 +88,7 @@ def topology_document(request, lab_id):
         revision = lab.current_draft
         if not revision:
             return JsonResponse({"lab": {"id": str(lab.id), "name": lab.name}, "editVersion": 0, "nodes": [], "links": [], "annotations": []})
-        nodes = [{"id": str(node.id), "name": node.name, "templateVersionId": str(node.template_version_id),
+        nodes = [{"id": str(node.id), "name": node.name, "templateVersionId": str(node.template_version_id), "publishedImageId": str(node.published_image_id) if node.published_image_id else None,
             "position": node.position, "properties": node.properties,
             "interfaces": [{"id": str(iface.id), "name": iface.name, "sharedMedium": iface.shared_medium} for iface in node.interfaces.all()]} for node in revision.nodes.select_related("template_version").prefetch_related("interfaces")]
         links = [{"id": str(link.id), "sourceNode": str(link.endpoint_a.node_id), "sourceInterface": link.endpoint_a.name,
@@ -120,10 +128,14 @@ def topology_document(request, lab_id):
             revision.edit_version += 1; revision.topology_checksum = hashlib.sha256(canonical.encode()).hexdigest(); revision.annotations = payload.get("annotations", []); revision.save()
         node_map, interface_map = {}, {}
         templates = {str(t.id): t for t in DeviceTemplateVersion.objects.filter(id__in=[n.get("templateVersionId") for n in payload.get("nodes", [])])}
+        image_ids=[n.get("publishedImageId") for n in payload.get("nodes", []) if n.get("publishedImageId")]
+        images={str(image.id):image for image in PublishedImage.objects.filter(id__in=image_ids,artifact__project=lab.project)}
+        if len(images)!=len(set(image_ids)): transaction.set_rollback(True); return JsonResponse({"error":"A selected image is unavailable to this project"},status=422)
         for data in payload.get("nodes", []):
             template = templates.get(str(data.get("templateVersionId")))
             if not template: transaction.set_rollback(True); return JsonResponse({"error": f"Unknown template for {data.get('name', 'node')}"}, status=422)
             node = LabNode.objects.create(id=uuid.UUID(data["id"]), revision=revision, name=data["name"][:63], template_version=template,
+                published_image=images.get(str(data.get("publishedImageId"))),
                 position=data.get("position", {}), properties=data.get("properties", {}))
             node_map[data["id"]] = node
             for name in _interfaces(template.interface_rules):
@@ -146,7 +158,28 @@ def images(request):
     artifacts = ImageArtifact.objects.filter(project__in=visible_projects(request.user)).select_related("project").order_by("-created_at")
     published = PublishedImage.objects.filter(artifact__project__in=visible_projects(request.user)).count()
     return render(request, "studio/catalog.html", {"section": "images", "title": "Image library", "eyebrow": "DEVICE SOFTWARE", "items": artifacts,
-        "description": "Track quarantined uploads, inspection results, builds, and immutable publications.", "secondary_stat": f"{published} published"})
+        "description": "Track quarantined uploads, inspection results, builds, and immutable publications.", "secondary_stat": f"{published} published",
+        "create_url": "/images/register/", "create_label": "Register image"})
+
+@login_required
+def image_register(request):
+    form = RegistryImageForm(request.user, request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        digest = form.cleaned_data["registry_digest"]
+        with transaction.atomic():
+            artifact = ImageArtifact.objects.create(project=form.cleaned_data["project"], owner=request.user,
+                source_type=ImageArtifact.Source.REGISTRY, registry_reference=digest, original_filename=form.cleaned_data["name"],
+                detected_format="oci-registry", byte_size=0, checksum=digest.rsplit(":", 1)[1], vendor=form.cleaned_data["vendor"],
+                category=form.cleaned_data["name"], version=form.cleaned_data["version"], architecture=form.cleaned_data["architecture"],
+                storage_reference=digest, license_acknowledged=True, inspection_result={"source": "registry", "digest_pinned": True},
+                validation_status=ImageArtifact.Validation.VALIDATED)
+            PublishedImage.objects.create(artifact=artifact, registry_digest=digest, repository=digest.split("@", 1)[0],
+                architecture=form.cleaned_data["architecture"], compatibility_result={"digest_pinned": True, "runtime_pull": "not_yet_verified"},
+                lifecycle_status="unverified")
+        messages.success(request, "Digest-pinned image registered. Runtime pull verification is still required.")
+        return redirect("portal-images")
+    return render(request, "studio/form.html", {"form": form, "title": "Register OCI image", "eyebrow": "IMAGE LIBRARY",
+        "cancel_url": "/images/", "submit_label": "Register image"})
 
 @login_required
 def templates(request):

@@ -47,10 +47,13 @@ class UploadSession(UUIDModel):
     artifact_destination = models.CharField(max_length=512)
 
 class ImageArtifact(UUIDModel):
+    class Source(models.TextChoices): UPLOAD="upload"; REGISTRY="registry"
     class Validation(models.TextChoices): QUARANTINED="quarantined"; INSPECTING="inspecting"; VALIDATED="validated"; UNSUPPORTED="unsupported"; FAILED="failed"
     project = models.ForeignKey(Project, on_delete=models.PROTECT, related_name="image_artifacts")
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
-    upload_session = models.OneToOneField(UploadSession, on_delete=models.PROTECT, related_name="artifact")
+    upload_session = models.OneToOneField(UploadSession, on_delete=models.PROTECT, related_name="artifact", null=True, blank=True)
+    source_type = models.CharField(max_length=16, choices=Source.choices, default=Source.UPLOAD)
+    registry_reference = models.CharField(max_length=512, blank=True)
     original_filename = models.CharField(max_length=255)
     detected_format = models.CharField(max_length=40)
     byte_size = models.BigIntegerField()
@@ -232,4 +235,3 @@ class AuditEvent(models.Model):
     target_id = models.UUIDField(null=True)
     correlation_id = models.CharField(max_length=128)
     metadata = models.JSONField(default=dict)
-
