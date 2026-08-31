@@ -266,7 +266,12 @@ function Workspace() {
   const onNodesChange = useCallback(
     (changes: NodeChange<Node<DeviceData>>[]) => {
       setNodes((n) => applyNodeChanges(changes, n));
-      if (changes.some((c) => c.type !== "select")) setDirty(true);
+      if (
+        changes.some((change) =>
+          ["add", "remove", "replace", "position"].includes(change.type),
+        )
+      )
+        setDirty(true);
     },
     [],
   );
@@ -274,7 +279,12 @@ function Workspace() {
     (changes: EdgeChange<Edge>[]) => {
       if (changes.some((c) => c.type === "remove")) snapshot();
       setEdges((e) => applyEdgeChanges(changes, e));
-      setDirty(true);
+      if (
+        changes.some((change) =>
+          ["add", "remove", "replace"].includes(change.type),
+        )
+      )
+        setDirty(true);
     },
     [snapshot],
   );

@@ -4,7 +4,7 @@ import path from "node:path";
 import process from "node:process";
 
 const require = createRequire(import.meta.url);
-const { chromium } = require("playwright");
+const { firefox } = require("playwright");
 
 const baseUrl = (process.env.TRAINING_BASE_URL || "").replace(/\/$/, "");
 const username = process.env.TRAINING_USERNAME || "";
@@ -16,7 +16,7 @@ if (!baseUrl || !username || !password) {
 }
 
 await mkdir(output, { recursive: true });
-const browser = await chromium.launch({ headless: true });
+const browser = await firefox.launch({ headless: true });
 const context = await browser.newContext({
   ignoreHTTPSErrors: true,
   viewport: { width: 1600, height: 1000 },
@@ -40,8 +40,8 @@ const firstHref = async (selector, pattern) => {
 
 try {
   await page.goto(`${baseUrl}/accounts/login/`, { waitUntil: "networkidle" });
-  await page.getByLabel(/username/i).fill(username);
-  await page.getByLabel(/password/i).fill(password);
+  await page.locator("#id_username").fill(username);
+  await page.locator("#id_password").fill(password);
   await Promise.all([
     page.waitForURL((url) => !url.pathname.includes("/accounts/login/")),
     page.getByRole("button", { name: /sign in|log in/i }).click(),
@@ -61,15 +61,17 @@ try {
   const workspaceHref = await firstHref('a[href*="/workspace/"]', /^\/labs\/[0-9a-f-]+\/workspace\/$/i);
   if (workspaceHref) {
     await capture("07-topology-workspace.png", workspaceHref, async (p) => {
-      await p.locator(".workspace-shell").waitFor();
+      await p.frameLocator('iframe[title^="Topology workspace"]').locator(".workspace-shell").waitFor();
     });
     await capture("08-save-as-dialog.png", workspaceHref, async (p) => {
-      await p.getByRole("button", { name: /save as/i }).click();
-      await p.getByRole("dialog").waitFor();
+      const editor = p.frameLocator('iframe[title^="Topology workspace"]');
+      await editor.getByRole("button", { name: /save as/i }).click();
+      await editor.getByRole("dialog").waitFor();
     });
     await capture("09-revision-history.png", workspaceHref, async (p) => {
-      await p.getByRole("button", { name: /history/i }).click();
-      await p.getByRole("dialog").waitFor();
+      const editor = p.frameLocator('iframe[title^="Topology workspace"]');
+      await editor.getByRole("button", { name: /history/i }).click();
+      await editor.getByRole("dialog").waitFor();
     });
   }
 
