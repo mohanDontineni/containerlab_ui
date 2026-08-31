@@ -2,7 +2,7 @@ import json
 import uuid
 import pytest
 from django.db.models import F
-from studio.models import DeviceTemplateVersion, ImageArtifact, Lab, LabDeployment, LabLink, LabNode, LabRevision, Project, ProjectMembership, PublishedImage, User
+from studio.models import AuditEvent, DeviceTemplateVersion, ImageArtifact, Lab, LabDeployment, LabLink, LabNode, LabRevision, Project, ProjectMembership, PublishedImage, User
 
 @pytest.mark.django_db
 def test_product_navigation_never_links_to_model_admin(client):
@@ -50,6 +50,8 @@ def test_topology_workspace_persists_device_interfaces_and_links(client):
     assert LabLink.objects.filter(revision=lab.current_draft).count() == 1
     document = client.get(f"/api/v1/labs/{lab.id}/topology/").json()
     assert document["links"][0]["sourceInterface"] == "eth1"
+    audit=AuditEvent.objects.get(action="lab.topology_saved",target_id=lab.current_draft_id)
+    assert audit.metadata["node_count"]==2 and audit.metadata["link_count"]==1 and "startupConfiguration" not in audit.metadata
 
 @pytest.mark.django_db
 def test_viewer_cannot_change_topology(client):

@@ -10,7 +10,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_http_methods
 from .forms import LabForm, ProjectForm, RegistryImageForm
-from .models import (ConfigurationVersion, DeviceTemplate, DeviceTemplateVersion, ImageArtifact, Lab, LabDeployment,
+from .models import (AuditEvent, ConfigurationVersion, DeviceTemplate, DeviceTemplateVersion, ImageArtifact, Lab, LabDeployment,
                      LabInterface, LabLink, LabNode, LabRevision, OperationJob, Project,
                      ProjectMembership, PublishedImage)
 from .permissions import project_role
@@ -168,6 +168,10 @@ def topology_document(request, lab_id):
             a=(data["sourceNode"],data["sourceInterface"]); b=(data["targetNode"],data["targetInterface"])
             if a in used or b in used or a not in interface_map or b not in interface_map: transaction.set_rollback(True); return JsonResponse({"error": "A link contains an invalid or already-used interface"}, status=422)
             used.update((a,b)); LabLink.objects.create(id=uuid.UUID(data["id"]), revision=revision, endpoint_a=interface_map[a], endpoint_b=interface_map[b], label=data.get("label", "")[:120], properties=data.get("properties", {}))
+        AuditEvent.objects.create(actor=request.user,project=lab.project,action="lab.topology_saved",target_type="LabRevision",target_id=revision.id,
+            correlation_id=getattr(request,"correlation_id",""),metadata={"lab":str(lab.id),"revision_number":revision.revision_number,
+                "edit_version":revision.edit_version,"topology_checksum":revision.topology_checksum,"node_count":len(node_map),
+                "link_count":len(payload.get("links",[])),"configured_node_count":sum(1 for item in payload.get("nodes",[]) if item.get("startupConfiguration"))})
     return JsonResponse({"revisionId": str(revision.id), "editVersion": revision.edit_version, "checksum": revision.topology_checksum})
 
 @login_required
