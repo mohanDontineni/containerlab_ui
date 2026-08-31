@@ -7,6 +7,6 @@ media/
 staticfiles/
 frontend/node_modules/
 frontend/dist/
+frontend/*.tsbuildinfo
 *.log
 secrets/
-

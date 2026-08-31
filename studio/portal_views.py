@@ -10,10 +10,11 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_http_methods
 from .forms import LabForm, ProjectForm, RegistryImageForm
-from .models import (DeviceTemplate, DeviceTemplateVersion, ImageArtifact, Lab, LabDeployment,
+from .models import (ConfigurationVersion, DeviceTemplate, DeviceTemplateVersion, ImageArtifact, Lab, LabDeployment,
                      LabInterface, LabLink, LabNode, LabRevision, OperationJob, Project,
                      ProjectMembership, PublishedImage)
 from .permissions import project_role
+from .configurations import decrypt_configuration, encrypt_configuration
 
 def visible_projects(user):
     return Project.objects.filter(Q(owner=user) | Q(memberships__user=user)).distinct()
@@ -90,6 +91,7 @@ def topology_document(request, lab_id):
             return JsonResponse({"lab": {"id": str(lab.id), "name": lab.name}, "editVersion": 0, "nodes": [], "links": [], "annotations": []})
         nodes = [{"id": str(node.id), "name": node.name, "templateVersionId": str(node.template_version_id), "publishedImageId": str(node.published_image_id) if node.published_image_id else None,
             "position": node.position, "properties": node.properties,
+            "startupConfiguration": decrypt_configuration(node.startup_configuration.encrypted_content) if node.startup_configuration else "",
             "interfaces": [{"id": str(iface.id), "name": iface.name, "sharedMedium": iface.shared_medium} for iface in node.interfaces.all()]} for node in revision.nodes.select_related("template_version").prefetch_related("interfaces")]
         links = [{"id": str(link.id), "sourceNode": str(link.endpoint_a.node_id), "sourceInterface": link.endpoint_a.name,
             "targetNode": str(link.endpoint_b.node_id), "targetInterface": link.endpoint_b.name, "label": link.label,
@@ -134,9 +136,20 @@ def topology_document(request, lab_id):
         for data in payload.get("nodes", []):
             template = templates.get(str(data.get("templateVersionId")))
             if not template: transaction.set_rollback(True); return JsonResponse({"error": f"Unknown template for {data.get('name', 'node')}"}, status=422)
+            startup=None; startup_content=data.get("startupConfiguration", "")
+            if not isinstance(startup_content,str): transaction.set_rollback(True); return JsonResponse({"error":"Startup configuration must be text"},status=422)
+            if startup_content:
+                encoded=startup_content.encode("utf-8")
+                if len(encoded)>1024*1024: transaction.set_rollback(True); return JsonResponse({"error":"Startup configuration exceeds 1 MiB"},status=422)
+                config_name=f"{lab.name}/{data['name'][:63]}/startup"; checksum=hashlib.sha256(encoded).hexdigest()
+                startup=ConfigurationVersion.objects.filter(project=lab.project,name=config_name,checksum=checksum).order_by("-version").first()
+                if not startup:
+                    version=(ConfigurationVersion.objects.filter(project=lab.project,name=config_name).aggregate(n=Max("version"))["n"] or 0)+1
+                    startup=ConfigurationVersion.objects.create(project=lab.project,name=config_name,version=version,
+                        encrypted_content=encrypt_configuration(startup_content),checksum=checksum,created_by=request.user)
             node = LabNode.objects.create(id=uuid.UUID(data["id"]), revision=revision, name=data["name"][:63], template_version=template,
                 published_image=images.get(str(data.get("publishedImageId"))),
-                position=data.get("position", {}), properties=data.get("properties", {}))
+                position=data.get("position", {}), properties=data.get("properties", {}),startup_configuration=startup)
             node_map[data["id"]] = node
             for name in _interfaces(template.interface_rules):
                 iface = LabInterface.objects.create(node=node, name=name); interface_map[(data["id"], name)] = iface

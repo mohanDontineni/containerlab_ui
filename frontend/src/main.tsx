@@ -28,6 +28,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import "./style.css";
+import "./configuration.css";
 
 type Template = {
   id: string;
@@ -50,6 +51,7 @@ type DeviceData = {
   verified: boolean;
   status: string;
   imageId: string;
+  startupConfig: string;
   [key: string]: unknown;
 };
 type SavedNode = {
@@ -59,6 +61,7 @@ type SavedNode = {
   publishedImageId: string | null;
   position: { x: number; y: number };
   properties: Record<string, unknown>;
+  startupConfiguration: string;
   interfaces: { name: string }[];
 };
 type SavedLink = {
@@ -158,6 +161,7 @@ function Workspace() {
   const [future, setFuture] = useState<Snapshot[]>([]);
   const [rf, setRf] = useState<any>(null);
   const counter = useRef(1);
+  const importInput = useRef<HTMLInputElement>(null);
   const snapshot = useCallback(() => {
     setHistory((h) => [
       ...h.slice(-29),
@@ -192,6 +196,7 @@ function Workspace() {
                 verified: t?.verified || false,
                 status: "stopped",
                 imageId: n.publishedImageId || "",
+                startupConfig: n.startupConfiguration || "",
               },
             };
           }),
@@ -327,6 +332,7 @@ function Workspace() {
           verified: template.verified,
           status: "stopped",
           imageId: "",
+          startupConfig: "",
         },
       };
       setNodes((n) => [...n, node]);
@@ -348,6 +354,7 @@ function Workspace() {
         publishedImageId: n.data.imageId || null,
         position: n.position,
         properties: { kind: n.data.kind },
+        startupConfiguration: n.data.startupConfig || "",
       })),
       links: edges.map((e) => ({
         id: e.id,
@@ -382,6 +389,24 @@ function Workspace() {
     if (!selectedNode) return;
     setNodes((ns) => ns.map((n) => n.id === selectedNode.id ? { ...n, data: { ...n.data, imageId } } : n));
     setDirty(true);
+  };
+  const exportBundle = () => {
+    if (dirty) { setNotice("Save the draft before exporting"); return; }
+    location.href = `/api/v1/labs/${labId}/export/`;
+  };
+  const importBundle = async (file?: File) => {
+    if (!file) return;
+    if (dirty && !confirm("Importing replaces this unsaved draft. Continue?")) return;
+    setNotice("Validating and importing lab bundle…");
+    try {
+      const response = await fetch(`/api/v1/labs/${labId}/import/`, {method:"POST",credentials:"same-origin",
+        headers:{"Content-Type":"application/vnd.containerlab.studio.lab+json","X-CSRFToken":csrf()},body:file});
+      const data=await response.json();
+      if (!response.ok) throw new Error(data.error?.details || "Import failed");
+      setNotice(`Imported ${data.node_count} devices and ${data.link_count} links`);
+      location.reload();
+    } catch (error) { setNotice(error instanceof Error ? error.message : "Import failed"); }
+    finally { if (importInput.current) importInput.current.value=""; }
   };
   const deploy = async () => {
     if (dirty) { setNotice("Save the draft before deployment"); return; }
@@ -489,6 +514,9 @@ function Workspace() {
           </button>
           <i></i>
           <button onClick={() => rf?.fitView({ padding: 0.2 })}>Fit</button>
+          <button onClick={exportBundle} disabled={dirty}>Export</button>
+          <button onClick={() => importInput.current?.click()}>Import</button>
+          <input ref={importInput} className="file-input" type="file" accept=".json,.clabstudio.json,application/json" onChange={(e)=>importBundle(e.target.files?.[0])}/>
           <button>
             Validate{" "}
             <span className={errors.length ? "warn" : "ok"}>
@@ -616,6 +644,12 @@ function Workspace() {
                   <option value="">Select a digest-pinned image…</option>
                   {images.map((image) => <option key={image.id} value={image.id}>{image.name} · {image.architecture} · {image.status}</option>)}
                 </select>
+              </label>
+              <label>
+                Startup configuration
+                <textarea value={String(selectedNode.data.startupConfig || "")} placeholder="Optional device startup configuration"
+                  onChange={(e)=>{setNodes((ns)=>ns.map((n)=>n.id===selectedNode.id?{...n,data:{...n.data,startupConfig:e.target.value}}:n));setDirty(true);}} />
+                <small className="field-help">Encrypted at rest · Maximum 1 MiB</small>
               </label>
               <div className="property-block">
                 <span>Runtime status</span>

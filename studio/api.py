@@ -1,11 +1,14 @@
 import uuid
 import ipaddress
 import hashlib
+import json
 from pathlib import Path
 from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.db.models import Q
+from django.http import HttpResponse
 from django.utils import timezone
+from django.utils.text import slugify
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -15,6 +18,7 @@ from .permissions import ProjectAccess, project_role
 from .runtime import ClabernetesAdapter
 from .tasks import execute_operation, reconcile_deployment
 from .uploads import UploadError, append_chunk, finalize
+from .bundles import BundleError, export_lab_bundle, import_lab_bundle
 
 def exception_handler(exc,context):
     response=drf_exception_handler(exc,context)
@@ -36,6 +40,28 @@ class LabViewSet(viewsets.ModelViewSet):
         project=serializer.validated_data["project"]
         if project_role(self.request.user,project) not in ("administrator","editor"): from rest_framework.exceptions import PermissionDenied; raise PermissionDenied()
         serializer.save()
+    @action(detail=True,methods=["get"],url_path="export")
+    def export_bundle(self,request,pk=None):
+        lab=self.get_object()
+        payload=json.dumps(export_lab_bundle(lab),indent=2,sort_keys=True).encode()
+        models.AuditEvent.objects.create(actor=request.user,project=lab.project,action="lab.exported",target_type="Lab",target_id=lab.id,
+            correlation_id=getattr(request,"correlation_id",""),metadata={"bytes":len(payload),"format":"io.containerlab.studio.lab/v1"})
+        response=HttpResponse(payload,content_type="application/vnd.containerlab.studio.lab+json")
+        response["Content-Disposition"]=f'attachment; filename="{slugify(lab.name)[:80] or "lab"}.clabstudio.json"'
+        response["X-Content-Type-Options"]="nosniff"
+        return response
+    @action(detail=True,methods=["post"],url_path="import")
+    def import_bundle(self,request,pk=None):
+        lab=self.get_object()
+        if project_role(request.user,lab.project) not in (models.ProjectMembership.Role.ADMIN,models.ProjectMembership.Role.EDITOR):
+            from rest_framework.exceptions import PermissionDenied; raise PermissionDenied()
+        raw=request.body
+        try: revision=import_lab_bundle(lab,request.user,raw)
+        except BundleError as exc: return Response({"error":{"code":"invalid_lab_bundle","details":str(exc)}},status=422)
+        models.AuditEvent.objects.create(actor=request.user,project=lab.project,action="lab.imported",target_type="Lab",target_id=lab.id,
+            correlation_id=getattr(request,"correlation_id",""),metadata={"revision":str(revision.id),"bytes":len(raw)})
+        return Response({"revision_id":str(revision.id),"revision_number":revision.revision_number,"edit_version":revision.edit_version,
+                         "node_count":revision.nodes.count(),"link_count":revision.links.count()},status=201)
     @action(detail=True,methods=["post"])
     def deploy(self,request,pk=None):
         lab=self.get_object()
