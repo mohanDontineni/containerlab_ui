@@ -23,6 +23,8 @@
 - Production nftables firewall reference lab using a dedicated checksum-published appliance, encrypted policy delivery, default-deny forwarding, permitted ICMP, denied TCP/8080, and named policy counters.
 - Audited node-local image repair workflow with explicit operator intent, reconciling/failed states, and appliance-container readiness probes that prevent false-green deployments.
 - Verified live configuration collection for FRR and nftables appliances with template-scoped commands, immutable encrypted versions, persistent deployment history, content-free audit records, and operator-only no-store downloads.
+- Durable per-device Suspend and Resume controls that pause the nested appliance and isolate every linked data interface, with audited asynchronous operations and automatic reconciliation after launcher replacement.
+- A hardened Celery Beat scheduler that reconciles active deployments every 30 seconds without a Kubernetes service-account token, writable root filesystem, or Linux capabilities.
 
 ## Acceptance results
 
@@ -56,8 +58,10 @@
 | 26 | Node-local image repair | PASS | A missing FRR node image was republished through the authenticated audited product operation, restored to containerd, and enabled waiting launchers without manual runtime import. |
 | 27 | Appliance readiness | PASS | Reconciliation probes the nested appliance container and keeps the deployment in `deploying` when Clabernetes reports a ready Node without a running device. |
 | 28 | Live configuration collection | PASS | FRR and firewall collection operations succeeded; repeated firewall collection created v2; three versions remained encrypted at rest; downloaded payload checksums matched and responses used `no-store`/`nosniff`. |
+| 29 | Per-device suspend/resume | PASS | Suspending the live server paused its appliance, set `server-eth1` down, and produced 100% packet loss; Resume unpaused it, restored the link, and recovered 3/3 packets with 0% loss. |
+| 30 | Convergent device lifecycle | PASS | After the suspended server launcher was deleted, Kubernetes assigned a new pod and UID; periodic reconciliation preserved suspend intent, re-paused the replacement, kept its data interface down, and maintained 100% packet loss until Resume. |
 
-Automated tests: **81 passed**. Django checks and migration drift checks: **pass**. React TypeScript/Vite production build: **pass in the clean multi-stage image build**. Helm lint/render: **pass**. Native runtime ping: **3 transmitted, 3 received, 0% loss, 0.445 ms average RTT**. Bidirectional 120 ms link condition: **240.563 ms average RTT**. Disabled link: **100% loss**. Restored qdiscs: **native `noqueue` on both endpoints**.
+Automated tests: **86 passed**. Django checks and migration drift checks: **pass**. React TypeScript/Vite production build: **pass in the clean multi-stage image build**. Helm lint/render: **pass**. Native runtime ping: **3 transmitted, 3 received, 0% loss, 0.445 ms average RTT**. Bidirectional 120 ms link condition: **240.563 ms average RTT**. Disabled link: **100% loss**. Restored qdiscs: **native `noqueue` on both endpoints**.
 
 ## Known limitations
 

@@ -17,3 +17,9 @@ Startup configurations are encrypted and versioned in PostgreSQL. At deployment 
 Kubernetes ConfigMaps are not secret stores: runtime configuration is plaintext in the lab namespace while the deployment exists. Stopping a deployment removes its labeled runtime ConfigMaps while retaining the encrypted database versions. Limit Kubernetes API access to the reconciler role, enable Kubernetes encryption at rest, and use a dedicated secret-delivery integration before placing privileged credentials in startup configurations.
 
 Runtime collection is enabled only by administrator-defined template commands. Collected plaintext exists transiently in the worker process, is bounded to 1 MiB, and is immediately stored as an encrypted immutable `ConfigurationVersion`. Operation results, history APIs, and audit events contain identifiers, byte counts, versions, and checksums rather than content. Configuration downloads require administrator/editor project access, are audited, and return `Cache-Control: no-store` with MIME-sniffing protection.
+
+## Device lifecycle reconciliation
+
+Suspend is a deliberate data-plane isolation operation: the worker first sets every linked launcher interface down and then pauses the nested appliance container. Resume reverses that order by unpausing the appliance before restoring its links. If pausing fails, already-isolated links are brought back up. The user's desired lifecycle state is durable, so the 30-second reconciliation loop re-applies suspension when Kubernetes replaces a launcher pod.
+
+Celery Beat schedules reconciliation without Kubernetes API credentials. Its pod disables service-account token automount, drops all Linux capabilities, uses a read-only root filesystem, and stores only its disposable schedule database in a bounded `/tmp` volume. Cluster mutation remains confined to the worker ServiceAccount and all user-triggered lifecycle operations are project-authorized and audited.
