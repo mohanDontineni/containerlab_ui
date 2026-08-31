@@ -1,7 +1,8 @@
 import yaml
 import base64
+import struct
 from types import SimpleNamespace
-from studio.runtime import ClabernetesAdapter,API_GROUP,API_VERSION,RUNTIME_VERSION,CapabilityError
+from studio.runtime import ClabernetesAdapter,API_GROUP,API_VERSION,RUNTIME_VERSION,CapabilityError,CAPTURE_STOP_MARKER,strip_capture_stop_packets
 def test_adapter_is_pinned(): assert (API_GROUP,API_VERSION,RUNTIME_VERSION)==("c9s.run","v1alpha1","0.8.0")
 def test_unsupported_capability_is_explicit():
     adapter=object.__new__(ClabernetesAdapter)
@@ -54,6 +55,13 @@ def test_bounded_capture_uses_verified_host_interface_and_returns_pcap(monkeypat
     assert adapter.capture_packets(deployment,node,interface,7,250)==pcap
     command=calls[0][2]["command"]
     assert command[:2]==["sh","-c"] and "r1-eth2" in command[2] and "-s 256" in command[2] and "-c 250" in command[2]
-    assert "mktemp /tmp/studio-capture" in command[2] and "sleep 7" in command[2] and "kill -KILL" in command[2]
+    assert "mktemp /tmp/studio-capture" in command[2] and "sleep 7" in command[2] and "ping6 -f -c 250" in command[2]
     assert calls[0][2]["stderr"] is True
     assert calls[0][2]["_request_timeout"]==22
+
+def test_capture_stop_frames_are_removed_from_pcap():
+    header=b"\xd4\xc3\xb2\xa1"+b"\x00"*20
+    real=b"real-packet"; stop=b"prefix"+CAPTURE_STOP_MARKER+b"suffix"
+    record=lambda body: struct.pack("<IIII",1,2,len(body),len(body))+body
+    cleaned=strip_capture_stop_packets(header+record(real)+record(stop))
+    assert cleaned==header+record(real)

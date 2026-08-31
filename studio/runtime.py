@@ -2,6 +2,7 @@ from dataclasses import dataclass
 import base64
 import binascii
 import shlex
+import struct
 import yaml
 from kubernetes import client, config
 from kubernetes.client.exceptions import ApiException
@@ -11,6 +12,22 @@ API_GROUP="c9s.run"; API_VERSION="v1alpha1"; RUNTIME_VERSION="0.8.0"
 
 class CapabilityError(RuntimeError): pass
 PCAP_MAGICS=(b"\xd4\xc3\xb2\xa1",b"\xa1\xb2\xc3\xd4",b"\x4d\x3c\xb2\xa1",b"\xa1\xb2\x3c\x4d")
+CAPTURE_STOP_MARKER=b"CLABSTUDIOPCAPSTOP"
+
+def strip_capture_stop_packets(payload):
+    """Remove locally generated stop frames from a classic PCAP stream."""
+    if len(payload)<24 or payload[:4] not in PCAP_MAGICS: raise CapabilityError("Launcher did not return a valid PCAP file")
+    endian="<" if payload[:4] in (b"\xd4\xc3\xb2\xa1",b"\x4d\x3c\xb2\xa1") else ">"
+    cleaned=bytearray(payload[:24]); offset=24
+    while offset<len(payload):
+        if offset+16>len(payload): raise CapabilityError("Launcher returned a truncated PCAP record")
+        captured_length=struct.unpack_from(f"{endian}I",payload,offset+8)[0]
+        record_end=offset+16+captured_length
+        if record_end>len(payload): raise CapabilityError("Launcher returned a truncated PCAP record")
+        record=payload[offset:record_end]
+        if CAPTURE_STOP_MARKER not in record[16:]: cleaned.extend(record)
+        offset=record_end
+    return bytes(cleaned)
 @dataclass(frozen=True)
 class Plan: namespace:str; topology_name:str; manifest:dict
 
@@ -80,17 +97,19 @@ class ClabernetesAdapter:
         pod=device.runtime_resources.get("pod")
         if not pod: raise CapabilityError("The device launcher pod is not ready")
         host_interface=f"{node.name}-{interface.name}"
-        # Capture to a private file because tcpdump in the launcher does not
-        # reliably exit when GNU timeout signals it through a Kubernetes exec
-        # pipe. The explicit hard bound also avoids websocket-framed PCAP data.
+        stop_pattern=CAPTURE_STOP_MARKER.hex()
+        scoped_stop_target=f"ff02::114%{host_interface}"
+        # The hardened launcher cannot signal tcpdump after it drops privileges.
+        # Marked local frames make tcpdump satisfy its own packet bound; those
+        # frames are removed from the PCAP before it leaves this adapter.
         command=(
             "capture_file=$(mktemp /tmp/studio-capture.XXXXXX.pcap); "
             "trap 'rm -f \"$capture_file\"' EXIT; "
             f"tcpdump -n -s 256 -i {shlex.quote(host_interface)} -c {packet_limit} -U -w \"$capture_file\" 2>/dev/null & "
             "capture_pid=$!; "
             f"sleep {duration}; "
-            "kill -TERM \"$capture_pid\" 2>/dev/null || true; sleep 1; "
-            "kill -KILL \"$capture_pid\" 2>/dev/null || true; wait \"$capture_pid\" 2>/dev/null || true; "
+            f"ping6 -f -c {packet_limit} -w 3 -p {stop_pattern} {shlex.quote(scoped_stop_target)} >/dev/null 2>&1 & "
+            "filler_pid=$!; wait \"$capture_pid\"; wait \"$filler_pid\" 2>/dev/null || true; "
             "printf '__STUDIO_PCAP_BEGIN__'; base64 -w 0 \"$capture_file\"; printf '__STUDIO_PCAP_END__'"
         )
         encoded=stream(self.core.connect_get_namespaced_pod_exec,pod,deployment.namespace,command=["sh","-c",command],
@@ -101,8 +120,7 @@ class ClabernetesAdapter:
         if len(encoded)>4*1024*1024: raise CapabilityError("Capture exceeded the encoded transfer limit")
         try: payload=base64.b64decode(encoded,validate=True)
         except (binascii.Error,ValueError) as exc: raise CapabilityError("Launcher returned an invalid capture stream") from exc
-        if len(payload)<24 or payload[:4] not in PCAP_MAGICS: raise CapabilityError("Launcher did not return a valid PCAP file")
-        return payload
+        return strip_capture_stop_packets(payload)
     def delete_runtime(self,deployment):
         try: return self.custom.delete_namespaced_custom_object(API_GROUP,API_VERSION,deployment.namespace,"topologies","topology",
             body=client.V1DeleteOptions(propagation_policy="Foreground"))
