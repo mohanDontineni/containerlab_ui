@@ -151,19 +151,21 @@ class ClabernetesAdapter:
         for item in node_items:
             name=item.get("metadata",{}).get("labels",{}).get("c9s.run/topologyNode") or item.get("metadata",{}).get("name")
             pod=pod_by_node.get(name)
-            appliance_running=False
+            appliance_running=False;appliance_paused=False
             if pod and pod.status.phase=="Running":
                 try:
-                    appliance_running=stream(self.core.connect_get_namespaced_pod_exec,pod.metadata.name,deployment.namespace,
-                        command=["docker","inspect","-f","{{.State.Running}}",name],stderr=True,stdin=False,stdout=True,tty=False,
-                        _request_timeout=5).strip().lower()=="true"
+                    appliance_state=stream(self.core.connect_get_namespaced_pod_exec,pod.metadata.name,deployment.namespace,
+                        command=["docker","inspect","-f","{{.State.Running}} {{.State.Paused}}",name],stderr=True,stdin=False,stdout=True,tty=False,
+                        _request_timeout=5).strip().lower().split()
+                    appliance_paused=len(appliance_state)==2 and appliance_state[1]=="true"
+                    appliance_running=len(appliance_state)==2 and appliance_state[0]=="true" and not appliance_paused
                 except Exception:
-                    appliance_running=False
+                    appliance_running=False;appliance_paused=False
             controller_readiness=item.get("status",{}).get("readiness","unknown")
             readiness="ready" if controller_readiness=="ready" and appliance_running else "starting"
             observed.append({"name":name,"node_uid":item.get("metadata",{}).get("uid"),"readiness":readiness,
                 "pod":pod.metadata.name if pod else None,"pod_uid":str(pod.metadata.uid) if pod else None,"worker":pod.spec.node_name if pod else None,
-                "pod_phase":pod.status.phase if pod else "Pending","appliance_running":appliance_running})
+                "pod_phase":pod.status.phase if pod else "Pending","appliance_running":appliance_running,"appliance_paused":appliance_paused})
         return observed
     def ping(self,deployment,node,target,count=3,timeout=2):
         device=deployment.devices.select_related("lab_node").get(lab_node=node)
@@ -230,6 +232,19 @@ class ClabernetesAdapter:
         name=device.lab_node.name
         self.core.delete_namespaced_pod(pod,deployment.namespace,body=client.V1DeleteOptions(grace_period_seconds=0,propagation_policy="Background"))
         return {"device":name,"operation":"restart","replaced_pod":pod,"readiness":"restarting"}
+    def set_device_pause(self,deployment,node_name,pod,paused):
+        if not pod: raise CapabilityError("Device launcher is not ready")
+        action="pause" if paused else "unpause"
+        output=stream(self.core.connect_get_namespaced_pod_exec,pod,deployment.namespace,
+            command=["docker",action,node_name],stderr=True,stdin=False,stdout=True,tty=False,_request_timeout=15)
+        return {"device":node_name,"operation":"suspend" if paused else "resume","desired_state":"suspended" if paused else "running",
+            "readiness":"suspended" if paused else "ready","output":output[-2000:]}
+    def suspend_device(self,deployment,device):
+        if device.deployment_id!=deployment.id: raise CapabilityError("Device does not belong to this deployment")
+        return self.set_device_pause(deployment,device.lab_node.name,device.runtime_resources.get("pod"),True)
+    def resume_device(self,deployment,device):
+        if device.deployment_id!=deployment.id: raise CapabilityError("Device does not belong to this deployment")
+        return self.set_device_pause(deployment,device.lab_node.name,device.runtime_resources.get("pod"),False)
     def set_link_condition(self,deployment,link,condition):
         if link.revision_id!=deployment.revision_id: raise CapabilityError("Link does not belong to this deployment")
         endpoints=(link.endpoint_a,link.endpoint_b)

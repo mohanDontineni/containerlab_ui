@@ -56,6 +56,12 @@ CHANNEL_LAYERS = {"default": {"BACKEND": "channels_redis.core.RedisChannelLayer"
 CELERY_BROKER_URL = redis_url
 CELERY_RESULT_BACKEND = redis_url
 CELERY_TASK_TRACK_STARTED = True
+CELERY_BEAT_SCHEDULE = {
+    "reconcile-active-deployments": {
+        "task": "studio.tasks.reconcile_active_deployments",
+        "schedule": 30.0,
+    },
+}
 MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(50 * 1024**3)))
 UPLOAD_CHUNK_BYTES = int(os.environ.get("UPLOAD_CHUNK_BYTES", str(16 * 1024**2)))
 CLUSTER_IDENTITY = os.environ.get("CLUSTER_IDENTITY", "unconfigured")

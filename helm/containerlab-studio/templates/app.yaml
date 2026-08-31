@@ -91,6 +91,29 @@ spec:
         volumeMounts: [{name: artifacts,mountPath: /artifacts}]
       volumes: [{name: artifacts,persistentVolumeClaim: {claimName: containerlab-studio-artifacts}}]
 ---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: containerlab-studio-scheduler}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: containerlab-studio-scheduler}}
+  template:
+    metadata: {labels: {app: containerlab-studio-scheduler}}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true,seccompProfile: {type: RuntimeDefault}}
+      containers:
+      - name: scheduler
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        command: [celery,-A,config.celery,beat,-l,INFO,--schedule,/tmp/celerybeat-schedule]
+        envFrom: [{configMapRef: {name: containerlab-studio-config}},{secretRef: {name: containerlab-studio-secrets}}]
+        securityContext: {allowPrivilegeEscalation: false,capabilities: {drop: [ALL]},readOnlyRootFilesystem: true}
+        resources: {{ toYaml .Values.resources.worker | nindent 10 }}
+        volumeMounts: [{name: runtime,mountPath: /tmp}]
+      volumes: [{name: runtime,emptyDir: {}}]
+---
 apiVersion: batch/v1
 kind: Job
 metadata: {name: "containerlab-studio-migrate-{{ .Release.Revision }}"}

@@ -6,10 +6,20 @@ from rest_framework.test import APIClient
 from studio.configurations import decrypt_configuration
 from studio.models import (AuditEvent, CaptureSession, ConsoleSession, DeviceInstance, DeviceTemplateVersion, ImageArtifact, Lab, LabDeployment,
     ConfigurationVersion, LabArtifact, LabInterface, LabLink, LabNode, LabRevision, OperationJob, Project, ProjectMembership, PublishedImage, UploadSession, User)
-from studio.tasks import execute_operation, reconcile_deployment
+from studio.tasks import execute_operation, reconcile_active_deployments, reconcile_deployment
 
 def test_web_process_uses_configured_celery_broker():
     assert execute_operation.app.conf.broker_url == settings.CELERY_BROKER_URL
+    assert settings.CELERY_BEAT_SCHEDULE["reconcile-active-deployments"]["schedule"]==30.0
+
+@pytest.mark.django_db
+def test_periodic_reconciler_queues_only_active_deployments(monkeypatch):
+    owner=User.objects.create_user("scheduler-owner",password="long-enough-password");project=Project.objects.create(owner=owner,name="scheduler")
+    queued=[];monkeypatch.setattr("studio.tasks.reconcile_deployment.delay",lambda deployment_id:queued.append(deployment_id))
+    for index,state in enumerate(("pending","deploying","running","degraded","failed","stopped"),1):
+        lab=Lab.objects.create(project=project,name=f"lab-{index}");revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum=str(index)*64,immutable=True)
+        LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace=f"clab-scheduler-{index}",runtime_version="0.8.0",observed_state=state)
+    assert reconcile_active_deployments.run()==4 and len(queued)==4
 
 @pytest.mark.django_db
 def test_guessed_project_uuid_is_not_visible():
@@ -305,6 +315,30 @@ def test_device_worker_updates_node_without_failing_running_lab(monkeypatch):
     assert scheduled==[3,10,30]
 
 @pytest.mark.django_db
+def test_device_suspend_resume_is_authorized_audited_and_persists_desired_state(monkeypatch):
+    monkeypatch.setattr("studio.api.execute_operation.delay",lambda *_:None)
+    owner=User.objects.create_user("suspend-owner",password="long-enough-password");viewer=User.objects.create_user("suspend-viewer",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="suspend-project");ProjectMembership.objects.create(project=project,user=viewer,role="viewer")
+    lab=Lab.objects.create(project=project,name="suspend-lab");revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="7"*64,immutable=True)
+    node=LabNode.objects.create(revision=revision,name="r1",template_version=DeviceTemplateVersion.objects.get(template__name="FRR Router"))
+    deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-suspend",runtime_version="0.8.0",observed_state="running")
+    device=DeviceInstance.objects.create(deployment=deployment,lab_node=node,observed_readiness="ready",runtime_resources={"pod":"r1-pod"})
+    client=APIClient();payload={"device_id":str(device.id),"operation":"suspend_device"};client.force_authenticate(viewer)
+    assert client.post(f"/api/v1/deployments/{deployment.id}/device-operations/",payload,format="json",HTTP_IDEMPOTENCY_KEY="viewer-suspend").status_code==403
+    client.force_authenticate(owner);response=client.post(f"/api/v1/deployments/{deployment.id}/device-operations/",payload,format="json",HTTP_IDEMPOTENCY_KEY="owner-suspend")
+    assert response.status_code==202 and AuditEvent.objects.filter(action="device.suspend",target_id=device.id).exists()
+    suspend_job=OperationJob.objects.get(id=response.data["id"])
+    class Adapter:
+        def suspend_device(self,*_): return {"device":"r1","operation":"suspend","desired_state":"suspended","readiness":"suspended","output":"r1"}
+        def resume_device(self,*_): return {"device":"r1","operation":"resume","desired_state":"running","readiness":"ready","output":"r1"}
+    monkeypatch.setattr("studio.tasks.ClabernetesAdapter",Adapter);execute_operation.run(str(suspend_job.id));device.refresh_from_db()
+    assert device.observed_readiness=="suspended" and device.runtime_resources["manual_desired_state"]=="suspended"
+    resume=client.post(f"/api/v1/deployments/{deployment.id}/device-operations/",{"device_id":str(device.id),"operation":"resume_device"},format="json",HTTP_IDEMPOTENCY_KEY="owner-resume")
+    assert resume.status_code==202 and AuditEvent.objects.filter(action="device.resume",target_id=device.id).exists()
+    execute_operation.run(str(resume.data["id"]));device.refresh_from_db()
+    assert device.observed_readiness=="ready" and "manual_desired_state" not in device.runtime_resources
+
+@pytest.mark.django_db
 def test_live_configuration_collection_is_operator_only_versioned_and_encrypted(monkeypatch):
     monkeypatch.setattr("studio.api.execute_operation.delay",lambda *_:None)
     owner=User.objects.create_user("collector-owner",password="long-enough-password")
@@ -357,7 +391,7 @@ def test_reconciliation_drops_manual_lifecycle_after_launcher_replacement(monkey
     class Adapter:
         def get_observed_state(self,_): return {"topologyReady":True}
         def observe_devices(self,_): return [{"name":"node-a","node_uid":"node-uid","readiness":"ready","pod":"node-a-pod",
-            "pod_uid":"new-pod","worker":"worker","pod_phase":"Running","appliance_running":True}]
+            "pod_uid":"new-pod","worker":"worker","pod_phase":"Running","appliance_running":True,"appliance_paused":False}]
     monkeypatch.setattr("studio.tasks.ClabernetesAdapter",Adapter)
     reconcile_deployment.run(str(deployment.id))
     device.refresh_from_db()
@@ -373,12 +407,33 @@ def test_reconciliation_keeps_topology_deploying_until_appliance_container_runs(
     class Adapter:
         def get_observed_state(self,_): return {"topologyReady":True}
         def observe_devices(self,_): return [{"name":"node-a","node_uid":"node-uid","readiness":"starting","pod":"node-a-pod",
-            "pod_uid":"pod-uid","worker":"worker","pod_phase":"Running","appliance_running":False}]
+            "pod_uid":"pod-uid","worker":"worker","pod_phase":"Running","appliance_running":False,"appliance_paused":False}]
     monkeypatch.setattr("studio.tasks.ClabernetesAdapter",Adapter)
     assert reconcile_deployment.run(str(deployment.id))==LabDeployment.State.DEPLOYING
     deployment.refresh_from_db();device=DeviceInstance.objects.get(deployment=deployment,lab_node=node)
     assert deployment.observed_state=="deploying" and deployment.error_details=={"waiting_for_devices":["node-a"]}
     assert device.observed_readiness=="starting" and device.runtime_resources["appliance_running"] is False
+
+@pytest.mark.django_db
+def test_reconciliation_reapplies_intentional_suspension_after_launcher_replacement(monkeypatch):
+    owner=User.objects.create_user("durable-suspend",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="durable-project");lab=Lab.objects.create(project=project,name="durable-lab")
+    revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="8"*64,immutable=True)
+    node=LabNode.objects.create(revision=revision,name="r1",template_version=DeviceTemplateVersion.objects.get(template__name="FRR Router"))
+    deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-durable",runtime_version="0.8.0",observed_state="running")
+    device=DeviceInstance.objects.create(deployment=deployment,lab_node=node,observed_readiness="suspended",
+        runtime_resources={"pod":"old-pod","pod_uid":"old-uid","manual_desired_state":"suspended"})
+    pauses=[]
+    class Adapter:
+        def get_observed_state(self,_): return {"topologyReady":True}
+        def observe_devices(self,_): return [{"name":"r1","node_uid":"node-uid","readiness":"ready","pod":"new-pod","pod_uid":"new-uid",
+            "worker":"worker","pod_phase":"Running","appliance_running":True,"appliance_paused":False}]
+        def set_device_pause(self,deployment,node_name,pod,paused): pauses.append((node_name,pod,paused))
+    monkeypatch.setattr("studio.tasks.ClabernetesAdapter",Adapter)
+    assert reconcile_deployment.run(str(deployment.id))==LabDeployment.State.RUNNING
+    device.refresh_from_db();deployment.refresh_from_db()
+    assert pauses==[("r1","new-pod",True)] and device.observed_readiness=="suspended"
+    assert device.runtime_resources["appliance_paused"] is True and deployment.error_details=={}
 
 @pytest.mark.django_db
 def test_capture_api_is_bounded_idempotent_and_operator_only(monkeypatch):

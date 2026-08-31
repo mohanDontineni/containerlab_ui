@@ -309,8 +309,8 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
     def device_operations(self,request,pk=None):
         deployment=self.get_object(); self._require_operator(deployment)
         operation=str(request.data.get("operation",""))
-        if operation not in ("restart_device","collect_configuration"):
-            return Response({"error":{"code":"unsupported_operation","details":"Supported device operations are restart and configuration collection."}},status=422)
+        if operation not in ("restart_device","suspend_device","resume_device","collect_configuration"):
+            return Response({"error":{"code":"unsupported_operation","details":"Supported device operations are restart, suspend, resume, and configuration collection."}},status=422)
         try: device_id=uuid.UUID(str(request.data.get("device_id")))
         except (ValueError,TypeError,AttributeError): return Response({"error":{"code":"invalid_device"}},status=422)
         key=request.headers.get("Idempotency-Key")
@@ -323,7 +323,11 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
         with transaction.atomic():
             device=deployment.devices.select_for_update().select_related("lab_node").filter(id=device_id).first()
             if not device: return Response({"error":{"code":"invalid_device"}},status=422)
-            if device.observed_readiness!="ready" or not device.runtime_resources.get("pod"): return Response({"error":{"code":"device_not_ready"}},status=409)
+            desired_suspended=device.runtime_resources.get("manual_desired_state")=="suspended"
+            if operation=="resume_device":
+                if not desired_suspended or not device.runtime_resources.get("pod"): return Response({"error":{"code":"device_not_suspended"}},status=409)
+            elif device.observed_readiness!="ready" or not device.runtime_resources.get("pod"):
+                return Response({"error":{"code":"device_not_ready"}},status=409)
             if operation=="collect_configuration" and not device.lab_node.template_version.launch_profile.get("configuration_collect_command"):
                 return Response({"error":{"code":"configuration_collection_unsupported","details":"This device template has no verified runtime collector."}},status=422)
             if models.OperationJob.objects.filter(target_id=device.id,state__in=("accepted","scheduled","started")).exists():

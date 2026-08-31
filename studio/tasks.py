@@ -19,7 +19,7 @@ def execute_operation(self,job_id):
         if job.state=="succeeded": return str(job.id)
         job.state="started"; job.attempts+=1; job.heartbeat=timezone.now(); job.progress=10; job.save()
     adapter=ClabernetesAdapter()
-    device_operations=("restart_device","collect_configuration")
+    device_operations=("restart_device","suspend_device","resume_device","collect_configuration")
     try:
         if job.operation_type=="publish_image":
             artifact=ImageArtifact.objects.get(pk=job.target_id)
@@ -58,9 +58,12 @@ def execute_operation(self,job_id):
         elif job.operation_type in device_operations:
             device=DeviceInstance.objects.select_related("lab_node").get(pk=job.target_id,deployment=job.deployment)
             result=getattr(adapter,job.operation_type)(job.deployment,device)
-            if job.operation_type=="restart_device":
+            if job.operation_type in ("restart_device","suspend_device","resume_device"):
                 device.observed_readiness=result["readiness"]
-                device.runtime_resources={**device.runtime_resources,"manual_lifecycle":job.operation_type,"manual_lifecycle_at":timezone.now().isoformat()}
+                resources={**device.runtime_resources,"manual_lifecycle":job.operation_type,"manual_lifecycle_at":timezone.now().isoformat()}
+                if job.operation_type=="suspend_device": resources["manual_desired_state"]="suspended"
+                elif job.operation_type in ("resume_device","restart_device"): resources.pop("manual_desired_state",None)
+                device.runtime_resources=resources
                 device.save(update_fields=["observed_readiness","runtime_resources","updated_at"])
             else:
                 content=result.pop("content");checksum=hashlib.sha256(content.encode("utf-8")).hexdigest()
@@ -108,7 +111,7 @@ def execute_operation(self,job_id):
 def reconcile_deployment(self,deployment_id):
     deployment=LabDeployment.objects.get(pk=deployment_id)
     try:
-        status=ClabernetesAdapter().get_observed_state(deployment)
+        adapter=ClabernetesAdapter();status=adapter.get_observed_state(deployment)
         state=status.get("topologyState","").lower()
         if status.get("topologyReady") is True: observed=LabDeployment.State.RUNNING
         elif state in ("failed","error"): observed=LabDeployment.State.FAILED
@@ -118,18 +121,24 @@ def reconcile_deployment(self,deployment_id):
         deployment.last_reconciliation=timezone.now()
         deployment.error_details={} if observed!=LabDeployment.State.FAILED else {"runtime_status":status}
         deployment.resource_identities={**deployment.resource_identities,"status":status}
-        observed_devices=ClabernetesAdapter().observe_devices(deployment)
+        observed_devices=adapter.observe_devices(deployment)
         for observed_device in observed_devices:
             node=deployment.revision.nodes.filter(name=observed_device["name"]).first()
             if node:
                 current=DeviceInstance.objects.filter(deployment=deployment,lab_node=node).first()
-                resources={"node_uid":observed_device["node_uid"],"pod":observed_device["pod"],"pod_uid":observed_device["pod_uid"],"pod_phase":observed_device["pod_phase"],"appliance_running":observed_device["appliance_running"]}
+                resources={"node_uid":observed_device["node_uid"],"pod":observed_device["pod"],"pod_uid":observed_device["pod_uid"],"pod_phase":observed_device["pod_phase"],"appliance_running":observed_device["appliance_running"],"appliance_paused":observed_device["appliance_paused"]}
                 same_launcher=current and current.runtime_resources.get("pod_uid")==observed_device["pod_uid"]
                 if same_launcher: resources={**current.runtime_resources,**resources}
+                desired_suspended=current and current.runtime_resources.get("manual_desired_state")=="suspended"
+                if desired_suspended and observed_device["appliance_running"] and not observed_device["appliance_paused"]:
+                    adapter.set_device_pause(deployment,node.name,observed_device["pod"],True)
+                    resources.update({"appliance_running":False,"appliance_paused":True})
+                readiness="suspended" if desired_suspended and resources["appliance_paused"] else observed_device["readiness"]
                 DeviceInstance.objects.update_or_create(deployment=deployment,lab_node=node,defaults={
-                    "runtime_resources":resources,"observed_readiness":observed_device["readiness"],
+                    "runtime_resources":resources,"observed_readiness":readiness,
                     "worker_placement":observed_device["worker"] or ""})
-        waiting=[item["name"] for item in observed_devices if item["readiness"]!="ready"]
+        waiting=[item["name"] for item in observed_devices if item["readiness"]!="ready" and not DeviceInstance.objects.filter(
+            deployment=deployment,lab_node__name=item["name"],observed_readiness="suspended",runtime_resources__manual_desired_state="suspended").exists()]
         if observed==LabDeployment.State.RUNNING and waiting:
             deployment.observed_state=observed=LabDeployment.State.DEPLOYING
             deployment.error_details={"waiting_for_devices":waiting}
@@ -140,3 +149,10 @@ def reconcile_deployment(self,deployment_id):
         deployment.error_details={"type":type(exc).__name__,"message":str(exc)[:2000]}
         deployment.save(update_fields=["last_reconciliation","error_details","updated_at"])
         raise
+
+@shared_task
+def reconcile_active_deployments():
+    active=(LabDeployment.State.PENDING,LabDeployment.State.DEPLOYING,LabDeployment.State.RUNNING,LabDeployment.State.DEGRADED)
+    deployment_ids=list(LabDeployment.objects.filter(observed_state__in=active).values_list("id",flat=True))
+    for deployment_id in deployment_ids: reconcile_deployment.delay(str(deployment_id))
+    return len(deployment_ids)

@@ -86,7 +86,7 @@ def test_node_local_checksum_reference_is_accepted_as_immutable():
     assert ClabernetesAdapter.validate_topology(revision)==["r1: image is not content-addressed"]
 
 def test_observe_devices_resolves_only_topology_owned_pods(monkeypatch):
-    monkeypatch.setattr("studio.runtime.stream",lambda *_args,**_kwargs:"true\n")
+    monkeypatch.setattr("studio.runtime.stream",lambda *_args,**_kwargs:"true false\n")
     node={"metadata":{"name":"r1","uid":"node-uid","labels":{"c9s.run/topologyNode":"r1"}},"status":{"readiness":"ready"}}
     custom=SimpleNamespace(list_namespaced_custom_object=lambda *_args,**_kwargs:{"items":[node]})
     metadata=SimpleNamespace(name="r1-pod",uid="pod-uid",labels={"c9s.run/topologyNode":"r1"})
@@ -94,7 +94,7 @@ def test_observe_devices_resolves_only_topology_owned_pods(monkeypatch):
     core=SimpleNamespace(list_namespaced_pod=lambda *_args,**_kwargs:SimpleNamespace(items=[pod]),connect_get_namespaced_pod_exec=object())
     adapter=ClabernetesAdapter(custom_api=custom,core_api=core)
     observed=adapter.observe_devices(SimpleNamespace(namespace="lab-one"))
-    assert observed==[{"name":"r1","node_uid":"node-uid","readiness":"ready","pod":"r1-pod","pod_uid":"pod-uid","worker":"worker-1","pod_phase":"Running","appliance_running":True}]
+    assert observed==[{"name":"r1","node_uid":"node-uid","readiness":"ready","pod":"r1-pod","pod_uid":"pod-uid","worker":"worker-1","pod_phase":"Running","appliance_running":True,"appliance_paused":False}]
 
 def test_observe_devices_does_not_trust_controller_readiness_without_appliance(monkeypatch):
     monkeypatch.setattr("studio.runtime.stream",lambda *_args,**_kwargs:"")
@@ -105,6 +105,17 @@ def test_observe_devices_does_not_trust_controller_readiness_without_appliance(m
     core=SimpleNamespace(list_namespaced_pod=lambda *_args,**_kwargs:SimpleNamespace(items=[pod]),connect_get_namespaced_pod_exec=object())
     observed=ClabernetesAdapter(custom_api=custom,core_api=core).observe_devices(SimpleNamespace(namespace="lab-one"))
     assert observed[0]["readiness"]=="starting" and observed[0]["appliance_running"] is False
+
+def test_suspend_and_resume_use_persistent_nested_container_pause(monkeypatch):
+    calls=[]
+    monkeypatch.setattr("studio.runtime.stream",lambda method,pod,namespace,**kwargs:calls.append(kwargs["command"]) or "r1\n")
+    adapter=ClabernetesAdapter(custom_api=SimpleNamespace(),core_api=SimpleNamespace(connect_get_namespaced_pod_exec=object()))
+    deployment=SimpleNamespace(id="deployment",namespace="lab-one")
+    device=SimpleNamespace(deployment_id="deployment",runtime_resources={"pod":"r1-pod"},lab_node=SimpleNamespace(name="r1"))
+    suspended=adapter.suspend_device(deployment,device);resumed=adapter.resume_device(deployment,device)
+    assert calls==[["docker","pause","r1"],["docker","unpause","r1"]]
+    assert suspended["readiness"]=="suspended" and suspended["desired_state"]=="suspended"
+    assert resumed["readiness"]=="ready" and resumed["desired_state"]=="running"
 
 def test_device_restart_replaces_only_selected_clabernetes_pod():
     calls=[]
