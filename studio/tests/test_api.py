@@ -130,6 +130,7 @@ def test_lab_clone_is_deep_project_scoped_audited_and_quota_enforced():
     assert client.post(f"/api/v1/labs/{lab.id}/clone/",{"name":"viewer-copy"},format="json").status_code==403
     client.force_authenticate(owner);response=client.post(f"/api/v1/labs/{lab.id}/clone/",{"name":"source copy"},format="json")
     assert response.status_code==201 and response.data["node_count"]==2 and response.data["link_count"]==1
+    assert response.data["current_draft"] and response.data["workspace_url"]==f"/labs/{response.data['id']}/topology/"
     clone=Lab.objects.get(pk=response.data["id"]);cloned=clone.current_draft
     assert clone.description=="reference" and clone.tags==["bgp"] and cloned.id!=revision.id and cloned.annotations==revision.annotations
     assert set(cloned.nodes.values_list("name",flat=True))=={"client","server"} and cloned.links.get().label=="data"

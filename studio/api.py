@@ -141,6 +141,7 @@ class LabViewSet(viewsets.ModelViewSet):
             models.AuditEvent.objects.create(actor=request.user,project=project,action="lab.cloned",target_type="Lab",target_id=clone.id,
                 correlation_id=getattr(request,"correlation_id",""),metadata={"source_lab":str(source.id),"revision":str(revision.id),
                     "node_count":revision.nodes.count(),"link_count":revision.links.count()})
+        clone.refresh_from_db()
         payload=serializers.LabSerializer(clone).data
         payload.update({"workspace_url":f"/labs/{clone.id}/topology/","node_count":revision.nodes.count(),"link_count":revision.links.count()})
         return Response(payload,status=201)
