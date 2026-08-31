@@ -110,10 +110,12 @@ def test_suspend_and_resume_use_persistent_nested_container_pause(monkeypatch):
     calls=[]
     monkeypatch.setattr("studio.runtime.stream",lambda method,pod,namespace,**kwargs:calls.append(kwargs["command"]) or "r1\n")
     adapter=ClabernetesAdapter(custom_api=SimpleNamespace(),core_api=SimpleNamespace(connect_get_namespaced_pod_exec=object()))
+    monkeypatch.setattr(adapter,"linked_data_interfaces",lambda _:["eth1"])
     deployment=SimpleNamespace(id="deployment",namespace="lab-one")
     device=SimpleNamespace(deployment_id="deployment",runtime_resources={"pod":"r1-pod"},lab_node=SimpleNamespace(name="r1"))
     suspended=adapter.suspend_device(deployment,device);resumed=adapter.resume_device(deployment,device)
-    assert calls==[["docker","pause","r1"],["docker","unpause","r1"]]
+    assert calls==[["ip","link","set","r1-eth1","down"],["docker","pause","r1"],
+        ["docker","unpause","r1"],["ip","link","set","r1-eth1","up"]]
     assert suspended["readiness"]=="suspended" and suspended["desired_state"]=="suspended"
     assert resumed["readiness"]=="ready" and resumed["desired_state"]=="running"
 

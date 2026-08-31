@@ -130,9 +130,12 @@ def reconcile_deployment(self,deployment_id):
                 same_launcher=current and current.runtime_resources.get("pod_uid")==observed_device["pod_uid"]
                 if same_launcher: resources={**current.runtime_resources,**resources}
                 desired_suspended=current and current.runtime_resources.get("manual_desired_state")=="suspended"
+                linked_interfaces=adapter.linked_data_interfaces(node) if desired_suspended else []
                 if desired_suspended and observed_device["appliance_running"] and not observed_device["appliance_paused"]:
-                    adapter.set_device_pause(deployment,node.name,observed_device["pod"],True)
+                    adapter.set_device_pause(deployment,node.name,observed_device["pod"],True,linked_interfaces)
                     resources.update({"appliance_running":False,"appliance_paused":True})
+                elif desired_suspended and observed_device["appliance_paused"]:
+                    adapter.set_device_links(deployment,node.name,observed_device["pod"],linked_interfaces,False)
                 readiness="suspended" if desired_suspended and resources["appliance_paused"] else observed_device["readiness"]
                 DeviceInstance.objects.update_or_create(deployment=deployment,lab_node=node,defaults={
                     "runtime_resources":resources,"observed_readiness":readiness,

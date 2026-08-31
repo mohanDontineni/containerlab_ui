@@ -428,11 +428,12 @@ def test_reconciliation_reapplies_intentional_suspension_after_launcher_replacem
         def get_observed_state(self,_): return {"topologyReady":True}
         def observe_devices(self,_): return [{"name":"r1","node_uid":"node-uid","readiness":"ready","pod":"new-pod","pod_uid":"new-uid",
             "worker":"worker","pod_phase":"Running","appliance_running":True,"appliance_paused":False}]
-        def set_device_pause(self,deployment,node_name,pod,paused): pauses.append((node_name,pod,paused))
+        def linked_data_interfaces(self,node): return ["eth1"]
+        def set_device_pause(self,deployment,node_name,pod,paused,interfaces): pauses.append((node_name,pod,paused,interfaces))
     monkeypatch.setattr("studio.tasks.ClabernetesAdapter",Adapter)
     assert reconcile_deployment.run(str(deployment.id))==LabDeployment.State.RUNNING
     device.refresh_from_db();deployment.refresh_from_db()
-    assert pauses==[("r1","new-pod",True)] and device.observed_readiness=="suspended"
+    assert pauses==[("r1","new-pod",True,["eth1"])] and device.observed_readiness=="suspended"
     assert device.runtime_resources["appliance_paused"] is True and deployment.error_details=={}
 
 @pytest.mark.django_db

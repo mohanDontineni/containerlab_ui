@@ -6,6 +6,7 @@ import struct
 import time
 from pathlib import Path
 from django.conf import settings
+from django.db.models import Q
 import yaml
 from kubernetes import client, config
 from kubernetes.client.exceptions import ApiException
@@ -232,19 +233,39 @@ class ClabernetesAdapter:
         name=device.lab_node.name
         self.core.delete_namespaced_pod(pod,deployment.namespace,body=client.V1DeleteOptions(grace_period_seconds=0,propagation_policy="Background"))
         return {"device":name,"operation":"restart","replaced_pod":pod,"readiness":"restarting"}
-    def set_device_pause(self,deployment,node_name,pod,paused):
+    @staticmethod
+    def linked_data_interfaces(node):
+        return list(node.interfaces.filter(Q(links_as_a__isnull=False)|Q(links_as_b__isnull=False),reserved_management=False).distinct().values_list("name",flat=True))
+    def set_device_links(self,deployment,node_name,pod,interfaces,enabled):
+        state="up" if enabled else "down";applied=[]
+        for interface in interfaces:
+            launcher_interface=f"{node_name}-{interface}"
+            stream(self.core.connect_get_namespaced_pod_exec,pod,deployment.namespace,
+                command=["ip","link","set",launcher_interface,state],stderr=True,stdin=False,stdout=True,tty=False,_request_timeout=10)
+            applied.append(interface)
+        return applied
+    def set_device_pause(self,deployment,node_name,pod,paused,interfaces):
         if not pod: raise CapabilityError("Device launcher is not ready")
-        action="pause" if paused else "unpause"
-        output=stream(self.core.connect_get_namespaced_pod_exec,pod,deployment.namespace,
-            command=["docker",action,node_name],stderr=True,stdin=False,stdout=True,tty=False,_request_timeout=15)
+        if paused:
+            applied=self.set_device_links(deployment,node_name,pod,interfaces,False)
+            try:
+                output=stream(self.core.connect_get_namespaced_pod_exec,pod,deployment.namespace,
+                    command=["docker","pause",node_name],stderr=True,stdin=False,stdout=True,tty=False,_request_timeout=15)
+            except Exception:
+                self.set_device_links(deployment,node_name,pod,applied,True)
+                raise
+        else:
+            output=stream(self.core.connect_get_namespaced_pod_exec,pod,deployment.namespace,
+                command=["docker","unpause",node_name],stderr=True,stdin=False,stdout=True,tty=False,_request_timeout=15)
+            applied=self.set_device_links(deployment,node_name,pod,interfaces,True)
         return {"device":node_name,"operation":"suspend" if paused else "resume","desired_state":"suspended" if paused else "running",
-            "readiness":"suspended" if paused else "ready","output":output[-2000:]}
+            "readiness":"suspended" if paused else "ready","interfaces":applied,"output":output[-2000:]}
     def suspend_device(self,deployment,device):
         if device.deployment_id!=deployment.id: raise CapabilityError("Device does not belong to this deployment")
-        return self.set_device_pause(deployment,device.lab_node.name,device.runtime_resources.get("pod"),True)
+        return self.set_device_pause(deployment,device.lab_node.name,device.runtime_resources.get("pod"),True,self.linked_data_interfaces(device.lab_node))
     def resume_device(self,deployment,device):
         if device.deployment_id!=deployment.id: raise CapabilityError("Device does not belong to this deployment")
-        return self.set_device_pause(deployment,device.lab_node.name,device.runtime_resources.get("pod"),False)
+        return self.set_device_pause(deployment,device.lab_node.name,device.runtime_resources.get("pod"),False,self.linked_data_interfaces(device.lab_node))
     def set_link_condition(self,deployment,link,condition):
         if link.revision_id!=deployment.revision_id: raise CapabilityError("Link does not belong to this deployment")
         endpoints=(link.endpoint_a,link.endpoint_b)
