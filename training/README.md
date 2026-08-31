@@ -1,0 +1,61 @@
+# ContainerLab Studio GUI training catalog
+
+This catalog documents the supported operator workflows in ContainerLab Studio. Operators do not write Containerlab YAML, Kubernetes manifests, or shell scripts. The topology editor and guided forms collect intent, validate it, and generate the required runtime resources internally.
+
+Screenshots are generated from the deployed product with `scripts/capture-training.mjs`. The capture runner is read-only: it opens pages and safe dialogs, but never saves, deploys, stops, restarts, publishes, uploads, changes membership, changes a password, or runs diagnostics.
+
+## Screenshot index
+
+| Screenshot | Operation shown | What the operator is doing |
+|---|---|---|
+| `01-overview.png` | Platform overview | Reviews project, lab, deployment, device, image, and recent-operation health from one dashboard. |
+| `02-projects.png` | Project catalog | Searches available projects and opens an authorized workspace. |
+| `03-create-project.png` | Create project | Defines a project name, description, and tags using a guided form. |
+| `04-project-access.png` | Membership and quotas | Reviews role assignments, resource usage, and enforced project limits. |
+| `05-lab-library.png` | Lab catalog | Searches labs, sees draft topology counts, and opens the visual workspace. |
+| `06-create-lab.png` | Create lab | Creates an empty lab in a selected project without authoring YAML. |
+| `07-topology-workspace.png` | Visual topology design | Drags devices onto the canvas, selects images, edits startup configuration, and connects explicit free interfaces. |
+| `08-save-as-dialog.png` | Save topology as | Creates an independent lab copy with pinned images, links, layout, and encrypted configuration. |
+| `09-revision-history.png` | Revision history | Reviews immutable published revisions and chooses a source for a new editable draft. |
+| `10-image-library.png` | Image catalog | Reviews uploaded or registry-backed images, validation, architecture, publication, and repair state. |
+| `11-upload-image.png` | Resumable image upload | Selects a licensed Docker/OCI archive, project, checksum, and acknowledgement before resumable upload. |
+| `12-register-image.png` | Register OCI image | Adds an existing registry reference through a form instead of editing topology YAML. |
+| `13-deployments.png` | Deployment catalog | Reviews desired and observed runtime state and opens a live deployment. |
+| `14-runtime-overview.png` | Whole-lab lifecycle | Reviews device/link readiness and the controls for deploy, refresh, and stop. |
+| `15-device-lifecycle.png` | Per-device lifecycle | Uses collect, suspend, resume, stop, start, and restart controls for individual devices. |
+| `16-live-link-controls.png` | Link impairment | Applies bounded latency, jitter, loss, rate, disable, or restore actions bidirectionally. |
+| `17-ping-diagnostic.png` | Ping diagnostic | Selects a source node and target address for a bounded reachability test. |
+| `18-packet-capture.png` | Packet capture | Selects a device/interface plus bounded duration and packet count, then downloads PCAP evidence. |
+| `19-device-console.png` | Browser console | Opens an authenticated, expiring, project-scoped device console. |
+| `20-configuration-history.png` | Configuration collection | Reviews encrypted configuration versions and downloads authorized no-store copies. |
+| `21-device-templates.png` | Device templates | Reviews kinds, interfaces, privilege requirements, console methods, and runtime capabilities. |
+| `22-jobs-events.png` | Jobs and audit events | Tracks asynchronous operation state, progress, failures, and audit history. |
+| `23-account-security.png` | Account and security | Updates profile/timezone or changes a password through the native product page. |
+| `24-api-explorer.png` | API explorer | Reviews the authenticated automation API that backs the same authorization and validation rules. |
+
+## No-YAML operating model
+
+1. Create a project and assign roles and quotas in the GUI.
+2. Add images through resumable upload or OCI registry registration.
+3. Create a lab and add nodes from verified device templates.
+4. Select a published image and enter optional or required startup configuration in the node inspector.
+5. Connect devices by dragging between named interface handles. Used point-to-point interfaces cannot be selected twice.
+6. Resolve the validation panel, save the draft, and deploy from the workspace.
+7. Operate the whole topology or individual devices from the runtime page.
+8. Use browser console, link conditions, bounded diagnostics, packet capture, and configuration collection from the same page.
+9. Use Save As and revision restore for change workflows. Backup/Restore downloads a product-native JSON bundle; YAML is never required.
+
+Containerlab/Kubernetes YAML is an internal adapter concern. It may be inspected by platform administrators for troubleshooting, but it is not part of the normal user workflow.
+
+## Regenerating screenshots
+
+Install Playwright in an isolated tooling directory or make it available through `NODE_PATH`, then run:
+
+```bash
+TRAINING_BASE_URL=https://192.168.1.148:30444 \
+TRAINING_USERNAME=admin \
+TRAINING_PASSWORD='set-in-environment' \
+node scripts/capture-training.mjs
+```
+
+The deployment must contain at least one project, lab with nodes/links, published image, and deployment so all detail screens are available. Self-signed home-lab TLS is supported by the runner. Do not commit credentials.

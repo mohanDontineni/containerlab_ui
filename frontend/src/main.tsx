@@ -417,7 +417,7 @@ function Workspace() {
     setDirty(true);
   };
   const exportBundle = () => {
-    if (dirty) { setNotice("Save the draft before exporting"); return; }
+    if (dirty) { setNotice("Save the draft before downloading a backup"); return; }
     location.href = `/api/v1/labs/${labId}/export/`;
   };
   const cloneLab = async () => {
@@ -458,15 +458,15 @@ function Workspace() {
   const importBundle = async (file?: File) => {
     if (!file) return;
     if (dirty && !confirm("Importing replaces this unsaved draft. Continue?")) return;
-    setNotice("Validating and importing lab bundle…");
+    setNotice("Validating and restoring lab backup…");
     try {
       const response = await fetch(`/api/v1/labs/${labId}/import/`, {method:"POST",credentials:"same-origin",
         headers:{"Content-Type":"application/vnd.containerlab.studio.lab+json","X-CSRFToken":csrf()},body:file});
       const data=await response.json();
       if (!response.ok) throw new Error(data.error?.details || "Import failed");
-      setNotice(`Imported ${data.node_count} devices and ${data.link_count} links`);
+      setNotice(`Restored ${data.node_count} devices and ${data.link_count} links from backup`);
       location.reload();
-    } catch (error) { setNotice(error instanceof Error ? error.message : "Import failed"); }
+    } catch (error) { setNotice(error instanceof Error ? error.message : "Backup restore failed"); }
     finally { if (importInput.current) importInput.current.value=""; }
   };
   const deploy = async () => {
@@ -580,10 +580,10 @@ function Workspace() {
           </button>
           <i></i>
           <button onClick={() => rf?.fitView({ padding: 0.2 })}>Fit</button>
-          <button onClick={exportBundle} disabled={dirty}>Export</button>
+          <button onClick={exportBundle} disabled={dirty} title="Download a product-native lab backup. No YAML editing is required.">Backup</button>
           <button onClick={() => setCloneOpen(true)} disabled={dirty}>Save as</button>
           <button onClick={openHistory} disabled={dirty}>History</button>
-          <button onClick={() => importInput.current?.click()}>Import</button>
+          <button onClick={() => importInput.current?.click()} title="Restore a ContainerLab Studio backup. This does not require a YAML file.">Restore</button>
           <input ref={importInput} className="file-input" type="file" accept=".json,.clabstudio.json,application/json" onChange={(e)=>importBundle(e.target.files?.[0])}/>
           <button>
             Validate{" "}

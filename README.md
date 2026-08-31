@@ -2,6 +2,8 @@
 
 ContainerLab Studio is a self-hosted Django/React application for designing and operating Kubernetes-hosted network labs through Clabernetes. This repository is an implementation-in-progress: the deployed foundation and runtime proof work, while several advanced product requirements remain explicitly tracked in `IMPLEMENTATION_STATUS.md`.
 
+The normal operator workflow is GUI-only. Users create projects and labs, add images, design interface-aware topologies, enter startup configuration, deploy, troubleshoot, and control devices without writing Containerlab YAML, Kubernetes manifests, or shell scripts. The application keeps generated runtime resources behind its validated adapter boundary. Product-native lab Backup/Restore uses a JSON bundle for portability and does not require YAML editing.
+
 ## Deployed home-lab instance
 
 - Kubernetes context: `kubernetes-admin@kubernetes`
@@ -31,6 +33,8 @@ pnpm --dir frontend build
 ```
 
 The production image uses Python 3.13, Gunicorn with Uvicorn workers, a multi-stage React build, and a non-root UID. See `scripts/` for preflight, install, smoke test, backup, restore, and uninstall entry points.
+
+The labeled operator screenshot catalog and its read-only capture procedure are in [`training/README.md`](training/README.md).
 
 ## Important limitations
 

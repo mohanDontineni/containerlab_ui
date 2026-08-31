@@ -168,7 +168,8 @@ class ClabernetesAdapter:
             readiness="ready" if controller_readiness=="ready" and appliance_running else "starting"
             observed.append({"name":name,"node_uid":item.get("metadata",{}).get("uid"),"readiness":readiness,
                 "pod":pod.metadata.name if pod else None,"pod_uid":str(pod.metadata.uid) if pod else None,"worker":pod.spec.node_name if pod else None,
-                "pod_phase":pod.status.phase if pod else "Pending","appliance_running":appliance_running,"appliance_paused":appliance_paused})
+                "pod_phase":pod.status.phase if pod else "Pending","appliance_running":appliance_running,"appliance_paused":appliance_paused,
+                "deployment_disabled":DISABLE_DEPLOYMENTS_LABEL in item.get("metadata",{}).get("labels",{})})
         return observed
     def ping(self,deployment,node,target,count=3,timeout=2):
         device=deployment.devices.select_related("lab_node").get(lab_node=node)
@@ -245,7 +246,10 @@ class ClabernetesAdapter:
                 body=client.V1DeleteOptions(propagation_policy="Background"))
             deleted=True
         except ApiException as exc:
-            if exc.status!=404: raise
+            if exc.status!=404:
+                self.custom.patch_namespaced_custom_object(API_GROUP,API_VERSION,deployment.namespace,"nodes",name,
+                    {"metadata":{"labels":{DISABLE_DEPLOYMENTS_LABEL:None}}})
+                raise
             deleted=False
         return {"device":name,"operation":"stop","desired_state":"stopped","readiness":"stopped","launcher_deleted":deleted}
     def stop_device(self,deployment,device): return self.ensure_device_stopped(deployment,device)

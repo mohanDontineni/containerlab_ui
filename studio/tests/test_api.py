@@ -554,7 +554,7 @@ def test_reconciliation_reapplies_durable_stop_if_launcher_reappears(monkeypatch
     class Adapter:
         def get_observed_state(self,_): return {"topologyReady":True}
         def observe_devices(self,_): return [{"name":"r2","node_uid":"node-uid","readiness":"ready","pod":"unexpected-pod","pod_uid":"unexpected-uid",
-            "worker":"worker","pod_phase":"Running","appliance_running":True,"appliance_paused":False}]
+            "worker":"worker","pod_phase":"Running","appliance_running":True,"appliance_paused":False,"deployment_disabled":False}]
         def ensure_device_stopped(self,deployment,current): stopped.append((deployment.id,current.id))
     monkeypatch.setattr("studio.tasks.ClabernetesAdapter",Adapter)
     assert reconcile_deployment.run(str(deployment.id))==LabDeployment.State.RUNNING

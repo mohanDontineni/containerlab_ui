@@ -94,7 +94,7 @@ def test_observe_devices_resolves_only_topology_owned_pods(monkeypatch):
     core=SimpleNamespace(list_namespaced_pod=lambda *_args,**_kwargs:SimpleNamespace(items=[pod]),connect_get_namespaced_pod_exec=object())
     adapter=ClabernetesAdapter(custom_api=custom,core_api=core)
     observed=adapter.observe_devices(SimpleNamespace(namespace="lab-one"))
-    assert observed==[{"name":"r1","node_uid":"node-uid","readiness":"ready","pod":"r1-pod","pod_uid":"pod-uid","worker":"worker-1","pod_phase":"Running","appliance_running":True,"appliance_paused":False}]
+    assert observed==[{"name":"r1","node_uid":"node-uid","readiness":"ready","pod":"r1-pod","pod_uid":"pod-uid","worker":"worker-1","pod_phase":"Running","appliance_running":True,"appliance_paused":False,"deployment_disabled":False}]
 
 def test_observe_devices_does_not_trust_controller_readiness_without_appliance(monkeypatch):
     monkeypatch.setattr("studio.runtime.stream",lambda *_args,**_kwargs:"")
@@ -143,6 +143,18 @@ def test_device_stop_disables_clabernetes_reconcile_deletes_only_launcher_and_st
     assert deletes==[("r2","lab-one","Background")]
     assert patches[0][-1]=={"metadata":{"labels":{DISABLE_DEPLOYMENTS_LABEL:"true"}}}
     assert patches[1][-1]=={"metadata":{"labels":{DISABLE_DEPLOYMENTS_LABEL:None}}}
+
+def test_device_stop_rolls_back_disable_label_when_launcher_delete_fails():
+    from kubernetes.client.exceptions import ApiException
+    patches=[]
+    custom=SimpleNamespace(patch_namespaced_custom_object=lambda *args:patches.append(args) or {})
+    apps=SimpleNamespace(delete_namespaced_deployment=lambda *_args,**_kwargs:(_ for _ in ()).throw(ApiException(status=403)))
+    adapter=ClabernetesAdapter(custom_api=custom,core_api=SimpleNamespace(),apps_api=apps)
+    deployment=SimpleNamespace(id="deployment-id",namespace="lab-one");device=SimpleNamespace(deployment_id="deployment-id",lab_node=SimpleNamespace(name="r2"))
+    try: adapter.stop_device(deployment,device)
+    except ApiException as exc: assert exc.status==403
+    else: raise AssertionError("delete failure must propagate")
+    assert patches[-1][-1]=={"metadata":{"labels":{DISABLE_DEPLOYMENTS_LABEL:None}}}
 
 def test_stop_removes_plaintext_runtime_configuration_maps():
     deleted=[]

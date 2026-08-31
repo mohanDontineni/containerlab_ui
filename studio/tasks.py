@@ -62,7 +62,8 @@ def execute_operation(self,job_id):
                 device.observed_readiness=result["readiness"]
                 resources={**device.runtime_resources,"manual_lifecycle":job.operation_type,"manual_lifecycle_at":timezone.now().isoformat()}
                 if job.operation_type=="suspend_device": resources["manual_desired_state"]="suspended"
-                elif job.operation_type=="stop_device": resources["manual_desired_state"]="stopped"
+                elif job.operation_type=="stop_device": resources.update({"manual_desired_state":"stopped","pod":None,"pod_uid":None,
+                    "pod_phase":"Stopped","appliance_running":False,"appliance_paused":False})
                 elif job.operation_type in ("start_device","resume_device","restart_device"): resources.pop("manual_desired_state",None)
                 device.runtime_resources=resources
                 device.save(update_fields=["observed_readiness","runtime_resources","updated_at"])
@@ -138,7 +139,8 @@ def reconcile_deployment(self,deployment_id):
                     if current.runtime_resources.get("manual_lifecycle_at"): resources["manual_lifecycle_at"]=current.runtime_resources["manual_lifecycle_at"]
                 linked_interfaces=adapter.linked_data_interfaces(node) if desired_suspended else []
                 if desired_stopped:
-                    adapter.ensure_device_stopped(deployment,current)
+                    if observed_device.get("pod") or not observed_device.get("deployment_disabled"):
+                        adapter.ensure_device_stopped(deployment,current)
                     resources.update({"pod":None,"pod_uid":None,"pod_phase":"Stopped","appliance_running":False,"appliance_paused":False})
                 elif desired_suspended and observed_device["appliance_running"] and not observed_device["appliance_paused"]:
                     adapter.set_device_pause(deployment,node.name,observed_device["pod"],True,linked_interfaces)
