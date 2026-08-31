@@ -20,6 +20,8 @@
 - Enforced project quotas for labs, nodes per topology, active deployments, image storage/reservations, and members, with row-locked accounting, usage reporting, administrator controls, audit events, and a consistent conflict contract.
 - Encrypted, versioned startup configuration delivery for supported appliance templates using deployment-scoped ConfigMaps and Clabernetes launcher mounts, plus content-free topology/configuration audit events.
 - Production BGP reference lab using a resumably uploaded and locally published FRR 10.4.1 image, two configured routers, explicit eth1 link endpoints, established eBGP, learned loopback routes, and bidirectional routed reachability.
+- Production nftables firewall reference lab using a dedicated checksum-published appliance, encrypted policy delivery, default-deny forwarding, permitted ICMP, denied TCP/8080, and named policy counters.
+- Audited node-local image repair workflow with explicit operator intent, reconciling/failed states, and appliance-container readiness probes that prevent false-green deployments.
 
 ## Acceptance results
 
@@ -36,7 +38,7 @@
 | 9 | Duplicate deploy idempotency | PASS | DB constraints and unit test cover idempotency; cluster replay test not run. |
 | 10 | Device vs pod readiness | PASS | Separate observed readiness fields; Clabernetes node/topology readiness inspected. |
 | 11 | Browser console reaches device | PASS | Session-bound, expiring, project-scoped WebSocket console was exercised against live Alpine devices; viewers are read-only. |
-| 12 | Reference-lab traffic | PARTIAL | Two-AS BGP reference acceptance passes with learned routes and bidirectional loopback traffic; firewall reference acceptance remains. |
+| 12 | Reference-lab traffic | PASS | Two-AS BGP and default-deny nftables firewall reference acceptance both pass with positive and negative traffic evidence. |
 | 13 | PCAP download | PASS | Live eth1 capture downloaded through the authenticated API; checksum matched and tcpdump decoded 14 genuine ICMP/ARP packets with internal stop frames removed. |
 | 14 | Stop preserves saved lab/config | PASS | Runtime stop/redeploy preserves immutable revision data, saved topology, and encrypted startup configuration records. |
 | 15 | Redeploy pinned revisions/images | PASS | Adapter accepts registry digests or checksum-derived node-local publications; a fresh saved lab deployed the published Alpine 3.22.5 image and reached ready. |
@@ -49,8 +51,11 @@
 | 22 | Project resource governance | PASS | Live one-unit limits allowed the first lab and rejected excess labs, members, image reservations, and topology nodes with typed 409 conflicts; usage/UI/audit checks passed. |
 | 23 | Versioned startup configuration | PASS | FRR configs remained encrypted in PostgreSQL, materialized into deployment-scoped ConfigMaps, mounted into launchers, and applied to both ready devices. |
 | 24 | BGP reference lab | PASS | FRR neighbor reached Established with one received prefix; 10.2.2.2/32 installed via BGP/eth1; both sourced loopback pings passed 3/3 with 0% loss. |
+| 25 | Firewall reference lab | PASS | Routed ICMP passed 3/3 with 0% loss; a locally verified TCP/8080 listener was unreachable through the firewall; nftables recorded 1 allowed ICMP flow and 3 denied TCP SYNs. |
+| 26 | Node-local image repair | PASS | A missing FRR node image was republished through the authenticated audited product operation, restored to containerd, and enabled waiting launchers without manual runtime import. |
+| 27 | Appliance readiness | PASS | Reconciliation probes the nested appliance container and keeps the deployment in `deploying` when Clabernetes reports a ready Node without a running device. |
 
-Automated tests: **68 passed**. Django checks and migration drift checks: **pass**. React TypeScript/Vite production build: **pass in the clean multi-stage image build**. Helm lint/render: **pass**. Native runtime ping: **3 transmitted, 3 received, 0% loss, 0.445 ms average RTT**. Bidirectional 120 ms link condition: **240.563 ms average RTT**. Disabled link: **100% loss**. Restored qdiscs: **native `noqueue` on both endpoints**.
+Automated tests: **79 passed**. Django checks and migration drift checks: **pass**. React TypeScript/Vite production build: **pass in the clean multi-stage image build**. Helm lint/render: **pass**. Native runtime ping: **3 transmitted, 3 received, 0% loss, 0.445 ms average RTT**. Bidirectional 120 ms link condition: **240.563 ms average RTT**. Disabled link: **100% loss**. Restored qdiscs: **native `noqueue` on both endpoints**.
 
 ## Known limitations
 

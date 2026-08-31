@@ -69,15 +69,26 @@ def test_node_local_checksum_reference_is_accepted_as_immutable():
     image.registry_digest="containerlab.local/studio/p/a:latest"
     assert ClabernetesAdapter.validate_topology(revision)==["r1: image is not content-addressed"]
 
-def test_observe_devices_resolves_only_topology_owned_pods():
+def test_observe_devices_resolves_only_topology_owned_pods(monkeypatch):
+    monkeypatch.setattr("studio.runtime.stream",lambda *_args,**_kwargs:"true\n")
     node={"metadata":{"name":"r1","uid":"node-uid","labels":{"c9s.run/topologyNode":"r1"}},"status":{"readiness":"ready"}}
     custom=SimpleNamespace(list_namespaced_custom_object=lambda *_args,**_kwargs:{"items":[node]})
     metadata=SimpleNamespace(name="r1-pod",uid="pod-uid",labels={"c9s.run/topologyNode":"r1"})
     pod=SimpleNamespace(metadata=metadata,spec=SimpleNamespace(node_name="worker-1"),status=SimpleNamespace(phase="Running"))
-    core=SimpleNamespace(list_namespaced_pod=lambda *_args,**_kwargs:SimpleNamespace(items=[pod]))
+    core=SimpleNamespace(list_namespaced_pod=lambda *_args,**_kwargs:SimpleNamespace(items=[pod]),connect_get_namespaced_pod_exec=object())
     adapter=ClabernetesAdapter(custom_api=custom,core_api=core)
     observed=adapter.observe_devices(SimpleNamespace(namespace="lab-one"))
-    assert observed==[{"name":"r1","node_uid":"node-uid","readiness":"ready","pod":"r1-pod","pod_uid":"pod-uid","worker":"worker-1","pod_phase":"Running"}]
+    assert observed==[{"name":"r1","node_uid":"node-uid","readiness":"ready","pod":"r1-pod","pod_uid":"pod-uid","worker":"worker-1","pod_phase":"Running","appliance_running":True}]
+
+def test_observe_devices_does_not_trust_controller_readiness_without_appliance(monkeypatch):
+    monkeypatch.setattr("studio.runtime.stream",lambda *_args,**_kwargs:"")
+    node={"metadata":{"name":"r1","uid":"node-uid","labels":{"c9s.run/topologyNode":"r1"}},"status":{"readiness":"ready"}}
+    custom=SimpleNamespace(list_namespaced_custom_object=lambda *_args,**_kwargs:{"items":[node]})
+    metadata=SimpleNamespace(name="r1-pod",uid="pod-uid",labels={"c9s.run/topologyNode":"r1"})
+    pod=SimpleNamespace(metadata=metadata,spec=SimpleNamespace(node_name="worker-1"),status=SimpleNamespace(phase="Running"))
+    core=SimpleNamespace(list_namespaced_pod=lambda *_args,**_kwargs:SimpleNamespace(items=[pod]),connect_get_namespaced_pod_exec=object())
+    observed=ClabernetesAdapter(custom_api=custom,core_api=core).observe_devices(SimpleNamespace(namespace="lab-one"))
+    assert observed[0]["readiness"]=="starting" and observed[0]["appliance_running"] is False
 
 def test_device_restart_replaces_only_selected_clabernetes_pod():
     calls=[]

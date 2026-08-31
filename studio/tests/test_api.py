@@ -316,11 +316,28 @@ def test_reconciliation_drops_manual_lifecycle_after_launcher_replacement(monkey
     class Adapter:
         def get_observed_state(self,_): return {"topologyReady":True}
         def observe_devices(self,_): return [{"name":"node-a","node_uid":"node-uid","readiness":"ready","pod":"node-a-pod",
-            "pod_uid":"new-pod","worker":"worker","pod_phase":"Running"}]
+            "pod_uid":"new-pod","worker":"worker","pod_phase":"Running","appliance_running":True}]
     monkeypatch.setattr("studio.tasks.ClabernetesAdapter",Adapter)
     reconcile_deployment.run(str(deployment.id))
     device.refresh_from_db()
     assert device.observed_readiness=="ready" and "manual_lifecycle" not in device.runtime_resources
+
+@pytest.mark.django_db
+def test_reconciliation_keeps_topology_deploying_until_appliance_container_runs(monkeypatch):
+    owner=User.objects.create_user("reconcile-appliance",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="appliance-project");lab=Lab.objects.create(project=project,name="appliance-lab")
+    revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="5"*64,immutable=True)
+    node=LabNode.objects.create(revision=revision,name="node-a",template_version=DeviceTemplateVersion.objects.get(template__name="Linux Host"))
+    deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-appliance",runtime_version="0.8.0",observed_state="deploying")
+    class Adapter:
+        def get_observed_state(self,_): return {"topologyReady":True}
+        def observe_devices(self,_): return [{"name":"node-a","node_uid":"node-uid","readiness":"starting","pod":"node-a-pod",
+            "pod_uid":"pod-uid","worker":"worker","pod_phase":"Running","appliance_running":False}]
+    monkeypatch.setattr("studio.tasks.ClabernetesAdapter",Adapter)
+    assert reconcile_deployment.run(str(deployment.id))==LabDeployment.State.DEPLOYING
+    deployment.refresh_from_db();device=DeviceInstance.objects.get(deployment=deployment,lab_node=node)
+    assert deployment.observed_state=="deploying" and deployment.error_details=={"waiting_for_devices":["node-a"]}
+    assert device.observed_readiness=="starting" and device.runtime_resources["appliance_running"] is False
 
 @pytest.mark.django_db
 def test_capture_api_is_bounded_idempotent_and_operator_only(monkeypatch):

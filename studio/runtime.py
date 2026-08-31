@@ -151,9 +151,19 @@ class ClabernetesAdapter:
         for item in node_items:
             name=item.get("metadata",{}).get("labels",{}).get("c9s.run/topologyNode") or item.get("metadata",{}).get("name")
             pod=pod_by_node.get(name)
-            observed.append({"name":name,"node_uid":item.get("metadata",{}).get("uid"),"readiness":item.get("status",{}).get("readiness","unknown"),
+            appliance_running=False
+            if pod and pod.status.phase=="Running":
+                try:
+                    appliance_running=stream(self.core.connect_get_namespaced_pod_exec,pod.metadata.name,deployment.namespace,
+                        command=["docker","inspect","-f","{{.State.Running}}",name],stderr=True,stdin=False,stdout=True,tty=False,
+                        _request_timeout=5).strip().lower()=="true"
+                except Exception:
+                    appliance_running=False
+            controller_readiness=item.get("status",{}).get("readiness","unknown")
+            readiness="ready" if controller_readiness=="ready" and appliance_running else "starting"
+            observed.append({"name":name,"node_uid":item.get("metadata",{}).get("uid"),"readiness":readiness,
                 "pod":pod.metadata.name if pod else None,"pod_uid":str(pod.metadata.uid) if pod else None,"worker":pod.spec.node_name if pod else None,
-                "pod_phase":pod.status.phase if pod else "Pending"})
+                "pod_phase":pod.status.phase if pod else "Pending","appliance_running":appliance_running})
         return observed
     def ping(self,deployment,node,target,count=3,timeout=2):
         device=deployment.devices.select_related("lab_node").get(lab_node=node)

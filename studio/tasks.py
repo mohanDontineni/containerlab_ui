@@ -101,16 +101,21 @@ def reconcile_deployment(self,deployment_id):
         deployment.last_reconciliation=timezone.now()
         deployment.error_details={} if observed!=LabDeployment.State.FAILED else {"runtime_status":status}
         deployment.resource_identities={**deployment.resource_identities,"status":status}
-        for observed_device in ClabernetesAdapter().observe_devices(deployment):
+        observed_devices=ClabernetesAdapter().observe_devices(deployment)
+        for observed_device in observed_devices:
             node=deployment.revision.nodes.filter(name=observed_device["name"]).first()
             if node:
                 current=DeviceInstance.objects.filter(deployment=deployment,lab_node=node).first()
-                resources={"node_uid":observed_device["node_uid"],"pod":observed_device["pod"],"pod_uid":observed_device["pod_uid"],"pod_phase":observed_device["pod_phase"]}
+                resources={"node_uid":observed_device["node_uid"],"pod":observed_device["pod"],"pod_uid":observed_device["pod_uid"],"pod_phase":observed_device["pod_phase"],"appliance_running":observed_device["appliance_running"]}
                 same_launcher=current and current.runtime_resources.get("pod_uid")==observed_device["pod_uid"]
                 if same_launcher: resources={**current.runtime_resources,**resources}
                 DeviceInstance.objects.update_or_create(deployment=deployment,lab_node=node,defaults={
                     "runtime_resources":resources,"observed_readiness":observed_device["readiness"],
                     "worker_placement":observed_device["worker"] or ""})
+        waiting=[item["name"] for item in observed_devices if item["readiness"]!="ready"]
+        if observed==LabDeployment.State.RUNNING and waiting:
+            deployment.observed_state=observed=LabDeployment.State.DEPLOYING
+            deployment.error_details={"waiting_for_devices":waiting}
         deployment.save(update_fields=["observed_state","last_reconciliation","error_details","resource_identities","updated_at"])
         return observed
     except Exception as exc:
