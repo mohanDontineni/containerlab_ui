@@ -10,6 +10,13 @@ spec:
       serviceAccountName: containerlab-studio-web
       automountServiceAccountToken: false
       securityContext: {runAsNonRoot: true, fsGroup: 10001, fsGroupChangePolicy: OnRootMismatch, seccompProfile: {type: RuntimeDefault}}
+      initContainers:
+      - name: artifact-permissions
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        command: [sh,-c,"mkdir -p /artifacts/captures && chown -R 10001:10001 /artifacts && chmod 2770 /artifacts /artifacts/captures"]
+        securityContext: {runAsNonRoot: false,runAsUser: 0,allowPrivilegeEscalation: false,capabilities: {drop: [ALL],add: [CHOWN,FOWNER,DAC_OVERRIDE]}}
+        volumeMounts: [{name: artifacts,mountPath: /artifacts}]
       containers:
       - name: web
         image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -66,6 +73,13 @@ spec:
     spec:
       serviceAccountName: containerlab-studio-reconciler
       securityContext: {runAsNonRoot: true, fsGroup: 10001, fsGroupChangePolicy: OnRootMismatch, seccompProfile: {type: RuntimeDefault}}
+      initContainers:
+      - name: artifact-permissions
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        command: [sh,-c,"mkdir -p /artifacts/captures && chown -R 10001:10001 /artifacts && chmod 2770 /artifacts /artifacts/captures"]
+        securityContext: {runAsNonRoot: false,runAsUser: 0,allowPrivilegeEscalation: false,capabilities: {drop: [ALL],add: [CHOWN,FOWNER,DAC_OVERRIDE]}}
+        volumeMounts: [{name: artifacts,mountPath: /artifacts}]
       containers:
       - name: worker
         image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
