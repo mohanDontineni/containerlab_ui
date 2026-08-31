@@ -6,9 +6,25 @@ from studio.runtime import ClabernetesAdapter,API_GROUP,API_VERSION,RUNTIME_VERS
 def test_adapter_is_pinned(): assert (API_GROUP,API_VERSION,RUNTIME_VERSION)==("c9s.run","v1alpha1","0.8.0")
 def test_unsupported_capability_is_explicit():
     adapter=object.__new__(ClabernetesAdapter)
-    try: adapter.collect_configuration(None)
+    deployment=SimpleNamespace(id="deployment")
+    device=SimpleNamespace(deployment_id="deployment",observed_readiness="ready",runtime_resources={"pod":"pod"},
+        lab_node=SimpleNamespace(template_version=SimpleNamespace(launch_profile={})))
+    try: adapter.collect_configuration(deployment,device)
     except CapabilityError as e: assert "verified collector" in str(e)
     else: raise AssertionError("must fail explicitly")
+
+def test_verified_collector_executes_inside_selected_appliance(monkeypatch):
+    calls=[]
+    monkeypatch.setattr("studio.runtime.stream",lambda method,pod,namespace,**kwargs:calls.append((pod,namespace,kwargs)) or "hostname r1\nrouter bgp 65001\n")
+    core=SimpleNamespace(connect_get_namespaced_pod_exec=object())
+    adapter=ClabernetesAdapter(custom_api=SimpleNamespace(),core_api=core)
+    profile={"configuration_collect_command":["vtysh","-c","show running-config"]}
+    node=SimpleNamespace(name="r1",template_version=SimpleNamespace(launch_profile=profile))
+    device=SimpleNamespace(deployment_id="deployment",observed_readiness="ready",runtime_resources={"pod":"r1-pod"},lab_node=node)
+    result=adapter.collect_configuration(SimpleNamespace(id="deployment",namespace="lab-one"),device)
+    assert result=={"device":"r1","content":"hostname r1\nrouter bgp 65001\n","byte_size":29}
+    assert calls[0][2]["command"]==["docker","exec","r1","vtysh","-c","show running-config"]
+    assert calls[0][2]["_request_timeout"]==15
 
 def test_plan_uses_clabernetes_080_string_definition():
     node=SimpleNamespace(name="r1",template_version=SimpleNamespace(containerlab_kind="linux"),published_image=SimpleNamespace(registry_digest="registry/alpine@sha256:abc"))

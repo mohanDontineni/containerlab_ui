@@ -20,6 +20,7 @@ from .runtime import ClabernetesAdapter
 from .tasks import execute_operation, reconcile_deployment
 from .uploads import UploadError, append_chunk, finalize
 from .bundles import BundleError, LabBundleParser, export_lab_bundle, import_lab_bundle
+from .configurations import decrypt_configuration
 from .quotas import ProjectQuotaExceeded,normalized_quotas,project_usage,quota_exceeded,validate_quotas
 
 class OctetStreamParser(BaseParser):
@@ -247,6 +248,33 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
     def _require_operator(self,deployment):
         if project_role(self.request.user,deployment.revision.lab.project) not in ("administrator","editor"):
             from rest_framework.exceptions import PermissionDenied; raise PermissionDenied()
+    @action(detail=True,methods=["get"],url_path="configurations")
+    def configurations(self,request,pk=None):
+        deployment=self.get_object();self._require_operator(deployment)
+        events=models.AuditEvent.objects.filter(action="configuration.collected",project=deployment.revision.lab.project,
+            metadata__deployment=str(deployment.id)).order_by("-occurred_at")[:100]
+        event_by_target={event.target_id:event for event in events}
+        rows=models.ConfigurationVersion.objects.filter(id__in=event_by_target).order_by("-created_at")
+        return Response([{"id":str(row.id),"name":row.name,"version":row.version,"checksum":row.checksum,
+            "byte_size":event_by_target[row.id].metadata.get("byte_size",0),"created_at":row.created_at,
+            "download":f"/api/v1/deployments/{deployment.id}/configurations/{row.id}/download/"} for row in rows])
+    @action(detail=True,methods=["get"],url_path=r"configurations/(?P<configuration_id>[^/.]+)/download")
+    def download_configuration(self,request,pk=None,configuration_id=None):
+        deployment=self.get_object();self._require_operator(deployment)
+        try: configuration_uuid=uuid.UUID(str(configuration_id))
+        except (ValueError,TypeError,AttributeError): return Response({"error":{"code":"invalid_configuration"}},status=422)
+        configuration=models.ConfigurationVersion.objects.filter(id=configuration_uuid,project=deployment.revision.lab.project).first()
+        evidence=models.AuditEvent.objects.filter(action="configuration.collected",target_id=configuration_uuid,
+            metadata__deployment=str(deployment.id)).exists()
+        if not configuration or not evidence: return Response({"error":{"code":"configuration_not_found"}},status=404)
+        payload=decrypt_configuration(configuration.encrypted_content).encode("utf-8")
+        models.AuditEvent.objects.create(actor=request.user,project=configuration.project,action="configuration.downloaded",
+            target_type="ConfigurationVersion",target_id=configuration.id,correlation_id=getattr(request,"correlation_id",""),
+            metadata={"deployment":str(deployment.id),"version":configuration.version,"checksum":configuration.checksum,"byte_size":len(payload)})
+        response=HttpResponse(payload,content_type="text/plain; charset=utf-8")
+        response["Content-Disposition"]=f'attachment; filename="{slugify(configuration.name)[:80] or "configuration"}-v{configuration.version}.txt"'
+        response["Cache-Control"]="no-store";response["X-Content-Type-Options"]="nosniff"
+        return response
     @action(detail=True,methods=["get"])
     def runtime(self,request,pk=None):
         deployment=self.get_object()
@@ -281,8 +309,8 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
     def device_operations(self,request,pk=None):
         deployment=self.get_object(); self._require_operator(deployment)
         operation=str(request.data.get("operation",""))
-        if operation!="restart_device":
-            return Response({"error":{"code":"unsupported_operation","details":"Clabernetes v0.8 supports reliable per-device restart, but not durable start/stop state."}},status=422)
+        if operation not in ("restart_device","collect_configuration"):
+            return Response({"error":{"code":"unsupported_operation","details":"Supported device operations are restart and configuration collection."}},status=422)
         try: device_id=uuid.UUID(str(request.data.get("device_id")))
         except (ValueError,TypeError,AttributeError): return Response({"error":{"code":"invalid_device"}},status=422)
         key=request.headers.get("Idempotency-Key")
@@ -295,7 +323,9 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
         with transaction.atomic():
             device=deployment.devices.select_for_update().select_related("lab_node").filter(id=device_id).first()
             if not device: return Response({"error":{"code":"invalid_device"}},status=422)
-            if not device.runtime_resources.get("pod"): return Response({"error":{"code":"device_launcher_unavailable"}},status=409)
+            if device.observed_readiness!="ready" or not device.runtime_resources.get("pod"): return Response({"error":{"code":"device_not_ready"}},status=409)
+            if operation=="collect_configuration" and not device.lab_node.template_version.launch_profile.get("configuration_collect_command"):
+                return Response({"error":{"code":"configuration_collection_unsupported","details":"This device template has no verified runtime collector."}},status=422)
             if models.OperationJob.objects.filter(target_id=device.id,state__in=("accepted","scheduled","started")).exists():
                 return Response({"error":{"code":"device_operation_in_progress"}},status=409)
             job=models.OperationJob.objects.create(deployment=deployment,owner=request.user,operation_type=operation,

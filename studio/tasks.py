@@ -4,8 +4,10 @@ import os
 from pathlib import Path
 from django.conf import settings
 from django.db import transaction
+from django.db.models import Max
 from django.utils import timezone
-from .models import CaptureSession, DeviceInstance, ImageArtifact, ImageBuild, LabArtifact, LabDeployment, LabLink, LabNode, OperationJob, PublishedImage
+from .configurations import encrypt_configuration
+from .models import AuditEvent, CaptureSession, ConfigurationVersion, DeviceInstance, ImageArtifact, ImageBuild, LabArtifact, LabDeployment, LabLink, LabNode, OperationJob, Project, PublishedImage
 from .runtime import ClabernetesAdapter
 
 @shared_task(bind=True,autoretry_for=(ConnectionError,),retry_backoff=True,max_retries=5)
@@ -17,7 +19,7 @@ def execute_operation(self,job_id):
         if job.state=="succeeded": return str(job.id)
         job.state="started"; job.attempts+=1; job.heartbeat=timezone.now(); job.progress=10; job.save()
     adapter=ClabernetesAdapter()
-    device_operations=("restart_device",)
+    device_operations=("restart_device","collect_configuration")
     try:
         if job.operation_type=="publish_image":
             artifact=ImageArtifact.objects.get(pk=job.target_id)
@@ -56,9 +58,24 @@ def execute_operation(self,job_id):
         elif job.operation_type in device_operations:
             device=DeviceInstance.objects.select_related("lab_node").get(pk=job.target_id,deployment=job.deployment)
             result=getattr(adapter,job.operation_type)(job.deployment,device)
-            device.observed_readiness=result["readiness"]
-            device.runtime_resources={**device.runtime_resources,"manual_lifecycle":job.operation_type,"manual_lifecycle_at":timezone.now().isoformat()}
-            device.save(update_fields=["observed_readiness","runtime_resources","updated_at"])
+            if job.operation_type=="restart_device":
+                device.observed_readiness=result["readiness"]
+                device.runtime_resources={**device.runtime_resources,"manual_lifecycle":job.operation_type,"manual_lifecycle_at":timezone.now().isoformat()}
+                device.save(update_fields=["observed_readiness","runtime_resources","updated_at"])
+            else:
+                content=result.pop("content");checksum=hashlib.sha256(content.encode("utf-8")).hexdigest()
+                project_id=job.deployment.revision.lab.project_id
+                name=f"{job.deployment.revision.lab.name}/{device.lab_node.name}/collected"[:120]
+                with transaction.atomic():
+                    Project.objects.select_for_update().get(pk=project_id)
+                    version=(ConfigurationVersion.objects.filter(project_id=project_id,name=name).aggregate(n=Max("version"))["n"] or 0)+1
+                    collected=ConfigurationVersion.objects.create(project_id=project_id,name=name,version=version,
+                        encrypted_content=encrypt_configuration(content),checksum=checksum,created_by=job.owner)
+                result={**result,"configuration_version_id":str(collected.id),"version":version,"checksum":checksum,
+                    "download":f"/api/v1/deployments/{job.deployment_id}/configurations/{collected.id}/download/"}
+                AuditEvent.objects.create(actor=job.owner,project_id=project_id,action="configuration.collected",target_type="ConfigurationVersion",
+                    target_id=collected.id,correlation_id="",metadata={"deployment":str(job.deployment_id),"device":device.lab_node.name,
+                        "version":version,"checksum":checksum,"byte_size":result["byte_size"]})
         else:
             result=getattr(adapter,job.operation_type)(job.deployment)
         deployment=job.deployment

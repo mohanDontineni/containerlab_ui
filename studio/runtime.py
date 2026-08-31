@@ -254,5 +254,17 @@ class ClabernetesAdapter:
                 stderr=True,stdin=False,stdout=True,tty=False,_request_timeout=10)
             applied.append({"node":node.name,"interface":interface.name,"launcher_interface":host_interface,"output":output[-2000:]})
         return {"link_id":str(link.id),"condition":condition,"endpoints":applied}
-    def collect_configuration(self,*_): raise CapabilityError("Template does not provide a verified collector")
+    def collect_configuration(self,deployment,device):
+        if device.deployment_id!=deployment.id: raise CapabilityError("Device does not belong to this deployment")
+        pod=device.runtime_resources.get("pod")
+        if device.observed_readiness!="ready" or not pod: raise CapabilityError("Device is not ready for configuration collection")
+        command=device.lab_node.template_version.launch_profile.get("configuration_collect_command")
+        if not isinstance(command,list) or not command or len(command)>16 or any(not isinstance(part,str) or not part or len(part)>4096 for part in command):
+            raise CapabilityError("Template does not provide a verified collector")
+        output=stream(self.core.connect_get_namespaced_pod_exec,pod,deployment.namespace,
+            command=["docker","exec",device.lab_node.name,*command],stderr=False,stdin=False,stdout=True,tty=False,_request_timeout=15)
+        if not output.strip(): raise CapabilityError("Device returned an empty configuration")
+        encoded=output.encode("utf-8")
+        if len(encoded)>1024*1024: raise CapabilityError("Collected configuration exceeds the 1 MiB limit")
+        return {"device":device.lab_node.name,"content":output,"byte_size":len(encoded)}
     def start_capture(self,*_): raise CapabilityError("Use the bounded capture_packets operation")

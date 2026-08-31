@@ -3,8 +3,9 @@ from pathlib import Path
 from django.conf import settings
 from django.utils import timezone
 from rest_framework.test import APIClient
+from studio.configurations import decrypt_configuration
 from studio.models import (AuditEvent, CaptureSession, ConsoleSession, DeviceInstance, DeviceTemplateVersion, ImageArtifact, Lab, LabDeployment,
-    LabArtifact, LabInterface, LabLink, LabNode, LabRevision, OperationJob, Project, ProjectMembership, PublishedImage, UploadSession, User)
+    ConfigurationVersion, LabArtifact, LabInterface, LabLink, LabNode, LabRevision, OperationJob, Project, ProjectMembership, PublishedImage, UploadSession, User)
 from studio.tasks import execute_operation, reconcile_deployment
 
 def test_web_process_uses_configured_celery_broker():
@@ -302,6 +303,46 @@ def test_device_worker_updates_node_without_failing_running_lab(monkeypatch):
     assert device.observed_readiness=="restarting"
     assert deployment.observed_state=="running"
     assert scheduled==[3,10,30]
+
+@pytest.mark.django_db
+def test_live_configuration_collection_is_operator_only_versioned_and_encrypted(monkeypatch):
+    monkeypatch.setattr("studio.api.execute_operation.delay",lambda *_:None)
+    owner=User.objects.create_user("collector-owner",password="long-enough-password")
+    viewer=User.objects.create_user("collector-viewer",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="collector-project");ProjectMembership.objects.create(project=project,user=viewer,role="viewer")
+    lab=Lab.objects.create(project=project,name="collector-lab");revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="6"*64,immutable=True)
+    template=DeviceTemplateVersion.objects.get(template__name="FRR Router")
+    node=LabNode.objects.create(revision=revision,name="r1",template_version=template)
+    deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-collector",runtime_version="0.8.0",observed_state="running")
+    device=DeviceInstance.objects.create(deployment=deployment,lab_node=node,observed_readiness="ready",runtime_resources={"pod":"r1-pod"})
+    payload={"device_id":str(device.id),"operation":"collect_configuration"};client=APIClient();client.force_authenticate(viewer)
+    assert client.post(f"/api/v1/deployments/{deployment.id}/device-operations/",payload,format="json",HTTP_IDEMPOTENCY_KEY="viewer-collect").status_code==403
+    client.force_authenticate(owner)
+    response=client.post(f"/api/v1/deployments/{deployment.id}/device-operations/",payload,format="json",HTTP_IDEMPOTENCY_KEY="owner-collect")
+    assert response.status_code==202
+    job=OperationJob.objects.get(id=response.data["id"])
+    class Adapter:
+        def collect_configuration(self,received_deployment,received_device):
+            assert received_deployment.id==deployment.id and received_device.id==device.id
+            content="hostname r1\nrouter bgp 65001\n"
+            return {"device":"r1","content":content,"byte_size":len(content.encode())}
+    monkeypatch.setattr("studio.tasks.ClabernetesAdapter",Adapter)
+    execute_operation.run(str(job.id));job.refresh_from_db()
+    collected=ConfigurationVersion.objects.get(id=job.result_payload["configuration_version_id"])
+    assert decrypt_configuration(collected.encrypted_content)=="hostname r1\nrouter bgp 65001\n"
+    assert b"router bgp" not in bytes(collected.encrypted_content) and "content" not in job.result_payload
+    audit=AuditEvent.objects.get(action="configuration.collected",target_id=collected.id)
+    assert audit.metadata["checksum"]==collected.checksum and "content" not in audit.metadata
+    client.force_authenticate(viewer)
+    assert client.get(job.result_payload["download"]).status_code==403
+    client.force_authenticate(owner);download=client.get(job.result_payload["download"])
+    assert download.status_code==200 and download.content==b"hostname r1\nrouter bgp 65001\n"
+    assert download["Cache-Control"]=="no-store" and download["X-Content-Type-Options"]=="nosniff"
+    assert AuditEvent.objects.filter(action="configuration.downloaded",target_id=collected.id).exists()
+    history=client.get(f"/api/v1/deployments/{deployment.id}/configurations/")
+    assert history.status_code==200 and history.data==[{"id":str(collected.id),"name":collected.name,"version":1,
+        "checksum":collected.checksum,"byte_size":29,"created_at":collected.created_at,
+        "download":job.result_payload["download"]}]
 
 @pytest.mark.django_db
 def test_reconciliation_drops_manual_lifecycle_after_launcher_replacement(monkeypatch):
