@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: containerlab-studio-config}
+data:
+  DJANGO_ALLOWED_HOSTS: "{{ .Values.host }},containerlab-studio-web,localhost"
+  CSRF_TRUSTED_ORIGINS: "https://{{ .Values.host }}:{{ .Values.gateway.nodePort }}"
+  POSTGRES_HOST: containerlab-studio-postgres
+  POSTGRES_DB: containerlab
+  POSTGRES_USER: containerlab
+  REDIS_URL: redis://containerlab-studio-redis:6379/0
+  CLUSTER_IDENTITY: kubernetes-admin@kubernetes@https://192.168.1.148:6443
+  LAB_NAMESPACE_PREFIX: containerlab-lab-
+  ARTIFACT_ROOT: /artifacts
+

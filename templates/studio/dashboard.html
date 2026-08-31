@@ -1,0 +1,74 @@
+{% extends "studio/base.html" %}
+{% block title %}Overview · ContainerLab Studio{% endblock %}
+{% block content %}
+<section class="hero-row">
+  <div>
+    <p class="eyebrow">NETWORK LAB OPERATIONS</p>
+    <h1>Good {% now "H" as hour %}{% if hour < "12" %}morning{% elif hour < "18" %}afternoon{% else %}evening{% endif %}, {{ request.user.first_name|default:request.user.username }}.</h1>
+    <p class="hero-copy">Design, deploy, and operate containerized network topologies from one control plane.</p>
+  </div>
+  <div class="hero-actions">
+    <a class="secondary-button" href="/labs/"><span>◇</span> Browse labs</a>
+    <a class="primary-button" href="/labs/new/"><span>＋</span> Create a lab</a>
+  </div>
+</section>
+
+<section class="metric-grid" aria-label="Deployment summary">
+  <article class="metric-card accent-blue"><div class="metric-icon">▶</div><div><span>Active labs</span><strong>{{ summary.active }}</strong><small>{% if summary.active %}<i class="up"></i> Currently running{% else %}No active deployments{% endif %}</small></div></article>
+  <article class="metric-card accent-amber"><div class="metric-icon">↻</div><div><span>Deploying</span><strong>{{ summary.deploying }}</strong><small>{% if summary.deploying %}Operations in progress{% else %}Queue is clear{% endif %}</small></div></article>
+  <article class="metric-card accent-violet"><div class="metric-icon">◇</div><div><span>Saved labs</span><strong>{{ summary.labs }}</strong><small>Across {{ summary.projects }} project{{ summary.projects|pluralize }}</small></div></article>
+  <article class="metric-card accent-rose"><div class="metric-icon">!</div><div><span>Needs attention</span><strong>{{ summary.attention }}</strong><small>{% if summary.attention %}Review failed operations{% else %}No current failures{% endif %}</small></div></article>
+</section>
+
+<div class="dashboard-grid">
+  <section class="panel labs-panel">
+    <div class="panel-header"><div><p class="eyebrow">RUNTIME</p><h2>Lab deployments</h2></div><a href="/deployments/">View all <span>→</span></a></div>
+    {% if deployments %}
+    <div class="lab-list">
+      {% for deployment in deployments %}
+      <article class="lab-row">
+        <div class="lab-visual"><span></span><i></i><span></span></div>
+        <div class="lab-name"><strong>{{ deployment.revision.lab.name }}</strong><small>Revision {{ deployment.revision.revision_number }} · {{ deployment.namespace }}</small></div>
+        <div class="state-badge state-{{ deployment.observed_state }}"><i></i>{{ deployment.observed_state|title }}</div>
+        <div class="lab-meta"><span>Runtime</span><strong>{{ deployment.runtime_version|default:"Unavailable" }}</strong></div>
+        <a class="row-action" href="/deployments/" aria-label="Open deployment">›</a>
+      </article>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty-state"><div class="empty-topology"><span></span><i></i><span></span></div><h3>No lab deployments yet</h3><p>Create a lab design, publish a revision, and deploy it to see live runtime state here.</p><a class="secondary-button" href="/labs/new/">Create your first lab</a></div>
+    {% endif %}
+  </section>
+
+  <aside class="panel health-panel">
+    <div class="panel-header"><div><p class="eyebrow">INFRASTRUCTURE</p><h2>Platform health</h2></div><span class="all-systems"><i></i> Online</span></div>
+    <div class="health-score"><div class="score-ring"><span>✓</span></div><div><strong>Core services ready</strong><p>Application services are connected.</p></div></div>
+    <div class="service-list">
+      <div><span class="service-icon db">▤</span><p><strong>PostgreSQL</strong><small>Application database</small></p><b class="healthy">Ready</b></div>
+      <div><span class="service-icon queue">↯</span><p><strong>Redis & Celery</strong><small>Jobs and live events</small></p><b class="healthy">Ready</b></div>
+      <div><span class="service-icon cluster">⬡</span><p><strong>Clabernetes</strong><small>Runtime v0.8.0</small></p><b class="healthy">Ready</b></div>
+      <div><span class="service-icon storage">▰</span><p><strong>Resource metrics</strong><small>Metrics API</small></p><b class="unavailable">Unavailable</b></div>
+    </div>
+  </aside>
+
+  <section class="panel operations-panel">
+    <div class="panel-header"><div><p class="eyebrow">ACTIVITY</p><h2>Recent operations</h2></div><a href="/operations/">Open job center <span>→</span></a></div>
+    {% if operations %}
+    <div class="operation-table"><div class="table-head"><span>Operation</span><span>State</span><span>Progress</span><span>Started</span></div>
+      {% for operation in operations %}<div class="table-row"><span><i class="operation-symbol">↻</i><b>{{ operation.operation_type|cut:"_"|title }}</b></span><span><em class="job-state job-{{ operation.state }}">{{ operation.state|title }}</em></span><span><span class="progress"><i style="width:{{ operation.progress }}%"></i></span><small>{{ operation.progress }}%</small></span><span>{{ operation.created_at|timesince }} ago</span></div>{% endfor %}
+    </div>
+    {% else %}
+    <div class="empty-inline"><span>↻</span><div><strong>No recent operations</strong><p>Deploy, stop, or inspect a lab and its job history will appear here.</p></div></div>
+    {% endif %}
+  </section>
+
+  <aside class="panel quick-panel">
+    <div class="panel-header"><div><p class="eyebrow">SHORTCUTS</p><h2>Quick actions</h2></div></div>
+    <div class="quick-actions">
+      <a href="/labs/new/"><span class="quick-icon blue">＋</span><p><strong>Create lab</strong><small>Start a topology design</small></p><b>›</b></a>
+      <a href="/images/"><span class="quick-icon violet">⇧</span><p><strong>Image library</strong><small>Inspect device software</small></p><b>›</b></a>
+      <a href="/device-templates/"><span class="quick-icon amber">⬡</span><p><strong>Device templates</strong><small>Browse launch profiles</small></p><b>›</b></a>
+    </div>
+  </aside>
+</div>
+{% endblock %}

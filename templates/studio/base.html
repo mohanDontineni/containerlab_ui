@@ -1,0 +1,60 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#07111f">
+  <title>{% block title %}ContainerLab Studio{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{% static 'studio/app.css' %}">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <a class="brand" href="/" aria-label="ContainerLab Studio home">
+        <span class="brand-mark"><i></i><i></i><i></i></span>
+        <span><strong>ContainerLab</strong><small>STUDIO</small></span>
+      </a>
+      <nav class="primary-nav" aria-label="Primary navigation">
+        <p class="nav-label">Workspace</p>
+        <a class="nav-item active" href="/"><span>⌂</span> Overview</a>
+        <a class="nav-item" href="/projects/"><span>▦</span> Projects</a>
+        <a class="nav-item" href="/labs/"><span>◇</span> Lab library</a>
+        <a class="nav-item" href="/deployments/"><span>▶</span> Deployments</a>
+        <p class="nav-label">Assets</p>
+        <a class="nav-item" href="/images/"><span>◫</span> Image library</a>
+        <a class="nav-item" href="/device-templates/"><span>⬡</span> Device templates</a>
+        <p class="nav-label">Operations</p>
+        <a class="nav-item" href="/operations/"><span>↻</span> Jobs & events</a>
+        <a class="nav-item" href="/api/v1/docs/"><span>⌘</span> API explorer</a>
+      </nav>
+      <div class="sidebar-status">
+        <div class="status-head"><span class="pulse-dot"></span> Platform online</div>
+        <p>Kubernetes control plane connected</p>
+        <small>Clabernetes v0.8.0</small>
+      </div>
+      <div class="sidebar-user">
+        <span class="avatar">{{ request.user.username|slice:":2"|upper }}</span>
+        <span><strong>{{ request.user.username }}</strong><small>{% if request.user.is_superuser %}Administrator{% else %}Operator{% endif %}</small></span>
+        <form action="/accounts/logout/" method="post">{% csrf_token %}<button title="Sign out" aria-label="Sign out">↗</button></form>
+      </div>
+    </aside>
+    <div class="main-column">
+      <header class="topbar">
+        <button class="mobile-menu" id="menu-toggle" aria-label="Open navigation">☰</button>
+        <div class="breadcrumb"><span>ContainerLab Studio</span><b>/</b>{% block breadcrumb %}Overview{% endblock %}</div>
+        <div class="topbar-actions">
+          <span class="environment"><i></i> Home Lab</span>
+          <a class="icon-button" href="/settings/" aria-label="Settings" title="Settings">⚙</a>
+          <a class="primary-button compact" href="/labs/new/"><span>＋</span> New lab</a>
+        </div>
+      </header>
+      <main class="content">{% block content %}{% endblock %}</main>
+    </div>
+  </div>
+  <script src="{% static 'studio/app.js' %}"></script>
+</body>
+</html>

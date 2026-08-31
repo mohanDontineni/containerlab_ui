@@ -1,0 +1,24 @@
+# Runtime compatibility
+
+## Version decision
+
+Clabernetes **0.8.0** is the latest stable GitHub release inspected on 2026-08-30. The matching OCI chart is `oci://ghcr.io/clabernetes/clabernetes/clabernetes:0.8.0`; the older `ghcr.io/srl-labs/...` path resolves only to chart 0.6.0 and was rejected. The selected release uses `c9s.run/v1alpha1` Topology compilation into Node, Link, LauncherProfile, Config, and ImageRequest resources and launcher pods. Its launcher contains Containerlab 0.78.0.
+
+Primary sources: the [Clabernetes releases](https://github.com/clabernetes/clabernetes/releases), [tagged source](https://github.com/clabernetes/clabernetes/tree/v0.8.0), and [Containerlab Clabernetes guide](https://containerlab.dev/manual/clabernetes/).
+
+Kubernetes 1.36.3/amd64 was verified. Native Linux containers work. VM-backed devices are blocked because the worker has no `/dev/kvm` and no CPU virtualization flag was observed.
+
+## Capability matrix
+
+| Capability | Level | Notes |
+|---|---|---|
+| Topology compile/deploy/delete/observe | Supported | Verified with real Node/Link resources. |
+| Native Linux device and point-to-point link | Supported | Alpine smoke topology and ICMP verified. |
+| Browser SSH console | Unverified | Server authorization model exists; transport incomplete. |
+| Per-device restart and PCAP | Experimental | Runtime supports underlying access, Studio mapping disabled pending validation. |
+| Live link impairment/rewiring | Unsupported | No verified 0.8.0 per-link API exposed by Studio. |
+| VM-backed vendor devices | Unsupported here | KVM missing; licensed images not supplied. |
+| Private registry credentials | Unverified | Launcher-internal pull trust must be configured independently of pod pull secrets. |
+
+Examples: a digest-pinned Alpine Linux node is within the native supported subset. A Cisco IOS-XRv disk is not accepted merely because it is qcow2; it needs licensing, an approved vrnetlab recipe, KVM, and a verified template.
+

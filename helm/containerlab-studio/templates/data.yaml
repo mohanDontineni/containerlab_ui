@@ -1,0 +1,75 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: containerlab-studio-postgres}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: {requests: {storage: {{ .Values.storage.postgres }}}}
+  {{- if .Values.storageClass }}
+  storageClassName: {{ .Values.storageClass }}
+  {{- end }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: containerlab-studio-redis}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: {requests: {storage: {{ .Values.storage.redis }}}}
+  {{- if .Values.storageClass }}
+  storageClassName: {{ .Values.storageClass }}
+  {{- end }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: containerlab-studio-artifacts}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: {requests: {storage: {{ .Values.storage.artifacts }}}}
+  {{- if .Values.storageClass }}
+  storageClassName: {{ .Values.storageClass }}
+  {{- end }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: containerlab-studio-postgres}
+spec:
+  serviceName: containerlab-studio-postgres
+  replicas: 1
+  selector: {matchLabels: {app: containerlab-studio-postgres}}
+  template:
+    metadata: {labels: {app: containerlab-studio-postgres}}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {fsGroup: 999}
+      containers:
+      - name: postgres
+        image: {{ .Values.postgres.image }}
+        env: [{name: POSTGRES_DB, value: containerlab},{name: POSTGRES_USER, value: containerlab},{name: POSTGRES_PASSWORD, valueFrom: {secretKeyRef: {name: containerlab-studio-secrets,key: postgres-password}}}]
+        ports: [{containerPort: 5432}]
+        volumeMounts: [{name: data,mountPath: /var/lib/postgresql/data}]
+        readinessProbe: {exec: {command: [pg_isready,-U,containerlab]}, initialDelaySeconds: 5, periodSeconds: 5}
+      volumes: [{name: data,persistentVolumeClaim: {claimName: containerlab-studio-postgres}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: containerlab-studio-postgres}
+spec: {selector: {app: containerlab-studio-postgres}, ports: [{port: 5432}]}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: containerlab-studio-redis}
+spec:
+  serviceName: containerlab-studio-redis
+  replicas: 1
+  selector: {matchLabels: {app: containerlab-studio-redis}}
+  template:
+    metadata: {labels: {app: containerlab-studio-redis}}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {fsGroup: 999}
+      containers: [{name: redis,image: {{ .Values.redis.image }},args: ["redis-server","--appendonly","yes"],ports: [{containerPort: 6379}],volumeMounts: [{name: data,mountPath: /data}],readinessProbe: {exec: {command: ["redis-cli","ping"]},initialDelaySeconds: 3,periodSeconds: 5}}]
+      volumes: [{name: data,persistentVolumeClaim: {claimName: containerlab-studio-redis}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: containerlab-studio-redis}
+spec: {selector: {app: containerlab-studio-redis}, ports: [{port: 6379}]}

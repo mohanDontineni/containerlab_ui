@@ -1,0 +1,12 @@
+{% extends "studio/base.html" %}
+{% block title %}{{ title }} · ContainerLab Studio{% endblock %}
+{% block breadcrumb %}{{ title }}{% endblock %}
+{% block content %}
+<section class="page-heading form-heading"><div><p class="eyebrow">{{ eyebrow }}</p><h1>{{ title }}</h1><p>Provide the core details now. Advanced settings can be configured after creation.</p></div></section>
+<div class="form-layout"><form method="post" class="product-form">{% csrf_token %}
+  {% if form.non_field_errors %}<div class="form-error">{{ form.non_field_errors }}</div>{% endif %}
+  {% for field in form %}<div class="form-field {% if field.errors %}has-error{% endif %}"><label for="{{ field.id_for_label }}">{{ field.label }}{% if field.field.required %}<sup>*</sup>{% endif %}</label>{{ field }}{% if field.help_text %}<small>{{ field.help_text }}</small>{% endif %}{% for error in field.errors %}<em>{{ error }}</em>{% endfor %}</div>{% endfor %}
+  <div class="form-actions"><a class="secondary-button" href="{{ cancel_url }}">Cancel</a><button class="primary-button" type="submit">{{ submit_label }} <span>→</span></button></div>
+</form><aside class="form-aside"><div class="aside-symbol">◇</div><h3>Built for safe iteration</h3><p>Saved designs stay separate from running deployments. Creating this record will not change anything in Kubernetes.</p><ul><li><span>✓</span> No runtime side effects</li><li><span>✓</span> Project-scoped access</li><li><span>✓</span> Revision history ready</li></ul></aside></div>
+{% endblock %}
+

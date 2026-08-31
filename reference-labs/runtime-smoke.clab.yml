@@ -1,0 +1,12 @@
+name: studio-smoke
+topology:
+  nodes:
+    client1:
+      kind: linux
+      image: alpine:3.22
+    client2:
+      kind: linux
+      image: alpine:3.22
+  links:
+    - endpoints: ["client1:eth1", "client2:eth1"]
+

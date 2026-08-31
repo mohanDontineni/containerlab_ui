@@ -1,0 +1,13 @@
+{
+  "release": "0.8.0",
+  "apiVersion": "c9s.run/v1alpha1",
+  "resources": {
+    "Topology": {"plural": "topologies", "scope": "Namespaced"},
+    "Node": {"plural": "nodes", "scope": "Namespaced"},
+    "Link": {"plural": "links", "scope": "Namespaced"},
+    "LauncherProfile": {"plural": "launcherprofiles", "scope": "Namespaced"},
+    "Config": {"plural": "configs", "scope": "Namespaced"},
+    "ImageRequest": {"plural": "imagerequests", "scope": "Namespaced"}
+  }
+}
+

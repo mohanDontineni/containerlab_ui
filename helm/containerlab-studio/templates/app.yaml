@@ -1,0 +1,69 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: containerlab-studio-web}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: containerlab-studio-web}}
+  template:
+    metadata: {labels: {app: containerlab-studio-web}}
+    spec:
+      serviceAccountName: containerlab-studio-web
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      containers:
+      - name: web
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        envFrom: [{configMapRef: {name: containerlab-studio-config}},{secretRef: {name: containerlab-studio-secrets}}]
+        ports: [{containerPort: 8000}]
+        securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}, readOnlyRootFilesystem: true}
+        resources: {{ toYaml .Values.resources.web | nindent 10 }}
+        volumeMounts: [{name: artifacts,mountPath: /artifacts},{name: tmp,mountPath: /tmp}]
+        readinessProbe: {httpGet: {path: /admin/login/,port: 8000,httpHeaders: [{name: Host,value: localhost}]},initialDelaySeconds: 5,periodSeconds: 10}
+        livenessProbe: {httpGet: {path: /admin/login/,port: 8000,httpHeaders: [{name: Host,value: localhost}]},initialDelaySeconds: 20,periodSeconds: 20}
+      volumes: [{name: artifacts,persistentVolumeClaim: {claimName: containerlab-studio-artifacts}},{name: tmp,emptyDir: {}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: containerlab-studio-web}
+spec: {selector: {app: containerlab-studio-web},ports: [{port: 8000,targetPort: 8000}]}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: containerlab-studio-worker}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: containerlab-studio-worker}}
+  template:
+    metadata: {labels: {app: containerlab-studio-worker}}
+    spec:
+      serviceAccountName: containerlab-studio-reconciler
+      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      containers:
+      - name: worker
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        command: [celery,-A,config.celery,worker,-l,INFO,--concurrency=2]
+        envFrom: [{configMapRef: {name: containerlab-studio-config}},{secretRef: {name: containerlab-studio-secrets}}]
+        securityContext: {allowPrivilegeEscalation: false,capabilities: {drop: [ALL]}}
+        resources: {{ toYaml .Values.resources.worker | nindent 10 }}
+        volumeMounts: [{name: artifacts,mountPath: /artifacts}]
+      volumes: [{name: artifacts,persistentVolumeClaim: {claimName: containerlab-studio-artifacts}}]
+---
+apiVersion: batch/v1
+kind: Job
+metadata: {name: "containerlab-studio-migrate-{{ .Release.Revision }}"}
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true,seccompProfile: {type: RuntimeDefault}}
+      containers:
+      - name: migrate
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        command: [python,manage.py,migrate,--noinput]
+        envFrom: [{configMapRef: {name: containerlab-studio-config}},{secretRef: {name: containerlab-studio-secrets}}]
+        securityContext: {allowPrivilegeEscalation: false,capabilities: {drop: [ALL]}}

@@ -1,0 +1,12 @@
+name: switching-firewall-reference
+topology:
+  nodes:
+    client1: {kind: linux, image: alpine:3.22}
+    switch: {kind: bridge, image: alpine:3.22}
+    firewall: {kind: linux, image: alpine:3.22}
+    client2: {kind: linux, image: alpine:3.22}
+  links:
+    - endpoints: ["client1:eth1", "switch:eth1"]
+    - endpoints: ["switch:eth2", "firewall:eth1"]
+    - endpoints: ["firewall:eth2", "client2:eth1"]
+

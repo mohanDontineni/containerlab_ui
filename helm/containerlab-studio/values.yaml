@@ -1,0 +1,22 @@
+image:
+  repository: containerlab-studio
+  tag: latest
+  pullPolicy: IfNotPresent
+gateway:
+  image: nginx:1.29.1-alpine
+  nodePort: 30444
+  tlsSecret: containerlab-studio-tls
+host: 192.168.1.148
+storageClass: ""
+storage:
+  postgres: 10Gi
+  redis: 2Gi
+  artifacts: 50Gi
+postgres:
+  image: postgres:17.6-alpine
+redis:
+  image: redis:8.2.1-alpine
+resources:
+  web: {requests: {cpu: 100m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
+  worker: {requests: {cpu: 100m, memory: 256Mi}, limits: {cpu: "2", memory: 2Gi}}
+

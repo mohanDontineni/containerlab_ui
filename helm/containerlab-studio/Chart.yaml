@@ -1,0 +1,7 @@
+apiVersion: v2
+name: containerlab-studio
+description: Self-hosted Kubernetes network-lab studio
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+

@@ -1,0 +1,2 @@
+{{- if ne (int .Values.gateway.nodePort) 30444 }}{{ fail "gateway.nodePort must be exactly 30444" }}{{- end }}
+
