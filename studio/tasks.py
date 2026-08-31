@@ -84,9 +84,10 @@ def execute_operation(self,job_id):
         else:
             result=getattr(adapter,job.operation_type)(job.deployment)
         deployment=job.deployment
-        if job.operation_type=="deploy_lab":
+        if job.operation_type in ("deploy_lab","redeploy_lab"):
             deployment.observed_state=LabDeployment.State.DEPLOYING
-            deployment.resource_identities={"topology":{"name":"topology","namespace":deployment.namespace}}
+            deployment.resource_identities={"topology":{"name":"topology","namespace":deployment.namespace},
+                "last_redeploy_at":timezone.now().isoformat()} if job.operation_type=="redeploy_lab" else {"topology":{"name":"topology","namespace":deployment.namespace}}
         elif job.operation_type in ("stop_lab","delete_runtime"):
             deployment.observed_state=LabDeployment.State.STOPPED
         if job.operation_type not in ("publish_image","ping","capture_packets","set_link_condition",*device_operations):

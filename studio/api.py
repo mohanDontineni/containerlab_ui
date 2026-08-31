@@ -365,8 +365,22 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
             "devices":serializers.DeviceInstanceSerializer(deployment.devices.select_related("lab_node__template_version").prefetch_related("lab_node__interfaces"),many=True).data,
             "links":[{"id":str(link.id),"label":link.label,"endpoint_a":{"node":link.endpoint_a.node.name,"interface":link.endpoint_a.name},
                 "endpoint_b":{"node":link.endpoint_b.node.name,"interface":link.endpoint_b.name},"condition":conditions.get(str(link.id),{"active":False,
-                    "disabled":False,"latency_ms":0,"jitter_ms":0,"loss_percent":0,"rate_kbps":0})} for link in links],
+                    "disabled":False,"latency_ms":0,"jitter_ms":0,"loss_percent":0,"corruption_percent":0,"rate_kbps":0})} for link in links],
             "operations":serializers.OperationSerializer(deployment.operations.order_by("-created_at")[:20],many=True).data})
+    @action(detail=True,methods=["get"],url_path="redeploy-preview")
+    def redeploy_preview(self,request,pk=None):
+        deployment=self.get_object()
+        devices=deployment.devices.all();conditions=deployment.resource_identities.get("link_conditions",{})
+        active=deployment.operations.filter(state__in=("accepted","scheduled","started")).order_by("created_at").first()
+        return Response({"action":"redeploy_lab","deployment_id":str(deployment.id),"lab":deployment.revision.lab.name,
+            "revision":deployment.revision.revision_number,"namespace":deployment.namespace,"observed_state":deployment.observed_state,
+            "runtime_exists":deployment.observed_state not in (models.LabDeployment.State.STOPPED,models.LabDeployment.State.PENDING),
+            "devices":{"total":devices.count(),"ready":devices.filter(observed_readiness="ready").count()},
+            "links":deployment.revision.links.count(),"active_link_conditions":sum(1 for value in conditions.values() if value.get("active")),
+            "blocked_by":{"job_id":str(active.id),"operation":active.operation_type} if active else None,
+            "impact":["Recreate runtime resources from the pinned immutable revision",
+                "Preserve the project, lab, revision, startup configurations, and collected history",
+                "End active consoles and packet captures while device compute is replaced"]})
     @action(detail=True,methods=["post"])
     def refresh(self,request,pk=None):
         deployment=self.get_object()
@@ -377,14 +391,19 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
     def operations(self,request,pk=None):
         deployment=self.get_object(); op=request.data.get("operation")
         self._require_operator(deployment)
-        if op not in ("deploy_lab","stop_lab","delete_runtime"): return Response({"error":{"code":"unsupported_operation"}},status=422)
+        if op not in ("deploy_lab","redeploy_lab","stop_lab","delete_runtime"): return Response({"error":{"code":"unsupported_operation"}},status=422)
         key=request.headers.get("Idempotency-Key")
         if not key: return Response({"error":{"code":"idempotency_key_required"}},status=400)
-        try:
-            with transaction.atomic(): job=models.OperationJob.objects.create(deployment=deployment,owner=request.user,operation_type=op,target_id=deployment.id,idempotency_key=key)
-        except Exception:
-            job=models.OperationJob.objects.filter(owner=request.user,idempotency_key=key).first()
-            if not job: return Response({"error":{"code":"operation_conflict"}},status=409)
+        existing=models.OperationJob.objects.filter(owner=request.user,idempotency_key=key).first()
+        if existing:
+            if existing.deployment_id!=deployment.id or existing.operation_type!=op: return Response({"error":{"code":"idempotency_conflict"}},status=409)
+            if existing.state in ("accepted","scheduled"): execute_operation.delay(str(existing.id))
+            return Response(serializers.OperationSerializer(existing).data,status=202)
+        active=deployment.operations.filter(state__in=("accepted","scheduled","started")).first()
+        if active: return Response({"error":{"code":"operation_in_progress","details":f"{active.operation_type} is already in progress."}},status=409)
+        with transaction.atomic(): job=models.OperationJob.objects.create(deployment=deployment,owner=request.user,operation_type=op,target_id=deployment.id,idempotency_key=key,state="scheduled")
+        models.AuditEvent.objects.create(actor=request.user,project=deployment.revision.lab.project,action=f"deployment.{op.removesuffix('_lab')}_scheduled",
+            target_type="LabDeployment",target_id=deployment.id,correlation_id=getattr(request,"correlation_id",""),metadata={"revision":deployment.revision.revision_number,"namespace":deployment.namespace})
         execute_operation.delay(str(job.id)); return Response(serializers.OperationSerializer(job).data,status=202)
     @action(detail=True,methods=["post"],url_path="device-operations")
     def device_operations(self,request,pk=None):

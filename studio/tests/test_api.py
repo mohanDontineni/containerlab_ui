@@ -323,6 +323,41 @@ def test_runtime_device_contract_exposes_logical_node_identity():
     assert str(device["node_id"])==str(node.id)
 
 @pytest.mark.django_db
+def test_redeploy_preview_and_operation_are_authorized_audited_and_idempotent(monkeypatch):
+    monkeypatch.setattr("studio.api.execute_operation.delay",lambda *_:None)
+    owner=User.objects.create_user("redeploy-owner",password="long-enough-password")
+    viewer=User.objects.create_user("redeploy-viewer",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="redeploy-project");ProjectMembership.objects.create(project=project,user=viewer,role="viewer")
+    lab=Lab.objects.create(project=project,name="redeploy-lab");revision=LabRevision.objects.create(lab=lab,revision_number=3,topology_checksum="e"*64,immutable=True)
+    deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-redeploy",runtime_version="0.8.0",observed_state="running")
+    client=APIClient();client.force_authenticate(viewer)
+    preview=client.get(f"/api/v1/deployments/{deployment.id}/redeploy-preview/")
+    assert preview.status_code==200 and preview.data["revision"]==3 and preview.data["runtime_exists"] is True
+    forbidden=client.post(f"/api/v1/deployments/{deployment.id}/operations/",{"operation":"redeploy_lab"},format="json",HTTP_IDEMPOTENCY_KEY="viewer-redeploy")
+    assert forbidden.status_code==403
+    client.force_authenticate(owner)
+    first=client.post(f"/api/v1/deployments/{deployment.id}/operations/",{"operation":"redeploy_lab"},format="json",HTTP_IDEMPOTENCY_KEY="owner-redeploy")
+    second=client.post(f"/api/v1/deployments/{deployment.id}/operations/",{"operation":"redeploy_lab"},format="json",HTTP_IDEMPOTENCY_KEY="owner-redeploy")
+    assert first.status_code==second.status_code==202 and first.data["id"]==second.data["id"]
+    assert AuditEvent.objects.filter(action="deployment.redeploy_scheduled",target_id=deployment.id).count()==1
+    conflict=client.post(f"/api/v1/deployments/{deployment.id}/operations/",{"operation":"stop_lab"},format="json",HTTP_IDEMPOTENCY_KEY="owner-redeploy")
+    assert conflict.status_code==409 and conflict.data["error"]["code"]=="idempotency_conflict"
+
+@pytest.mark.django_db
+def test_redeploy_worker_replaces_runtime_and_marks_deploying(monkeypatch):
+    owner=User.objects.create_user("redeploy-worker",password="long-enough-password");project=Project.objects.create(owner=owner,name="redeploy-worker-project")
+    lab=Lab.objects.create(project=project,name="lab");revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="a"*64,immutable=True)
+    deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-redeploy-worker",runtime_version="0.8.0",observed_state="running")
+    job=OperationJob.objects.create(deployment=deployment,owner=owner,operation_type="redeploy_lab",target_id=deployment.id,idempotency_key="worker-redeploy",state="scheduled")
+    calls=[]
+    class Adapter:
+        def redeploy_lab(self,received): calls.append(received.id);return {"created":True}
+    monkeypatch.setattr("studio.tasks.ClabernetesAdapter",Adapter)
+    execute_operation.run(str(job.id));job.refresh_from_db();deployment.refresh_from_db()
+    assert calls==[deployment.id] and job.state=="succeeded" and deployment.observed_state=="deploying"
+    assert deployment.resource_identities["topology"]["name"]=="topology" and deployment.resource_identities["last_redeploy_at"]
+
+@pytest.mark.django_db
 def test_console_authorization_is_session_bound_and_viewer_read_only():
     owner=User.objects.create_user("console-owner",password="long-enough-password")
     viewer=User.objects.create_user("console-viewer",password="long-enough-password")

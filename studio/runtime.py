@@ -2,8 +2,8 @@ from dataclasses import dataclass
 import base64
 import binascii
 import shlex
-import struct
 import time
+import struct
 from pathlib import Path
 from django.conf import settings
 from django.db.models import Q
@@ -226,6 +226,18 @@ class ClabernetesAdapter:
         if isinstance(result,dict): result["configMapsDeleted"]=deleted
         return result
     def stop_lab(self,deployment): return self.delete_runtime(deployment)
+    def redeploy_lab(self,deployment):
+        self.delete_runtime(deployment)
+        deadline=time.monotonic()+45
+        while time.monotonic()<deadline:
+            try:
+                self.custom.get_namespaced_custom_object(API_GROUP,API_VERSION,deployment.namespace,"topologies","topology")
+            except ApiException as exc:
+                if exc.status==404: break
+                raise
+            time.sleep(1)
+        else: raise CapabilityError("The existing runtime did not stop within 45 seconds")
+        return self.deploy_lab(deployment)
     def resolve_console_target(self,device):
         if not device.runtime_resources.get("pod"): raise CapabilityError("Device pod is not ready")
         return {"namespace":device.deployment.namespace,"pod":device.runtime_resources["pod"],"method":device.lab_node.template_version.console_method}
