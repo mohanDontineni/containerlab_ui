@@ -74,6 +74,19 @@ def test_project_access_ui_is_available_only_to_administrators(client):
     assert viewer_page.status_code==200 and b"Add member" not in viewer_page.content and b"member-role" not in viewer_page.content
 
 @pytest.mark.django_db
+def test_project_node_quota_is_visible_and_enforced_in_topology_workspace(client):
+    owner=User.objects.create_user("node-quota-owner",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="Node quota",quotas={"max_nodes_per_lab":1})
+    lab=Lab.objects.create(project=project,name="Bounded lab")
+    template=DeviceTemplateVersion.objects.filter(template__active_version_id=F("id")).first()
+    client.force_login(owner)
+    page=client.get(f"/projects/{project.id}/").content
+    assert b"Project quotas" in page and b"Nodes / lab" in page
+    nodes=[{"id":str(uuid.uuid4()),"name":f"node-{index}","templateVersionId":str(template.id),"position":{"x":index*100,"y":0}} for index in range(2)]
+    response=client.put(f"/api/v1/labs/{lab.id}/topology/",json.dumps({"editVersion":0,"nodes":nodes,"links":[]}),content_type="application/json")
+    assert response.status_code==409 and response.json()["error"]["code"]=="project_quota_exceeded"
+
+@pytest.mark.django_db
 def test_register_digest_pinned_registry_image(client):
     owner = User.objects.create_user("image-owner", password="long-enough-password")
     project = Project.objects.create(owner=owner, name="Images")

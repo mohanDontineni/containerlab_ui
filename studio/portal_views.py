@@ -15,6 +15,7 @@ from .models import (ConfigurationVersion, DeviceTemplate, DeviceTemplateVersion
                      ProjectMembership, PublishedImage)
 from .permissions import project_role
 from .configurations import decrypt_configuration, encrypt_configuration
+from .quotas import normalized_quotas,project_usage,quota_exceeded
 
 def visible_projects(user):
     return Project.objects.filter(Q(owner=user) | Q(memberships__user=user)).distinct()
@@ -38,7 +39,8 @@ def project_create(request):
 def project_detail(request, project_id):
     project = get_object_or_404(visible_projects(request.user), id=project_id)
     return render(request, "studio/project_detail.html", {"project": project, "labs": project.labs.order_by("name"),
-        "members": project.memberships.select_related("user").order_by("user__username"),"can_manage_access":project_role(request.user,project)==ProjectMembership.Role.ADMIN})
+        "members": project.memberships.select_related("user").order_by("user__username"),"can_manage_access":project_role(request.user,project)==ProjectMembership.Role.ADMIN,
+        "quota_limits":normalized_quotas(project),"quota_usage":project_usage(project)})
 
 @login_required
 def labs(request):
@@ -50,8 +52,13 @@ def labs(request):
 def lab_create(request):
     form = LabForm(request.user, request.POST or None)
     if request.method == "POST" and form.is_valid():
-        lab = form.save(); messages.success(request, f'Lab “{lab.name}” created.')
-        return redirect("portal-labs")
+        project=form.cleaned_data["project"]
+        with transaction.atomic():
+            project=Project.objects.select_for_update().get(pk=project.pk);used=project.labs.count();limit=normalized_quotas(project)["max_labs"]
+            if used>=limit: form.add_error("project",f"This project has reached its {limit}-lab quota.")
+            else:
+                lab=form.save(commit=False);lab.project=project;lab.save();messages.success(request,f'Lab “{lab.name}” created.')
+                return redirect("portal-labs")
     return render(request, "studio/form.html", {"form": form, "title": "Create lab", "eyebrow": "NEW TOPOLOGY", "cancel_url": "/labs/", "submit_label": "Create lab"})
 
 @login_required
@@ -105,7 +112,9 @@ def topology_document(request, lab_id):
     except (ValueError, TypeError): return JsonResponse({"error": "Invalid JSON document"}, status=400)
     if not isinstance(payload, dict) or not isinstance(payload.get("nodes", []), list) or not isinstance(payload.get("links", []), list):
         return JsonResponse({"error": "Topology nodes and links must be lists"}, status=400)
-    if len(payload.get("nodes", [])) > 250 or len(payload.get("links", [])) > 1000: return JsonResponse({"error": "Topology exceeds workspace limits"}, status=422)
+    node_limit=normalized_quotas(lab.project)["max_nodes_per_lab"]
+    if len(payload.get("nodes", []))>node_limit: return JsonResponse(quota_exceeded("nodes_per_lab",node_limit,0,len(payload.get("nodes",[]))),status=409)
+    if len(payload.get("links", [])) > 1000: return JsonResponse({"error": "Topology exceeds workspace limits"}, status=422)
     names = [str(node.get("name", "")).strip()[:63] for node in payload.get("nodes", []) if isinstance(node, dict)]
     if len(names) != len(payload.get("nodes", [])) or any(not name for name in names) or len(names) != len(set(names)):
         return JsonResponse({"error": "Every node needs a unique name"}, status=422)

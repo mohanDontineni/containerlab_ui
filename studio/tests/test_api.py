@@ -65,6 +65,37 @@ def test_project_membership_prevents_owner_duplication_and_cross_project_mutatio
     assert client.get(f"/api/v1/projects/{other.id}/members/").status_code==200
 
 @pytest.mark.django_db
+def test_project_quotas_are_admin_managed_reported_and_enforced_for_labs_members_and_uploads():
+    owner=User.objects.create_user("quota-owner",password="long-enough-password")
+    editor=User.objects.create_user("quota-editor",password="long-enough-password")
+    candidate=User.objects.create_user("quota-candidate",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="quota-project")
+    ProjectMembership.objects.create(project=project,user=editor,role="editor")
+    endpoint=f"/api/v1/projects/{project.id}/quotas/";client=APIClient();client.force_authenticate(editor)
+    assert client.patch(endpoint,{"max_labs":1},format="json").status_code==403
+    client.force_authenticate(owner)
+    response=client.patch(endpoint,{"max_labs":1,"max_nodes_per_lab":1,"max_running_deployments":1,"max_members":2,"max_image_bytes":1024**3},format="json")
+    assert response.status_code==200 and response.data["limits"]["max_labs"]==1
+    assert response.data["usage"]["members"]==2
+    first=client.post("/api/v1/labs/",{"project":str(project.id),"name":"allowed","tags":[]},format="json")
+    second=client.post("/api/v1/labs/",{"project":str(project.id),"name":"blocked","tags":[]},format="json")
+    assert first.status_code==201 and second.status_code==400
+    member=client.post(f"/api/v1/projects/{project.id}/members/",{"username":candidate.username,"role":"viewer"},format="json")
+    assert member.status_code==409 and member.data["error"]["code"]=="project_quota_exceeded"
+    upload=client.post("/api/v1/uploads/",{"project":str(project.id),"original_filename":"too-large.tar","expected_size":2*1024**3},format="json")
+    assert upload.status_code==400
+    project.refresh_from_db();assert project.quotas["max_members"]==2
+    assert AuditEvent.objects.filter(project=project,action="project.quotas_changed").count()==1
+
+@pytest.mark.django_db
+def test_quota_cannot_be_lowered_below_current_usage():
+    owner=User.objects.create_user("quota-floor",password="long-enough-password");project=Project.objects.create(owner=owner,name="floor")
+    Lab.objects.create(project=project,name="one");Lab.objects.create(project=project,name="two")
+    client=APIClient();client.force_authenticate(owner)
+    response=client.patch(f"/api/v1/projects/{project.id}/quotas/",{"max_labs":1},format="json")
+    assert response.status_code==409 and response.data["error"]["code"]=="quota_below_current_usage"
+
+@pytest.mark.django_db
 def test_upload_creation_is_project_scoped_and_checksum_optional():
     owner=User.objects.create_user("upload-owner",password="long-enough-password");viewer=User.objects.create_user("upload-viewer",password="long-enough-password")
     project=Project.objects.create(owner=owner,name="uploads");ProjectMembership.objects.create(project=project,user=viewer,role="viewer")
@@ -126,6 +157,27 @@ def test_owner_can_publish_and_schedule_deployable_lab(django_capture_on_commit_
     assert response.status_code==202, response.data
     lab.refresh_from_db(); assert lab.current_draft is None
     assert response.data["deployment"]["namespace"].startswith("clab-")
+
+@pytest.mark.django_db
+def test_active_deployment_quota_blocks_new_runtime_without_consuming_draft():
+    owner=User.objects.create_user("deployment-quota",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="bounded-runtime",quotas={"max_running_deployments":1})
+    existing_lab=Lab.objects.create(project=project,name="already-running")
+    existing_revision=LabRevision.objects.create(lab=existing_lab,revision_number=1,topology_checksum="7"*64,immutable=True)
+    LabDeployment.objects.create(revision=existing_revision,cluster_identity="test",namespace="quota-existing-runtime",runtime_version="0.8.0",observed_state="running")
+    lab=Lab.objects.create(project=project,name="new-runtime")
+    revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="8"*64)
+    lab.current_draft=revision;lab.save(update_fields=["current_draft"])
+    template=DeviceTemplateVersion.objects.filter(containerlab_kind="linux").first()
+    artifact=ImageArtifact.objects.create(project=project,owner=owner,source_type="registry",original_filename="alpine",detected_format="oci-registry",
+        byte_size=0,checksum="9"*64,architecture="amd64",storage_reference="docker.io/alpine",validation_status="validated")
+    image=PublishedImage.objects.create(artifact=artifact,registry_digest="docker.io/alpine@sha256:"+"9"*64,repository="docker.io/alpine",architecture="amd64")
+    LabNode.objects.create(revision=revision,name="client",template_version=template,published_image=image)
+    client=APIClient();client.force_authenticate(owner)
+    response=client.post(f"/api/v1/labs/{lab.id}/deploy/",{},format="json",HTTP_IDEMPOTENCY_KEY="quota-blocked-deploy")
+    assert response.status_code==409 and response.data["error"]["code"]=="project_quota_exceeded"
+    lab.refresh_from_db();revision.refresh_from_db()
+    assert lab.current_draft_id==revision.id and revision.immutable is False
 
 @pytest.mark.django_db
 def test_viewer_can_read_runtime_but_cannot_run_diagnostics():

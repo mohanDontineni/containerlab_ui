@@ -20,6 +20,7 @@ from .runtime import ClabernetesAdapter
 from .tasks import execute_operation, reconcile_deployment
 from .uploads import UploadError, append_chunk, finalize
 from .bundles import BundleError, LabBundleParser, export_lab_bundle, import_lab_bundle
+from .quotas import normalized_quotas,project_usage,quota_exceeded,validate_quotas
 
 class OctetStreamParser(BaseParser):
     media_type="application/octet-stream"
@@ -37,6 +38,25 @@ class ProjectViewSet(viewsets.ModelViewSet):
     serializer_class=serializers.ProjectSerializer; permission_classes=[ProjectAccess]
     def get_queryset(self): return visible_projects(self.request.user)
     def perform_create(self,serializer): serializer.save(owner=self.request.user)
+    @action(detail=True,methods=["get","patch"])
+    def quotas(self,request,pk=None):
+        project=self.get_object()
+        if request.method=="GET": return Response({"limits":normalized_quotas(project),"usage":project_usage(project)})
+        if project_role(request.user,project)!=models.ProjectMembership.Role.ADMIN:
+            from rest_framework.exceptions import PermissionDenied; raise PermissionDenied()
+        with transaction.atomic():
+            project=models.Project.objects.select_for_update().get(pk=project.pk)
+            try: values=validate_quotas(request.data,normalized_quotas(project))
+            except ValueError as exc: return Response({"error":{"code":"invalid_project_quotas","details":str(exc)}},status=422)
+            usage=project_usage(project)
+            occupied={"max_labs":usage["labs"],"max_members":usage["members"],"max_running_deployments":usage["running_deployments"],
+                "max_image_bytes":usage["image_bytes"]+usage["reserved_upload_bytes"],"max_nodes_per_lab":usage["largest_draft_nodes"]}
+            conflicts={key:{"requested_limit":values[key],"current_usage":used} for key,used in occupied.items() if values[key]<used}
+            if conflicts: return Response({"error":{"code":"quota_below_current_usage","details":conflicts}},status=409)
+            previous=normalized_quotas(project);project.quotas=values;project.save(update_fields=["quotas","updated_at"])
+            models.AuditEvent.objects.create(actor=request.user,project=project,action="project.quotas_changed",target_type="Project",target_id=project.id,
+                correlation_id=getattr(request,"correlation_id",""),metadata={"previous":previous,"limits":values})
+        return Response({"limits":values,"usage":usage})
     @action(detail=True,methods=["get","post"])
     def members(self,request,pk=None):
         project=self.get_object()
@@ -51,7 +71,14 @@ class ProjectViewSet(viewsets.ModelViewSet):
         user=models.User.objects.filter(username__iexact=username,is_active=True).first()
         if not user: return Response({"error":{"code":"user_not_found","details":"No active account has that username."}},status=404)
         if user.id==project.owner_id: return Response({"error":{"code":"owner_membership_immutable"}},status=409)
-        membership,created=models.ProjectMembership.objects.update_or_create(project=project,user=user,defaults={"role":role})
+        with transaction.atomic():
+            project=models.Project.objects.select_for_update().get(pk=project.pk)
+            membership=models.ProjectMembership.objects.filter(project=project,user=user).first()
+            if not membership:
+                usage=project.memberships.count()+1;limit=normalized_quotas(project)["max_members"]
+                if usage>=limit: return Response(quota_exceeded("members",limit,usage),status=409)
+                membership=models.ProjectMembership.objects.create(project=project,user=user,role=role);created=True
+            else: membership.role=role;membership.save(update_fields=["role","updated_at"]);created=False
         models.AuditEvent.objects.create(actor=request.user,project=project,action="project.member_added" if created else "project.member_role_changed",
             target_type="ProjectMembership",target_id=membership.id,correlation_id=getattr(request,"correlation_id",""),metadata={"username":user.username,"role":role})
         return Response(serializers.MembershipSerializer(membership).data,status=201 if created else 200)
@@ -85,7 +112,12 @@ class LabViewSet(viewsets.ModelViewSet):
     def perform_create(self,serializer):
         project=serializer.validated_data["project"]
         if project_role(self.request.user,project) not in ("administrator","editor"): from rest_framework.exceptions import PermissionDenied; raise PermissionDenied()
-        serializer.save()
+        with transaction.atomic():
+            project=models.Project.objects.select_for_update().get(pk=project.pk)
+            used=project.labs.count();limit=normalized_quotas(project)["max_labs"]
+            if used>=limit:
+                from rest_framework.exceptions import ValidationError; raise ValidationError(quota_exceeded("labs",limit,used)["error"])
+            serializer.save(project=project)
     @action(detail=True,methods=["get"],url_path="export")
     def export_bundle(self,request,pk=None):
         lab=self.get_object()
@@ -124,6 +156,9 @@ class LabViewSet(viewsets.ModelViewSet):
             # Lock only the lab row. PostgreSQL rejects FOR UPDATE across the nullable
             # current_draft outer join, while SQLite silently permits it.
             lab=models.Lab.objects.select_for_update().get(pk=lab.pk)
+            project=models.Project.objects.select_for_update().get(pk=lab.project_id)
+            usage=project_usage(project);limit=normalized_quotas(project)["max_running_deployments"]
+            if usage["running_deployments"]>=limit: return Response(quota_exceeded("running_deployments",limit,usage["running_deployments"]),status=409)
             revision=lab.current_draft
             if not revision or not revision.nodes.exists(): return Response({"error":{"code":"empty_topology","details":"Save at least one device before deployment."}},status=422)
             errors=ClabernetesAdapter.validate_topology(revision)
@@ -146,8 +181,13 @@ class UploadViewSet(viewsets.ModelViewSet):
         project=serializer.validated_data["project"]
         if project_role(self.request.user,project) not in (models.ProjectMembership.Role.ADMIN,models.ProjectMembership.Role.EDITOR):
             from rest_framework.exceptions import PermissionDenied; raise PermissionDenied()
-        uid=uuid.uuid4(); destination=Path(settings.MEDIA_ROOT)/"quarantine"/str(uid)
-        session=serializer.save(id=uid,owner=self.request.user,artifact_destination=str(destination),expires_at=timezone.now()+timezone.timedelta(hours=24))
+        with transaction.atomic():
+            project=models.Project.objects.select_for_update().get(pk=project.pk)
+            usage=project_usage(project);limit=normalized_quotas(project)["max_image_bytes"]
+            if usage["image_bytes"]+usage["reserved_upload_bytes"]+size>limit:
+                from rest_framework.exceptions import ValidationError; raise ValidationError(quota_exceeded("image_bytes",limit,usage["image_bytes"]+usage["reserved_upload_bytes"],size)["error"])
+            uid=uuid.uuid4(); destination=Path(settings.MEDIA_ROOT)/"quarantine"/str(uid)
+            session=serializer.save(id=uid,project=project,owner=self.request.user,artifact_destination=str(destination),expires_at=timezone.now()+timezone.timedelta(hours=24))
         models.AuditEvent.objects.create(actor=self.request.user,project=project,action="image.upload_created",target_type="UploadSession",target_id=session.id,
             correlation_id=getattr(self.request,"correlation_id",""),metadata={"filename":session.original_filename,"expected_size":size})
     @action(detail=True,methods=["put"],url_path="chunks",parser_classes=[OctetStreamParser])
