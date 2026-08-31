@@ -80,7 +80,19 @@ class ClabernetesAdapter:
         pod=device.runtime_resources.get("pod")
         if not pod: raise CapabilityError("The device launcher pod is not ready")
         host_interface=f"{node.name}-{interface.name}"
-        command=f"timeout -s INT {duration} tcpdump -n -s 256 -i {shlex.quote(host_interface)} -c {packet_limit} -U -w - 2>/dev/null | base64 -w 0"
+        # Capture to a private file because tcpdump in the launcher does not
+        # reliably exit when GNU timeout signals it through a Kubernetes exec
+        # pipe. The explicit hard bound also avoids websocket-framed PCAP data.
+        command=(
+            "capture_file=$(mktemp /tmp/studio-capture.XXXXXX.pcap); "
+            "trap 'rm -f \"$capture_file\"' EXIT; "
+            f"tcpdump -n -s 256 -i {shlex.quote(host_interface)} -c {packet_limit} -U -w \"$capture_file\" 2>/dev/null & "
+            "capture_pid=$!; "
+            f"sleep {duration}; "
+            "kill -TERM \"$capture_pid\" 2>/dev/null || true; sleep 1; "
+            "kill -KILL \"$capture_pid\" 2>/dev/null || true; wait \"$capture_pid\" 2>/dev/null || true; "
+            "base64 -w 0 \"$capture_file\""
+        )
         encoded=stream(self.core.connect_get_namespaced_pod_exec,pod,deployment.namespace,command=["sh","-c",command],
             stderr=True,stdin=False,stdout=True,tty=False,_request_timeout=duration+15)
         if len(encoded)>4*1024*1024: raise CapabilityError("Capture exceeded the encoded transfer limit")

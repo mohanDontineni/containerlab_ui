@@ -54,4 +54,5 @@ def test_bounded_capture_uses_verified_host_interface_and_returns_pcap(monkeypat
     assert adapter.capture_packets(deployment,node,interface,7,250)==pcap
     command=calls[0][2]["command"]
     assert command[:2]==["sh","-c"] and "r1-eth2" in command[2] and "-s 256" in command[2] and "-c 250" in command[2]
+    assert "mktemp /tmp/studio-capture" in command[2] and "sleep 7" in command[2] and "kill -KILL" in command[2]
     assert calls[0][2]["_request_timeout"]==22
