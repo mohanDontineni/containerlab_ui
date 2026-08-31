@@ -26,8 +26,9 @@ const page = await context.newPage();
 
 const capture = async (name, url, prepare) => {
   await page.goto(`${baseUrl}${url}`, { waitUntil: "networkidle" });
-  if (prepare) await prepare(page);
-  await page.screenshot({ path: path.join(output, name), fullPage: true });
+  const target = prepare ? await prepare(page) : null;
+  if (target) await target.screenshot({ path: path.join(output, name) });
+  else await page.screenshot({ path: path.join(output, name), fullPage: true });
   console.log(`${name} <- ${page.url()}`);
 };
 
@@ -36,6 +37,13 @@ const firstHref = async (selector, pattern) => {
     items.map((item) => item.getAttribute("href")).filter(Boolean),
   );
   return values.find((value) => pattern.test(value)) || null;
+};
+
+const matchingHrefs = async (selector, pattern) => {
+  const values = await page.locator(selector).evaluateAll((items) =>
+    items.map((item) => item.getAttribute("href")).filter(Boolean),
+  );
+  return [...new Set(values.filter((value) => pattern.test(value)))];
 };
 
 try {
@@ -58,7 +66,18 @@ try {
   await capture("05-lab-library.png", "/labs/");
   await capture("06-create-lab.png", "/labs/new/");
   await page.goto(`${baseUrl}/labs/`, { waitUntil: "networkidle" });
-  const workspaceHref = await firstHref('a[href*="/workspace/"]', /^\/labs\/[0-9a-f-]+\/workspace\/$/i);
+  const workspaceHrefs = await matchingHrefs('a[href*="/workspace/"]', /^\/labs\/[0-9a-f-]+\/workspace\/$/i);
+  let workspaceHref = workspaceHrefs[0] || null;
+  for (const candidate of workspaceHrefs) {
+    await page.goto(`${baseUrl}${candidate}`, { waitUntil: "networkidle" });
+    const editor = page.frameLocator('iframe[title^="Topology workspace"]');
+    await editor.locator(".workspace-shell").waitFor();
+    const summary = (await editor.locator(".canvas-hint").textContent()) || "";
+    if (/\b[1-9]\d* links?\b/i.test(summary)) {
+      workspaceHref = candidate;
+      break;
+    }
+  }
   if (workspaceHref) {
     await capture("07-topology-workspace.png", workspaceHref, async (p) => {
       await p.frameLocator('iframe[title^="Topology workspace"]').locator(".workspace-shell").waitFor();
@@ -72,6 +91,11 @@ try {
       const editor = p.frameLocator('iframe[title^="Topology workspace"]');
       await editor.getByRole("button", { name: /history/i }).click();
       await editor.getByRole("dialog").waitFor();
+      await editor
+        .locator(".revision-list article")
+        .or(editor.locator(".history-empty").filter({ hasNotText: "Loading revision history" }))
+        .first()
+        .waitFor();
     });
   }
 
@@ -81,28 +105,64 @@ try {
   await capture("13-deployments.png", "/deployments/");
 
   await page.goto(`${baseUrl}/deployments/`, { waitUntil: "networkidle" });
-  const deploymentHref = await firstHref('a[href^="/deployments/"]', /^\/deployments\/[0-9a-f-]+\/$/i);
+  const deploymentHrefs = await matchingHrefs('a[href^="/deployments/"]', /^\/deployments\/[0-9a-f-]+\/$/i);
+  let deploymentHref = deploymentHrefs[0] || null;
+  for (const candidate of deploymentHrefs) {
+    await page.goto(`${baseUrl}${candidate}`, { waitUntil: "networkidle" });
+    await page.locator("#device-list article").first().waitFor({ timeout: 20_000 });
+    if ((await page.locator("#link-control-list article").count()) > 0) {
+      deploymentHref = candidate;
+      break;
+    }
+  }
+  let configurationHref = deploymentHref;
+  for (const candidate of deploymentHrefs) {
+    await page.goto(`${baseUrl}${candidate}`, { waitUntil: "networkidle" });
+    await page.waitForFunction(() => {
+      const list = document.querySelector("#configuration-list");
+      return list && !list.textContent?.includes("Loading collected versions");
+    });
+    if ((await page.locator("#configuration-list article").count()) > 0) {
+      configurationHref = candidate;
+      break;
+    }
+  }
   if (deploymentHref) {
     await capture("14-runtime-overview.png", deploymentHref, async (p) => {
       await p.locator("#device-list article").first().waitFor({ timeout: 20_000 });
     });
     await capture("15-device-lifecycle.png", deploymentHref, async (p) => {
       await p.locator(".device-actions").first().waitFor({ timeout: 20_000 });
+      return p.locator(".runtime-devices");
     });
     await capture("16-live-link-controls.png", deploymentHref, async (p) => {
-      await p.locator(".link-control-panel").scrollIntoViewIfNeeded();
+      const panel = p.locator(".link-control-panel");
+      await panel.scrollIntoViewIfNeeded();
+      return panel;
     });
     await capture("17-ping-diagnostic.png", deploymentHref, async (p) => {
-      await p.locator(".diagnostic-panel").scrollIntoViewIfNeeded();
+      const panel = p.locator(".diagnostic-panel");
+      await panel.scrollIntoViewIfNeeded();
+      return panel;
     });
     await capture("18-packet-capture.png", deploymentHref, async (p) => {
-      await p.locator(".capture-panel").scrollIntoViewIfNeeded();
+      const panel = p.locator(".capture-panel");
+      await panel.scrollIntoViewIfNeeded();
+      return panel;
     });
     await capture("19-device-console.png", deploymentHref, async (p) => {
-      await p.locator(".runtime-console").scrollIntoViewIfNeeded();
+      const panel = p.locator(".runtime-console");
+      await panel.scrollIntoViewIfNeeded();
+      const consoleFrame = p.frameLocator('iframe[title="Device consoles"]');
+      await consoleFrame.locator("nav button:not([disabled])").first().click();
+      await consoleFrame.locator(".xterm").waitFor({ timeout: 20_000 });
+      await p.waitForTimeout(750);
+      return panel;
     });
-    await capture("20-configuration-history.png", deploymentHref, async (p) => {
-      await p.locator("#configuration-list").scrollIntoViewIfNeeded();
+    await capture("20-configuration-history.png", configurationHref, async (p) => {
+      const panel = p.locator("#configuration-list").locator("xpath=ancestor::section[1]");
+      await panel.scrollIntoViewIfNeeded();
+      return panel;
     });
   }
 

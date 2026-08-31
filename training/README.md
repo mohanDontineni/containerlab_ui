@@ -2,7 +2,9 @@
 
 This catalog documents the supported operator workflows in ContainerLab Studio. Operators do not write Containerlab YAML, Kubernetes manifests, or shell scripts. The topology editor and guided forms collect intent, validate it, and generate the required runtime resources internally.
 
-Screenshots are generated from the deployed product with `scripts/capture-training.mjs`. The capture runner is read-only: it opens pages and safe dialogs, but never saves, deploys, stops, restarts, publishes, uploads, changes membership, changes a password, or runs diagnostics.
+Open [GALLERY.md](GALLERY.md) for the complete rendered screenshot walkthrough.
+
+Screenshots are generated from the deployed product with `scripts/capture-training.mjs`. The capture runner is non-destructive: it opens pages and safe dialogs, refreshes observed runtime status, and creates one expiring console session for visual evidence. It never saves, deploys, stops, restarts, publishes, uploads, changes membership, changes a password, applies link conditions, starts captures, or runs diagnostics.
 
 ## Screenshot index
 
