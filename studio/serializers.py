@@ -35,3 +35,7 @@ class DeploymentSerializer(serializers.ModelSerializer):
 class OperationSerializer(serializers.ModelSerializer):
     class Meta: model=models.OperationJob; fields="__all__"
 
+class DeviceInstanceSerializer(serializers.ModelSerializer):
+    name=serializers.CharField(source="lab_node.name",read_only=True)
+    kind=serializers.CharField(source="lab_node.template_version.containerlab_kind",read_only=True)
+    class Meta: model=models.DeviceInstance; fields=("id","name","kind","observed_readiness","worker_placement","runtime_resources","console_endpoints")

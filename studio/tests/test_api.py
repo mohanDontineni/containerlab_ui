@@ -1,8 +1,7 @@
-import uuid
 import pytest
 from django.conf import settings
 from rest_framework.test import APIClient
-from studio.models import (DeviceTemplateVersion, ImageArtifact, Lab, LabInterface, LabNode, LabRevision,
+from studio.models import (DeviceTemplateVersion, ImageArtifact, Lab, LabDeployment, LabNode, LabRevision,
     Project, ProjectMembership, PublishedImage, User)
 from studio.tasks import execute_operation
 
@@ -43,3 +42,29 @@ def test_owner_can_publish_and_schedule_deployable_lab(django_capture_on_commit_
     assert response.status_code==202, response.data
     lab.refresh_from_db(); assert lab.current_draft is None
     assert response.data["deployment"]["namespace"].startswith("clab-")
+
+@pytest.mark.django_db
+def test_viewer_can_read_runtime_but_cannot_run_diagnostics():
+    owner=User.objects.create_user("runtime-owner",password="long-enough-password")
+    viewer=User.objects.create_user("runtime-viewer",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="shared-runtime")
+    ProjectMembership.objects.create(project=project,user=viewer,role="viewer")
+    lab=Lab.objects.create(project=project,name="shared-lab")
+    revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="c"*64,immutable=True)
+    deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-viewer-test",runtime_version="0.8.0")
+    c=APIClient(); c.force_authenticate(viewer)
+    assert c.get(f"/api/v1/deployments/{deployment.id}/runtime/").status_code==200
+    response=c.post(f"/api/v1/deployments/{deployment.id}/diagnostics/",{"target":"10.0.0.1"},format="json",HTTP_IDEMPOTENCY_KEY="viewer-ping")
+    assert response.status_code==403
+
+@pytest.mark.django_db
+def test_diagnostic_rejects_non_ip_targets_before_scheduling():
+    owner=User.objects.create_user("diagnostic-owner",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="diagnostics")
+    lab=Lab.objects.create(project=project,name="lab")
+    revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="d"*64,immutable=True)
+    deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-diagnostic-test",runtime_version="0.8.0")
+    c=APIClient(); c.force_authenticate(owner)
+    response=c.post(f"/api/v1/deployments/{deployment.id}/diagnostics/",{"target":"example.com"},format="json",HTTP_IDEMPOTENCY_KEY="invalid-ping")
+    assert response.status_code==422
+    assert response.data["error"]["code"]=="invalid_target"

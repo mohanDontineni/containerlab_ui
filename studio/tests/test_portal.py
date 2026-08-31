@@ -2,8 +2,7 @@ import json
 import uuid
 import pytest
 from django.db.models import F
-from django.urls import reverse
-from studio.models import DeviceTemplateVersion, ImageArtifact, Lab, LabLink, LabNode, Project, ProjectMembership, PublishedImage, User
+from studio.models import DeviceTemplateVersion, ImageArtifact, Lab, LabDeployment, LabLink, LabNode, LabRevision, Project, ProjectMembership, PublishedImage, User
 
 @pytest.mark.django_db
 def test_product_navigation_never_links_to_model_admin(client):
@@ -76,3 +75,18 @@ def test_register_digest_pinned_registry_image(client):
     assert artifact.source_type == ImageArtifact.Source.REGISTRY
     assert artifact.upload_session is None
     assert PublishedImage.objects.get(artifact=artifact).registry_digest == digest
+
+@pytest.mark.django_db
+def test_deployment_detail_is_native_and_scoped(client):
+    owner = User.objects.create_user("deployment-owner", password="long-enough-password")
+    stranger = User.objects.create_user("deployment-stranger", password="long-enough-password")
+    project = Project.objects.create(owner=owner, name="Runtime project")
+    lab = Lab.objects.create(project=project, name="Runtime lab")
+    revision = LabRevision.objects.create(lab=lab, revision_number=1, topology_checksum="e" * 64, immutable=True)
+    deployment = LabDeployment.objects.create(revision=revision, cluster_identity="test", namespace="clab-detail-test", runtime_version="0.8.0")
+    client.force_login(owner)
+    response = client.get(f"/deployments/{deployment.id}/")
+    assert response.status_code == 200
+    assert "Bounded ping" in response.content.decode()
+    client.force_login(stranger)
+    assert client.get(f"/deployments/{deployment.id}/").status_code == 404

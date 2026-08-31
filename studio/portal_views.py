@@ -5,7 +5,7 @@ import json
 import uuid
 from django.db import transaction
 from django.db.models import Count, F, Max, Q
-from django.http import Http404, JsonResponse
+from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_http_methods
@@ -152,6 +152,13 @@ def deployments(request):
     queryset = LabDeployment.objects.filter(revision__lab__project__in=visible_projects(request.user)).select_related("revision__lab", "revision__lab__project").order_by("-updated_at")
     return render(request, "studio/catalog.html", {"section": "deployments", "title": "Deployments", "eyebrow": "RUNTIME", "items": queryset,
         "description": "Follow desired state, runtime readiness, placement, and failures."})
+
+@login_required
+@ensure_csrf_cookie
+def deployment_detail(request, deployment_id):
+    deployment=get_object_or_404(LabDeployment.objects.filter(revision__lab__project__in=visible_projects(request.user)).select_related("revision__lab__project"),id=deployment_id)
+    role=project_role(request.user,deployment.revision.lab.project)
+    return render(request,"studio/deployment_detail.html",{"deployment":deployment,"can_operate":role in (ProjectMembership.Role.ADMIN,ProjectMembership.Role.EDITOR)})
 
 @login_required
 def images(request):

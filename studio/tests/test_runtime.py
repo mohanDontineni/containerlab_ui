@@ -19,3 +19,13 @@ def test_plan_uses_clabernetes_080_string_definition():
     assert isinstance(definition,str)
     assert yaml.safe_load(definition)["topology"]["nodes"]["r1"]["image"].endswith("@sha256:abc")
     assert plan.manifest["spec"]["expose"]["disableExpose"] is True
+
+def test_observe_devices_resolves_only_topology_owned_pods():
+    node={"metadata":{"name":"r1","uid":"node-uid","labels":{"c9s.run/topologyNode":"r1"}},"status":{"readiness":"ready"}}
+    custom=SimpleNamespace(list_namespaced_custom_object=lambda *_args,**_kwargs:{"items":[node]})
+    metadata=SimpleNamespace(name="r1-pod",uid="pod-uid",labels={"c9s.run/topologyNode":"r1"})
+    pod=SimpleNamespace(metadata=metadata,spec=SimpleNamespace(node_name="worker-1"),status=SimpleNamespace(phase="Running"))
+    core=SimpleNamespace(list_namespaced_pod=lambda *_args,**_kwargs:SimpleNamespace(items=[pod]))
+    adapter=ClabernetesAdapter(custom_api=custom,core_api=core)
+    observed=adapter.observe_devices(SimpleNamespace(namespace="lab-one"))
+    assert observed==[{"name":"r1","node_uid":"node-uid","readiness":"ready","pod":"r1-pod","pod_uid":"pod-uid","worker":"worker-1","pod_phase":"Running"}]

@@ -189,6 +189,8 @@ class OperationJob(UUIDModel):
     progress = models.PositiveSmallIntegerField(default=0)
     heartbeat = models.DateTimeField(null=True, blank=True)
     error_details = models.JSONField(default=dict)
+    request_payload = models.JSONField(default=dict, blank=True)
+    result_payload = models.JSONField(default=dict, blank=True)
     class Meta:
         constraints=[models.UniqueConstraint(fields=["owner", "idempotency_key"], name="unique_owner_idempotency"),
             models.UniqueConstraint(fields=["target_id", "operation_type"], condition=Q(state__in=["accepted","scheduled","started"]), name="one_active_target_operation")]

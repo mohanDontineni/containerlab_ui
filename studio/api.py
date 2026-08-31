@@ -1,7 +1,8 @@
 import uuid
+import ipaddress
 from pathlib import Path
 from django.conf import settings
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.utils import timezone
 from rest_framework import status, viewsets
@@ -89,16 +90,25 @@ class UploadViewSet(viewsets.ModelViewSet):
 class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class=serializers.DeploymentSerializer
     def get_queryset(self): return models.LabDeployment.objects.filter(revision__lab__project__in=visible_projects(self.request.user))
+    def _require_operator(self,deployment):
+        if project_role(self.request.user,deployment.revision.lab.project) not in ("administrator","editor"):
+            from rest_framework.exceptions import PermissionDenied; raise PermissionDenied()
+    @action(detail=True,methods=["get"])
+    def runtime(self,request,pk=None):
+        deployment=self.get_object()
+        return Response({"deployment":serializers.DeploymentSerializer(deployment).data,
+            "devices":serializers.DeviceInstanceSerializer(deployment.devices.select_related("lab_node__template_version"),many=True).data,
+            "operations":serializers.OperationSerializer(deployment.operations.order_by("-created_at")[:20],many=True).data})
     @action(detail=True,methods=["post"])
     def refresh(self,request,pk=None):
         deployment=self.get_object()
-        if project_role(request.user,deployment.revision.lab.project) not in ("administrator","editor"):
-            from rest_framework.exceptions import PermissionDenied; raise PermissionDenied()
+        self._require_operator(deployment)
         reconcile_deployment.delay(str(deployment.id))
         return Response({"state":"scheduled"},status=202)
     @action(detail=True,methods=["post"])
     def operations(self,request,pk=None):
         deployment=self.get_object(); op=request.data.get("operation")
+        self._require_operator(deployment)
         if op not in ("deploy_lab","stop_lab","delete_runtime"): return Response({"error":{"code":"unsupported_operation"}},status=422)
         key=request.headers.get("Idempotency-Key")
         if not key: return Response({"error":{"code":"idempotency_key_required"}},status=400)
@@ -108,3 +118,24 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
             job=models.OperationJob.objects.filter(owner=request.user,idempotency_key=key).first()
             if not job: return Response({"error":{"code":"operation_conflict"}},status=409)
         execute_operation.delay(str(job.id)); return Response(serializers.OperationSerializer(job).data,status=202)
+    @action(detail=True,methods=["post"])
+    def diagnostics(self,request,pk=None):
+        deployment=self.get_object(); self._require_operator(deployment)
+        try: target=str(ipaddress.ip_address(request.data.get("target","")))
+        except ValueError: return Response({"error":{"code":"invalid_target","details":"Enter a valid IPv4 or IPv6 address."}},status=422)
+        try: node_id=uuid.UUID(str(request.data.get("node_id")))
+        except (ValueError,TypeError,AttributeError): return Response({"error":{"code":"invalid_node"}},status=422)
+        if not deployment.revision.nodes.filter(id=node_id).exists(): return Response({"error":{"code":"invalid_node"}},status=422)
+        count=request.data.get("count",3); timeout=request.data.get("timeout",2)
+        if not isinstance(count,int) or not 1<=count<=5 or not isinstance(timeout,int) or not 1<=timeout<=5:
+            return Response({"error":{"code":"invalid_bounds","details":"Count and timeout must be between 1 and 5."}},status=422)
+        key=request.headers.get("Idempotency-Key")
+        if not key: return Response({"error":{"code":"idempotency_key_required"}},status=400)
+        job=models.OperationJob.objects.filter(owner=request.user,idempotency_key=key).first()
+        if not job:
+            try: job=models.OperationJob.objects.create(deployment=deployment,owner=request.user,operation_type="ping",target_id=deployment.id,
+                idempotency_key=key,state="scheduled",request_payload={"node_id":str(node_id),"target":target,"count":count,"timeout":timeout})
+            except IntegrityError:
+                return Response({"error":{"code":"diagnostic_in_progress","details":"Wait for the active diagnostic to finish."}},status=409)
+        if job.state in ("accepted","scheduled"): execute_operation.delay(str(job.id))
+        return Response(serializers.OperationSerializer(job).data,status=202)

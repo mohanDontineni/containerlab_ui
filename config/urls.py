@@ -19,6 +19,7 @@ urlpatterns = [
     path("api/v1/labs/<uuid:lab_id>/topology/images/", portal_views.topology_images, name="topology-images"),
     path("api/v1/labs/<uuid:lab_id>/topology/", portal_views.topology_document, name="topology-document"),
     path("deployments/", portal_views.deployments, name="portal-deployments"),
+    path("deployments/<uuid:deployment_id>/", portal_views.deployment_detail, name="portal-deployment-detail"),
     path("images/", portal_views.images, name="portal-images"),
     path("images/register/", portal_views.image_register, name="portal-image-register"),
     path("device-templates/", portal_views.templates, name="portal-templates"),
