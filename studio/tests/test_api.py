@@ -656,11 +656,12 @@ def test_link_condition_api_is_bounded_idempotent_audited_and_operator_only(monk
     deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-link-test",runtime_version="0.8.0",observed_state="running")
     DeviceInstance.objects.create(deployment=deployment,lab_node=a,observed_readiness="ready",runtime_resources={"pod":"a-pod"})
     DeviceInstance.objects.create(deployment=deployment,lab_node=b,observed_readiness="ready",runtime_resources={"pod":"b-pod"})
-    payload={"link_id":str(link.id),"latency_ms":100,"jitter_ms":10,"loss_percent":2.5,"rate_kbps":1000,"disabled":False}
+    payload={"link_id":str(link.id),"latency_ms":100,"jitter_ms":10,"loss_percent":2.5,"corruption_percent":0.5,"rate_kbps":1000,"disabled":False}
     client=APIClient();client.force_authenticate(viewer)
     assert client.post(f"/api/v1/deployments/{deployment.id}/link-conditions/",payload,format="json",HTTP_IDEMPOTENCY_KEY="viewer-link").status_code==403
     client.force_authenticate(owner)
     assert client.post(f"/api/v1/deployments/{deployment.id}/link-conditions/",{**payload,"latency_ms":2001},format="json",HTTP_IDEMPOTENCY_KEY="bad-link").status_code==422
+    assert client.post(f"/api/v1/deployments/{deployment.id}/link-conditions/",{**payload,"corruption_percent":100.1},format="json",HTTP_IDEMPOTENCY_KEY="bad-corruption").status_code==422
     first=client.post(f"/api/v1/deployments/{deployment.id}/link-conditions/",payload,format="json",HTTP_IDEMPOTENCY_KEY="link-one")
     second=client.post(f"/api/v1/deployments/{deployment.id}/link-conditions/",payload,format="json",HTTP_IDEMPOTENCY_KEY="link-one")
     assert first.status_code==second.status_code==202 and first.data["id"]==second.data["id"]

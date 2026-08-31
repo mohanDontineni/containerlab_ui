@@ -453,7 +453,7 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
             links=deployment.revision.links.select_related("endpoint_a__node","endpoint_b__node")
             return Response([{"id":str(link.id),"label":link.label,"endpoint_a":{"node":link.endpoint_a.node.name,"interface":link.endpoint_a.name},
                 "endpoint_b":{"node":link.endpoint_b.node.name,"interface":link.endpoint_b.name},"condition":conditions.get(str(link.id),{"active":False,
-                    "disabled":False,"latency_ms":0,"jitter_ms":0,"loss_percent":0,"rate_kbps":0})} for link in links])
+                    "disabled":False,"latency_ms":0,"jitter_ms":0,"loss_percent":0,"corruption_percent":0,"rate_kbps":0})} for link in links])
         self._require_operator(deployment)
         try: link_id=uuid.UUID(str(request.data.get("link_id")))
         except (ValueError,TypeError,AttributeError): return Response({"error":{"code":"invalid_link"}},status=422)
@@ -470,12 +470,16 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
         loss=request.data.get("loss_percent",0)
         if isinstance(loss,bool) or not isinstance(loss,(int,float)) or loss<0 or loss>100:
             return Response({"error":{"code":"invalid_link_condition","details":"loss_percent must be between 0 and 100."}},status=422)
+        corruption=request.data.get("corruption_percent",0)
+        if isinstance(corruption,bool) or not isinstance(corruption,(int,float)) or corruption<0 or corruption>100:
+            return Response({"error":{"code":"invalid_link_condition","details":"corruption_percent must be between 0 and 100."}},status=422)
         if values["jitter_ms"] and not values["latency_ms"]:
             return Response({"error":{"code":"invalid_link_condition","details":"Jitter requires non-zero latency."}},status=422)
         if values["rate_kbps"] and values["rate_kbps"]<64:
             return Response({"error":{"code":"invalid_link_condition","details":"Rate must be zero or at least 64 Kbit/s."}},status=422)
-        condition={"active":disabled or bool(values["latency_ms"] or loss or values["rate_kbps"]),"disabled":disabled,
-            "latency_ms":values["latency_ms"],"jitter_ms":values["jitter_ms"],"loss_percent":float(loss),"rate_kbps":values["rate_kbps"]}
+        condition={"active":disabled or bool(values["latency_ms"] or loss or corruption or values["rate_kbps"]),"disabled":disabled,
+            "latency_ms":values["latency_ms"],"jitter_ms":values["jitter_ms"],"loss_percent":float(loss),
+            "corruption_percent":float(corruption),"rate_kbps":values["rate_kbps"]}
         key=request.headers.get("Idempotency-Key")
         if not key: return Response({"error":{"code":"idempotency_key_required"}},status=400)
         existing=models.OperationJob.objects.filter(owner=request.user,idempotency_key=key).first()

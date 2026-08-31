@@ -17,7 +17,7 @@
 .link-identity { align-self:center; display:flex; flex-direction:column; gap:5px; }
 .link-identity strong { color:#d9e8f2; font-size:10px; }
 .link-identity small { color:#658096; font-size:8px; }
-.link-fields { display:grid; grid-template-columns:repeat(4,minmax(78px,1fr)); gap:8px; }
+.link-fields { display:grid; grid-template-columns:repeat(5,minmax(72px,1fr)); gap:8px; }
 .link-fields label { color:#6e879a; font-size:8px; text-transform:uppercase; letter-spacing:.06em; }
 .link-fields input { box-sizing:border-box; width:100%; margin-top:5px; padding:8px; border:1px solid #203b50; border-radius:6px; color:#d9e8f2; background:#06121e; font:9px ui-monospace,SFMono-Regular,Menlo,monospace; }
 .link-actions { display:flex; gap:6px; align-items:center; }

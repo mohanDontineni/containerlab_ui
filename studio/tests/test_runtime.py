@@ -201,8 +201,8 @@ def test_link_condition_applies_bounded_netem_to_both_endpoints(monkeypatch):
     devices={"r1":SimpleNamespace(observed_readiness="ready",runtime_resources={"pod":"r1-pod"}),
         "r2":SimpleNamespace(observed_readiness="ready",runtime_resources={"pod":"r2-pod"})}
     deployment=SimpleNamespace(revision_id="revision-one",namespace="lab-one",devices=SimpleNamespace(get=lambda lab_node:devices[lab_node.name]))
-    condition={"active":True,"disabled":False,"latency_ms":120,"jitter_ms":10,"loss_percent":2.5,"rate_kbps":1000}
+    condition={"active":True,"disabled":False,"latency_ms":120,"jitter_ms":10,"loss_percent":2.5,"corruption_percent":0.5,"rate_kbps":1000}
     result=adapter.set_link_condition(deployment,link,condition)
     assert [call[0] for call in calls]==["r1-pod","r2-pod"]
-    assert calls[0][2]["command"]==["tc","qdisc","replace","dev","r1-eth1","root","netem","delay","120ms","10ms","loss","2.5%","rate","1000kbit"]
+    assert calls[0][2]["command"]==["tc","qdisc","replace","dev","r1-eth1","root","netem","delay","120ms","10ms","loss","2.5%","corrupt","0.5%","rate","1000kbit"]
     assert result["condition"]==condition and len(result["endpoints"])==2

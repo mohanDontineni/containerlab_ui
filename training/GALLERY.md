@@ -96,7 +96,7 @@ The operator sees each device’s readiness, placement, and controls for configu
 
 ![Live link controls](16-live-link-controls.png)
 
-The operator selects bounded latency, jitter, packet loss, and rate values for a named interface pair, or disables/restores the bidirectional link.
+The operator selects bounded latency, jitter, packet loss, corruption, and rate values for a named interface pair, or disables/restores the bidirectional link.
 
 ## 17 — Bounded ping diagnostic
 

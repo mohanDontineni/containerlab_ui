@@ -308,6 +308,8 @@ class ClabernetesAdapter:
                 if latency: command.extend(["delay",f"{latency}ms",f"{jitter}ms"] if jitter else ["delay",f"{latency}ms"])
                 loss=100 if condition.get("disabled") else condition.get("loss_percent",0)
                 if loss: command.extend(["loss",f"{loss:g}%"])
+                corruption=condition.get("corruption_percent",0)
+                if corruption and not condition.get("disabled"): command.extend(["corrupt",f"{corruption:g}%"])
                 rate=condition.get("rate_kbps",0)
                 if rate: command.extend(["rate",f"{rate}kbit"])
             else:

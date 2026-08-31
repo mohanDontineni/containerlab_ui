@@ -13,7 +13,7 @@
 - Actual cluster deployment and real two-node Clabernetes link traffic proof.
 - Professional project, lab, image, topology-editor, runtime, console, diagnostics, configuration, import/export, and settings workflows outside Django admin.
 - Session-bound browser consoles, reliable per-device restart, bounded ping diagnostics, authenticated PCAP capture/download, and bidirectional live link controls.
-- Live link latency, disable, and restore validation against the deployed two-node lab, with persisted conditions, idempotent operations, and audit events.
+- Live link latency, jitter, loss, corruption, rate, disable, and restore controls, with bounded validation, bidirectional application, persisted conditions, idempotent operations, and audit events.
 - Resumable 4 MiB image archive onboarding with pause/resume/cancel UX, optional expected checksum, server-side SHA-256, quarantine inspection, per-project deduplication, and audit events.
 - Licensed Docker/OCI archive publication into single-node containerd with a checksum-derived immutable tag, isolated Kubernetes Job, project-scoped idempotent API, audit trail, build status, and image-library action.
 - In-product project collaboration management with administrator/editor/viewer roles, delegated administrator controls, owner protection, cross-project isolation, exact-user lookup, and audited add/change/remove lifecycle.

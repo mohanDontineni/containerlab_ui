@@ -25,7 +25,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 | `13-deployments.png` | Deployment catalog | Reviews desired and observed runtime state and opens a live deployment. |
 | `14-runtime-overview.png` | Whole-lab lifecycle | Reviews device/link readiness and the controls for deploy, refresh, and stop. |
 | `15-device-lifecycle.png` | Per-device lifecycle | Uses collect, suspend, resume, stop, start, and restart controls for individual devices. |
-| `16-live-link-controls.png` | Link impairment | Applies bounded latency, jitter, loss, rate, disable, or restore actions bidirectionally. |
+| `16-live-link-controls.png` | Link impairment | Applies bounded latency, jitter, loss, corruption, rate, disable, or restore actions bidirectionally. |
 | `17-ping-diagnostic.png` | Ping diagnostic | Selects a source node and target address for a bounded reachability test. |
 | `18-packet-capture.png` | Packet capture | Selects a device/interface plus bounded duration and packet count, then downloads PCAP evidence. |
 | `19-device-console.png` | Browser console | Opens an authenticated, expiring, project-scoped device console. |
