@@ -44,7 +44,9 @@ class LabViewSet(viewsets.ModelViewSet):
         existing=models.OperationJob.objects.filter(owner=request.user,idempotency_key=key).select_related("deployment").first()
         if existing: return Response({"deployment":serializers.DeploymentSerializer(existing.deployment).data,"operation":serializers.OperationSerializer(existing).data},status=202)
         with transaction.atomic():
-            lab=models.Lab.objects.select_for_update().select_related("current_draft","project").get(pk=lab.pk)
+            # Lock only the lab row. PostgreSQL rejects FOR UPDATE across the nullable
+            # current_draft outer join, while SQLite silently permits it.
+            lab=models.Lab.objects.select_for_update().get(pk=lab.pk)
             revision=lab.current_draft
             if not revision or not revision.nodes.exists(): return Response({"error":{"code":"empty_topology","details":"Save at least one device before deployment."}},status=422)
             errors=ClabernetesAdapter.validate_topology(revision)
