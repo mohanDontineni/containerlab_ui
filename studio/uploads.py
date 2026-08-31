@@ -87,6 +87,13 @@ def finalize(session, owner):
     if session.expected_checksum and checksum.lower()!=session.expected_checksum.lower(): session.status=UploadSession.Status.FAILED; session.computed_checksum=checksum; session.save(); raise UploadError("SHA-256 checksum mismatch")
     existing=ImageArtifact.objects.filter(project=session.project,checksum=checksum).first()
     if existing:
+        if existing.validation_status!=ImageArtifact.Validation.VALIDATED:
+            detected,result=inspect_file(session.artifact_destination)
+            existing.detected_format=detected
+            existing.architecture=result.get("architecture","")
+            existing.inspection_result=result
+            existing.validation_status=ImageArtifact.Validation.VALIDATED if result["deployable"] else ImageArtifact.Validation.UNSUPPORTED
+            existing.save(update_fields=["detected_format","architecture","inspection_result","validation_status","updated_at"])
         Path(session.artifact_destination).unlink(missing_ok=True)
         session.status=UploadSession.Status.COMPLETE; session.computed_checksum=checksum; session.save()
         return existing

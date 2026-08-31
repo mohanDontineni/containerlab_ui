@@ -27,6 +27,22 @@ def test_server_computes_optional_checksum_and_deduplicates_within_project(tmp_p
     second=session("two.bin");append_chunk(second,u,0,io.BytesIO(data));duplicate=finalize(second,u)
     assert duplicate.id==artifact.id and ImageArtifact.objects.filter(project=p).count()==1
     second.refresh_from_db();assert second.computed_checksum==hashlib.sha256(data).hexdigest() and not Path(second.artifact_destination).exists()
+
+@pytest.mark.django_db
+def test_duplicate_unsupported_artifact_is_reinspected_after_validator_upgrade(tmp_path,monkeypatch):
+    user=User.objects.create_user("reinspect",password="long-enough-password");project=Project.objects.create(owner=user,name="p")
+    data=b"future-supported-image";checksum=hashlib.sha256(data).hexdigest()
+    first=UploadSession.objects.create(owner=user,project=project,original_filename="first",expected_size=len(data),expected_checksum=checksum,
+        expires_at=timezone.now()+timezone.timedelta(hours=1),artifact_destination=str(tmp_path/"first"))
+    append_chunk(first,user,0,io.BytesIO(data));artifact=finalize(first,user)
+    assert artifact.validation_status==ImageArtifact.Validation.UNSUPPORTED
+    second=UploadSession.objects.create(owner=user,project=project,original_filename="second",expected_size=len(data),expected_checksum=checksum,
+        expires_at=timezone.now()+timezone.timedelta(hours=1),artifact_destination=str(tmp_path/"second"))
+    append_chunk(second,user,0,io.BytesIO(data))
+    monkeypatch.setattr("studio.uploads.inspect_file",lambda _:("docker-archive",{"deployable":True,"architecture":"amd64","import_source":"sha256:"+"a"*64,"image_count":1}))
+    duplicate=finalize(second,user);duplicate.refresh_from_db()
+    assert duplicate.id==artifact.id and duplicate.validation_status==ImageArtifact.Validation.VALIDATED
+    assert duplicate.architecture=="amd64" and not Path(second.artifact_destination).exists()
 @pytest.mark.django_db
 def test_oversized_chunk_rolls_back_file_and_offset(tmp_path):
     u=User.objects.create_user("overflow",password="long-enough-password");p=Project.objects.create(owner=u,name="p")
