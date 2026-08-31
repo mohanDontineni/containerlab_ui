@@ -18,7 +18,7 @@
       {% if section == "projects" %}<span>Project</span><span>Labs</span><span>Members</span><span>Updated</span><span></span>
       {% elif section == "labs" %}<span>Lab</span><span>Project</span><span>Revisions</span><span>Updated</span><span></span>
       {% elif section == "deployments" %}<span>Deployment</span><span>State</span><span>Runtime</span><span>Last reconciled</span><span></span>
-      {% elif section == "images" %}<span>Image artifact</span><span>Project</span><span>Format</span><span>Validation</span><span>Size</span>
+      {% elif section == "images" %}<span>Image artifact</span><span>Project</span><span>Format</span><span>Validation</span><span>Publication</span>
       {% elif section == "templates" %}<span>Template</span><span>Active version</span><span>Privilege</span><span>Updated</span><span></span>
       {% else %}<span>Operation</span><span>Target</span><span>State</span><span>Progress</span><span>Started</span>{% endif %}
     </div>
@@ -31,7 +31,7 @@
       {% elif section == "deployments" %}
         <div class="entity-main"><span class="entity-icon violet">▶</span><p><strong>{{ item.revision.lab.name }}</strong><small>Revision {{ item.revision.revision_number }} · {{ item.namespace }}</small></p></div><span><em class="catalog-state state-{{ item.observed_state }}"><i></i>{{ item.observed_state|title }}</em></span><span class="mono-text">{{ item.runtime_version }}</span><span class="subtle">{{ item.last_reconciliation|timesince|default:"Not yet" }}</span><a class="row-action" href="/deployments/{{ item.id }}/">›</a>
       {% elif section == "images" %}
-        <div class="entity-main"><span class="entity-icon amber">◫</span><p><strong>{{ item.original_filename }}</strong><small>{% if item.inspection_result.reason %}{{ item.inspection_result.reason|truncatechars:68 }}{% else %}SHA256 {{ item.checksum|slice:":12" }}…{% endif %}</small></p></div><span class="project-chip">{{ item.project.name }}</span><span class="mono-text">{{ item.detected_format }}</span><span><em class="catalog-state state-{{ item.validation_status }}"><i></i>{{ item.validation_status|title }}</em></span><span class="mono-text">{{ item.byte_size|filesizeformat }}</span>
+        <div class="entity-main"><span class="entity-icon amber">◫</span><p><strong>{{ item.original_filename }}</strong><small>{% if item.inspection_result.reason %}{{ item.inspection_result.reason|truncatechars:68 }}{% else %}SHA256 {{ item.checksum|slice:":12" }}… · {{ item.byte_size|filesizeformat }}{% endif %}</small></p></div><span class="project-chip">{{ item.project.name }}</span><span class="mono-text">{{ item.detected_format }}</span><span><em class="catalog-state state-{{ item.validation_status }}"><i></i>{{ item.validation_status|title }}</em></span><span>{% if item.ready_publication %}<em class="safe-badge" title="{{ item.ready_publication.registry_digest }}">Ready</em>{% elif item.can_publish %}<button class="secondary-button compact" data-publish-image="{{ item.id }}">Publish locally</button>{% elif not item.license_acknowledged and item.source_type == 'upload' %}<em class="risk-badge">License required</em>{% else %}<span class="subtle">Not published</span>{% endif %}</span>
       {% elif section == "templates" %}
         <div class="entity-main"><span class="entity-icon violet">⬡</span><p><strong>{{ item.name }}</strong><small>{{ item.description|default:"Reusable device launch profile"|truncatechars:72 }}</small></p></div><span class="mono-text">{% if item.active_version %}v{{ item.active_version.version }} · {{ item.active_version.containerlab_kind }}{% else %}Unpublished{% endif %}</span><span>{% if item.privileged %}<em class="risk-badge">Elevated</em>{% else %}<em class="safe-badge">Standard</em>{% endif %}</span><span class="subtle">{{ item.updated_at|timesince }} ago</span><span class="row-action">›</span>
       {% else %}
@@ -45,4 +45,7 @@
   <div class="catalog-empty"><div class="empty-cube"><span></span><i></i><span></span></div><p class="eyebrow">NOTHING HERE YET</p><h2>No {{ title|lower }}</h2><p>{{ description }}</p>{% if create_url %}<a class="primary-button" href="{{ create_url }}"><span>＋</span> {{ create_label }}</a>{% endif %}</div>
   {% endif %}
 </section>
+{% if section == "images" %}<script>
+document.querySelectorAll('[data-publish-image]').forEach(button=>button.addEventListener('click',async()=>{button.disabled=true;button.textContent='Scheduling…';const response=await fetch(`/api/v1/images/${button.dataset.publishImage}/publish/`,{method:'POST',headers:{'X-CSRFToken':document.cookie.match(/csrftoken=([^;]+)/)?.[1]||'','Idempotency-Key':crypto.randomUUID()}});if(response.ok){button.textContent='Scheduled';setTimeout(()=>location.reload(),2500)}else{const data=await response.json();button.disabled=false;button.textContent=data.error?.details||data.error?.code||'Publish failed'}}));
+</script>{% endif %}
 {% endblock %}

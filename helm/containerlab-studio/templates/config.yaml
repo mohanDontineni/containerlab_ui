@@ -11,4 +11,5 @@ data:
   CLUSTER_IDENTITY: kubernetes-admin@kubernetes@https://192.168.1.148:6443
   LAB_NAMESPACE_PREFIX: containerlab-lab-
   ARTIFACT_ROOT: /artifacts
-
+  STUDIO_NAMESPACE: {{ .Release.Namespace | quote }}
+  PUBLISHER_IMAGE: "ghcr.io/clabernetes/clabernetes/clabernetes-launcher:0.8.0"

@@ -5,7 +5,7 @@ from pathlib import Path
 from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
-from .models import CaptureSession, DeviceInstance, LabArtifact, LabDeployment, LabLink, LabNode, OperationJob
+from .models import CaptureSession, DeviceInstance, ImageArtifact, ImageBuild, LabArtifact, LabDeployment, LabLink, LabNode, OperationJob, PublishedImage
 from .runtime import ClabernetesAdapter
 
 @shared_task(bind=True,autoretry_for=(ConnectionError,),retry_backoff=True,max_retries=5)
@@ -19,7 +19,15 @@ def execute_operation(self,job_id):
     adapter=ClabernetesAdapter()
     device_operations=("restart_device",)
     try:
-        if job.operation_type=="ping":
+        if job.operation_type=="publish_image":
+            artifact=ImageArtifact.objects.get(pk=job.target_id)
+            build=ImageBuild.objects.get(pk=job.request_payload["build_id"],artifact=artifact)
+            build.status="running"; build.started_at=timezone.now(); build.save(update_fields=["status","started_at","updated_at"])
+            result=adapter.publish_local_image(artifact,build)
+            published,_=PublishedImage.objects.update_or_create(artifact=artifact,registry_digest=result["reference"],defaults={"build":build,"repository":result["repository"],"architecture":artifact.architecture,"compatibility_result":{k:v for k,v in result.items() if k!="logs"},"lifecycle_status":"ready"})
+            build.status="succeeded"; build.finished_at=timezone.now(); build.log_reference=f"kubernetes-job/{build.job_identity}"; build.failure_details={}; build.save()
+            result={**{k:v for k,v in result.items() if k!="logs"},"published_image_id":str(published.id)}
+        elif job.operation_type=="ping":
             node=LabNode.objects.get(pk=job.request_payload["node_id"],revision=job.deployment.revision)
             result=adapter.ping(job.deployment,node,job.request_payload["target"],job.request_payload["count"],job.request_payload["timeout"])
         elif job.operation_type=="capture_packets":
@@ -59,13 +67,14 @@ def execute_operation(self,job_id):
             deployment.resource_identities={"topology":{"name":"topology","namespace":deployment.namespace}}
         elif job.operation_type in ("stop_lab","delete_runtime"):
             deployment.observed_state=LabDeployment.State.STOPPED
-        if job.operation_type not in ("ping","capture_packets","set_link_condition",*device_operations):
+        if job.operation_type not in ("publish_image","ping","capture_packets","set_link_condition",*device_operations):
             deployment.last_reconciliation=timezone.now()
             deployment.error_details={}
             deployment.save(update_fields=["observed_state","resource_identities","last_reconciliation","error_details","updated_at"])
         job.state="succeeded"; job.progress=100; job.error_details={}
-        if job.operation_type in ("ping","capture_packets","set_link_condition") or job.operation_type in device_operations: job.result_payload=result
+        if job.operation_type in ("publish_image","ping","capture_packets","set_link_condition") or job.operation_type in device_operations: job.result_payload=result
     except Exception as exc:
+        if job.operation_type=="publish_image": ImageBuild.objects.filter(pk=job.request_payload.get("build_id")).update(status="failed",finished_at=timezone.now(),failure_details={"type":type(exc).__name__,"message":str(exc)[:2000]})
         if job.operation_type=="capture_packets": CaptureSession.objects.filter(pk=job.target_id).update(status="failed")
         if job.deployment_id and job.operation_type not in ("ping","capture_packets","set_link_condition",*device_operations):
             LabDeployment.objects.filter(pk=job.deployment_id).update(observed_state=LabDeployment.State.FAILED,

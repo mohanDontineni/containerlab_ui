@@ -50,6 +50,27 @@ def test_octet_stream_chunk_endpoint_advances_exact_offset(settings,tmp_path):
     assert session.received_bytes==3 and Path(session.artifact_destination).read_bytes()==b"abc"
 
 @pytest.mark.django_db
+def test_local_publication_is_licensed_project_scoped_and_idempotent(monkeypatch):
+    monkeypatch.setattr("studio.api.execute_operation.delay",lambda *_:None)
+    owner=User.objects.create_user("publisher",password="long-enough-password")
+    viewer=User.objects.create_user("publish-viewer",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="publish")
+    ProjectMembership.objects.create(project=project,user=viewer,role="viewer")
+    artifact=ImageArtifact.objects.create(project=project,owner=owner,original_filename="alpine.tar",detected_format="docker-archive",
+        byte_size=10,checksum="a"*64,architecture="amd64",storage_reference="/artifacts/quarantine/image",validation_status="validated",
+        inspection_result={"deployable":True,"import_source":"sha256:"+"b"*64})
+    client=APIClient();client.force_authenticate(viewer)
+    assert client.post(f"/api/v1/images/{artifact.id}/publish/",{},format="json",HTTP_IDEMPOTENCY_KEY="viewer-publish").status_code==403
+    client.force_authenticate(owner)
+    assert client.post(f"/api/v1/images/{artifact.id}/publish/",{},format="json",HTTP_IDEMPOTENCY_KEY="unlicensed").status_code==422
+    artifact.license_acknowledged=True;artifact.save(update_fields=["license_acknowledged"])
+    first=client.post(f"/api/v1/images/{artifact.id}/publish/",{},format="json",HTTP_IDEMPOTENCY_KEY="publish-once")
+    second=client.post(f"/api/v1/images/{artifact.id}/publish/",{},format="json",HTTP_IDEMPOTENCY_KEY="publish-once")
+    assert first.status_code==second.status_code==202 and first.data["id"]==second.data["id"]
+    assert OperationJob.objects.filter(operation_type="publish_image",target_id=artifact.id).count()==1
+    assert AuditEvent.objects.filter(action="image.publication_scheduled",target_id=artifact.id).count()==1
+
+@pytest.mark.django_db
 def test_owner_can_publish_and_schedule_deployable_lab(django_capture_on_commit_callbacks):
     owner=User.objects.create_user("deployer",password="long-enough-password")
     project=Project.objects.create(owner=owner,name="runtime")

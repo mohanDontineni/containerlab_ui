@@ -60,3 +60,7 @@ MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(50 * 1024**3)))
 UPLOAD_CHUNK_BYTES = int(os.environ.get("UPLOAD_CHUNK_BYTES", str(16 * 1024**2)))
 CLUSTER_IDENTITY = os.environ.get("CLUSTER_IDENTITY", "unconfigured")
 LAB_NAMESPACE_PREFIX = os.environ.get("LAB_NAMESPACE_PREFIX", "containerlab-lab-")
+STUDIO_NAMESPACE = os.environ.get("STUDIO_NAMESPACE", "containerlab")
+PUBLISHER_IMAGE = os.environ.get("PUBLISHER_IMAGE", "ghcr.io/clabernetes/clabernetes/clabernetes-launcher:0.8.0")
+PUBLISHER_TIMEOUT_SECONDS = int(os.environ.get("PUBLISHER_TIMEOUT_SECONDS", "180"))
+PUBLISHER_NODE_SELECTOR = {"kubernetes.io/hostname": os.environ["PUBLISHER_NODE_NAME"]} if os.environ.get("PUBLISHER_NODE_NAME") else {}

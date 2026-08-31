@@ -131,6 +131,33 @@ class UploadViewSet(viewsets.ModelViewSet):
             correlation_id=getattr(request,"correlation_id",""),metadata={"received_bytes":session.received_bytes})
         return Response(status=204)
 
+class ImageArtifactViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class=serializers.ImageArtifactSerializer
+    def get_queryset(self): return models.ImageArtifact.objects.filter(project__in=visible_projects(self.request.user)).select_related("project")
+    @action(detail=True,methods=["post"])
+    def publish(self,request,pk=None):
+        artifact=self.get_object()
+        if project_role(request.user,artifact.project) not in (models.ProjectMembership.Role.ADMIN,models.ProjectMembership.Role.EDITOR):
+            from rest_framework.exceptions import PermissionDenied; raise PermissionDenied()
+        if artifact.validation_status!=models.ImageArtifact.Validation.VALIDATED or artifact.detected_format not in ("docker-archive","oci-archive"):
+            return Response({"error":{"code":"image_not_publishable","details":"Only validated Docker or OCI archives can be published."}},status=422)
+        if not artifact.license_acknowledged: return Response({"error":{"code":"license_acknowledgement_required"}},status=422)
+        key=request.headers.get("Idempotency-Key")
+        if not key: return Response({"error":{"code":"idempotency_key_required"}},status=400)
+        existing=models.OperationJob.objects.filter(owner=request.user,idempotency_key=key).first()
+        if existing:
+            if existing.operation_type!="publish_image" or existing.target_id!=artifact.id: return Response({"error":{"code":"idempotency_conflict"}},status=409)
+            if existing.state in ("accepted","scheduled"): execute_operation.delay(str(existing.id))
+            return Response(serializers.OperationSerializer(existing).data,status=202)
+        published=artifact.published_images.filter(lifecycle_status="ready").first()
+        if published: return Response(serializers.PublishedImageSerializer(published).data,status=200)
+        with transaction.atomic():
+            build_id=uuid.uuid4(); build=models.ImageBuild.objects.create(id=build_id,artifact=artifact,recipe_version="node-containerd-v1",job_identity=f"studio-publish-{build_id.hex[:20]}")
+            job=models.OperationJob.objects.create(owner=request.user,operation_type="publish_image",target_id=artifact.id,idempotency_key=key,state="scheduled",request_payload={"build_id":str(build.id)})
+            models.AuditEvent.objects.create(actor=request.user,project=artifact.project,action="image.publication_scheduled",target_type="ImageArtifact",target_id=artifact.id,correlation_id=getattr(request,"correlation_id",""),metadata={"build":str(build.id),"operation":str(job.id)})
+            transaction.on_commit(lambda: execute_operation.delay(str(job.id)))
+        return Response(serializers.OperationSerializer(job).data,status=202)
+
 class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class=serializers.DeploymentSerializer
     def get_queryset(self): return models.LabDeployment.objects.filter(revision__lab__project__in=visible_projects(self.request.user))

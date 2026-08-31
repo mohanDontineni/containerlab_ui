@@ -3,6 +3,9 @@ import base64
 import binascii
 import shlex
 import struct
+import time
+from pathlib import Path
+from django.conf import settings
 import yaml
 from kubernetes import client, config
 from kubernetes.client.exceptions import ApiException
@@ -36,18 +39,53 @@ class Plan: namespace:str; topology_name:str; manifest:dict
 class ClabernetesAdapter:
     capabilities={"deploy_lab":"supported","get_observed_state":"supported","delete_runtime":"supported","restart_device":"supported",
         "resolve_console_target":"supported","start_capture":"experimental","stop_lab":"delete_and_redeploy","set_link_condition":"supported","collect_configuration":"template_dependent"}
-    def __init__(self, custom_api=None, core_api=None):
+    def __init__(self, custom_api=None, core_api=None, batch_api=None):
         if custom_api is None:
             try: config.load_incluster_config()
             except config.ConfigException: config.load_kube_config()
-        self.custom=custom_api or client.CustomObjectsApi(); self.core=core_api or client.CoreV1Api()
+        self.custom=custom_api or client.CustomObjectsApi(); self.core=core_api or client.CoreV1Api(); self.batch=batch_api or client.BatchV1Api()
     @staticmethod
     def validate_topology(revision):
         errors=[]
         for node in revision.nodes.select_related("template_version","published_image"):
             if not node.published_image: errors.append(f"{node.name}: no immutable published image")
-            elif "@sha256:" not in node.published_image.registry_digest: errors.append(f"{node.name}: image is not digest-pinned")
+            elif "@sha256:" not in node.published_image.registry_digest:
+                publication=node.published_image.compatibility_result
+                expected=f":sha256-{node.published_image.artifact.checksum}"
+                if publication.get("publication_mode")!="node-containerd" or not node.published_image.registry_digest.endswith(expected):
+                    errors.append(f"{node.name}: image is not content-addressed")
         return errors
+    def publish_local_image(self,artifact,build):
+        path=Path(artifact.storage_reference)
+        if not path.is_file(): raise CapabilityError("The validated archive is no longer available")
+        hasher=__import__("hashlib").sha256()
+        with path.open("rb") as source:
+            for chunk in iter(lambda:source.read(4*1024*1024),b""): hasher.update(chunk)
+        digest=hasher.hexdigest()
+        if digest!=artifact.checksum: raise CapabilityError("Archive checksum changed after inspection")
+        repository=f"containerlab.local/studio/{artifact.project_id.hex}/{artifact.id.hex}"
+        reference=f"{repository}:sha256-{artifact.checksum}"
+        source=artifact.inspection_result.get("import_source")
+        if not source: raise CapabilityError("Archive inspection did not identify an import source")
+        archive=f"/artifacts/{path.relative_to(settings.MEDIA_ROOT)}"
+        command=f"set -eu; ctr -a /run/containerd/containerd.sock -n k8s.io images import --digests '{archive}'; ctr -a /run/containerd/containerd.sock -n k8s.io images tag --force '{source}' '{reference}'; ctr -a /run/containerd/containerd.sock -n k8s.io images label '{reference}' io.cri-containerd.image=managed"
+        pod=client.V1PodTemplateSpec(metadata=client.V1ObjectMeta(labels={"studio.containerlab.io/image-build":str(build.id)}),spec=client.V1PodSpec(
+            restart_policy="Never",service_account_name="containerlab-studio-reconciler",node_selector=settings.PUBLISHER_NODE_SELECTOR,
+            security_context=client.V1PodSecurityContext(run_as_user=0,run_as_non_root=False,seccomp_profile=client.V1SeccompProfile(type="RuntimeDefault")),
+            containers=[client.V1Container(name="publisher",image=settings.PUBLISHER_IMAGE,command=["sh","-c",command],security_context=client.V1SecurityContext(allow_privilege_escalation=False,capabilities=client.V1Capabilities(drop=["ALL"])),volume_mounts=[client.V1VolumeMount(name="artifacts",mount_path="/artifacts",read_only=True),client.V1VolumeMount(name="containerd",mount_path="/run/containerd/containerd.sock")])],
+            volumes=[client.V1Volume(name="artifacts",persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(claim_name="containerlab-studio-artifacts",read_only=True)),client.V1Volume(name="containerd",host_path=client.V1HostPathVolumeSource(path="/run/containerd/containerd.sock",type="Socket"))]))
+        body=client.V1Job(metadata=client.V1ObjectMeta(name=build.job_identity,namespace=settings.STUDIO_NAMESPACE),spec=client.V1JobSpec(backoff_limit=0,ttl_seconds_after_finished=600,template=pod))
+        self.batch.create_namespaced_job(settings.STUDIO_NAMESPACE,body)
+        deadline=time.monotonic()+settings.PUBLISHER_TIMEOUT_SECONDS
+        while time.monotonic()<deadline:
+            status=self.batch.read_namespaced_job_status(build.job_identity,settings.STUDIO_NAMESPACE).status
+            if status.succeeded: break
+            if status.failed: raise CapabilityError("Node image publication job failed")
+            time.sleep(2)
+        else: raise CapabilityError("Node image publication timed out")
+        pods=self.core.list_namespaced_pod(settings.STUDIO_NAMESPACE,label_selector=f"job-name={build.job_identity}").items
+        logs=self.core.read_namespaced_pod_log(pods[0].metadata.name,settings.STUDIO_NAMESPACE,tail_lines=200) if pods else ""
+        return {"reference":reference,"repository":repository,"archive_checksum":digest,"logs":logs[-12000:],"publication_mode":"node-containerd"}
     def plan_deployment(self,deployment):
         revision=deployment.revision
         nodes={n.name:{"kind":n.template_version.containerlab_kind,"image":n.published_image.registry_digest} for n in revision.nodes.select_related("template_version","published_image")}

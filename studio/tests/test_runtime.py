@@ -22,6 +22,16 @@ def test_plan_uses_clabernetes_080_string_definition():
     assert yaml.safe_load(definition)["topology"]["nodes"]["r1"]["image"].endswith("@sha256:abc")
     assert plan.manifest["spec"]["expose"]["disableExpose"] is True
 
+def test_node_local_checksum_reference_is_accepted_as_immutable():
+    checksum="a"*64
+    artifact=SimpleNamespace(checksum=checksum)
+    image=SimpleNamespace(registry_digest=f"containerlab.local/studio/p/a:sha256-{checksum}",artifact=artifact,compatibility_result={"publication_mode":"node-containerd"})
+    node=SimpleNamespace(name="r1",published_image=image)
+    revision=SimpleNamespace(nodes=SimpleNamespace(select_related=lambda *_:[node]))
+    assert ClabernetesAdapter.validate_topology(revision)==[]
+    image.registry_digest="containerlab.local/studio/p/a:latest"
+    assert ClabernetesAdapter.validate_topology(revision)==["r1: image is not content-addressed"]
+
 def test_observe_devices_resolves_only_topology_owned_pods():
     node={"metadata":{"name":"r1","uid":"node-uid","labels":{"c9s.run/topologyNode":"r1"}},"status":{"readiness":"ready"}}
     custom=SimpleNamespace(list_namespaced_custom_object=lambda *_args,**_kwargs:{"items":[node]})

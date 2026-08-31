@@ -43,6 +43,7 @@ class UploadSession(UUIDModel):
     expires_at = models.DateTimeField()
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.ACTIVE)
     expected_checksum = models.CharField(max_length=64, blank=True)
+    license_acknowledged = models.BooleanField(default=False)
     computed_checksum = models.CharField(max_length=64, blank=True)
     artifact_destination = models.CharField(max_length=512)
 
