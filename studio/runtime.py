@@ -94,7 +94,7 @@ class ClabernetesAdapter:
             "base64 -w 0 \"$capture_file\""
         )
         encoded=stream(self.core.connect_get_namespaced_pod_exec,pod,deployment.namespace,command=["sh","-c",command],
-            stderr=True,stdin=False,stdout=True,tty=False,_request_timeout=duration+15)
+            stderr=False,stdin=False,stdout=True,tty=False,_request_timeout=duration+15)
         if len(encoded)>4*1024*1024: raise CapabilityError("Capture exceeded the encoded transfer limit")
         try: payload=base64.b64decode(encoded,validate=True)
         except (binascii.Error,ValueError) as exc: raise CapabilityError("Launcher returned an invalid capture stream") from exc
