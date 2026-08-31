@@ -4,6 +4,8 @@ import uuid
 
 from django.db import transaction
 from django.db.models import Max
+from rest_framework.parsers import BaseParser
+from rest_framework.exceptions import ParseError
 
 from .configurations import decrypt_configuration, encrypt_configuration
 from .models import (ConfigurationVersion, DeviceTemplateVersion, LabInterface,
@@ -16,6 +18,16 @@ MAX_BUNDLE_BYTES = 4 * 1024 * 1024
 
 class BundleError(ValueError):
     pass
+
+
+class LabBundleParser(BaseParser):
+    media_type = "application/vnd.containerlab.studio.lab+json"
+
+    def parse(self, stream, media_type=None, parser_context=None):
+        content = stream.read(MAX_BUNDLE_BYTES + 1)
+        if len(content) > MAX_BUNDLE_BYTES:
+            raise ParseError("Bundle exceeds the 4 MiB limit")
+        return content
 
 
 def export_lab_bundle(lab):

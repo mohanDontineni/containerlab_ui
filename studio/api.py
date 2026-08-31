@@ -12,13 +12,14 @@ from django.utils.text import slugify
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.parsers import JSONParser
 from rest_framework.views import exception_handler as drf_exception_handler
 from . import models, serializers
 from .permissions import ProjectAccess, project_role
 from .runtime import ClabernetesAdapter
 from .tasks import execute_operation, reconcile_deployment
 from .uploads import UploadError, append_chunk, finalize
-from .bundles import BundleError, export_lab_bundle, import_lab_bundle
+from .bundles import BundleError, LabBundleParser, export_lab_bundle, import_lab_bundle
 
 def exception_handler(exc,context):
     response=drf_exception_handler(exc,context)
@@ -50,12 +51,12 @@ class LabViewSet(viewsets.ModelViewSet):
         response["Content-Disposition"]=f'attachment; filename="{slugify(lab.name)[:80] or "lab"}.clabstudio.json"'
         response["X-Content-Type-Options"]="nosniff"
         return response
-    @action(detail=True,methods=["post"],url_path="import")
+    @action(detail=True,methods=["post"],url_path="import",parser_classes=[LabBundleParser,JSONParser])
     def import_bundle(self,request,pk=None):
         lab=self.get_object()
         if project_role(request.user,lab.project) not in (models.ProjectMembership.Role.ADMIN,models.ProjectMembership.Role.EDITOR):
             from rest_framework.exceptions import PermissionDenied; raise PermissionDenied()
-        raw=request.body
+        raw=request.data
         try: revision=import_lab_bundle(lab,request.user,raw)
         except BundleError as exc: return Response({"error":{"code":"invalid_lab_bundle","details":str(exc)}},status=422)
         models.AuditEvent.objects.create(actor=request.user,project=lab.project,action="lab.imported",target_type="Lab",target_id=lab.id,
