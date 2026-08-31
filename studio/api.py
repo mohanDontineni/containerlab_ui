@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from django.conf import settings
 from django.db import IntegrityError, transaction
-from django.db.models import Q
+from django.db.models import Count,Q
 from django.http import FileResponse, HttpResponse
 from django.utils import timezone
 from django.utils.text import slugify
@@ -145,6 +145,60 @@ class LabViewSet(viewsets.ModelViewSet):
         payload=serializers.LabSerializer(clone).data
         payload.update({"workspace_url":f"/labs/{clone.id}/topology/","node_count":revision.nodes.count(),"link_count":revision.links.count()})
         return Response(payload,status=201)
+    @action(detail=True,methods=["get"],url_path="revisions")
+    def revisions(self,request,pk=None):
+        lab=self.get_object()
+        rows=lab.revisions.annotate(node_count=Count("nodes",distinct=True),link_count=Count("links",distinct=True),
+            deployment_count=Count("deployments",distinct=True)).order_by("-revision_number")
+        return Response({"current_draft":str(lab.current_draft_id) if lab.current_draft_id else None,"revisions":[{
+            "id":str(row.id),"revision_number":row.revision_number,"edit_version":row.edit_version,"immutable":row.immutable,
+            "topology_checksum":row.topology_checksum,"node_count":row.node_count,"link_count":row.link_count,
+            "deployment_count":row.deployment_count,"created_at":row.created_at,"is_current_draft":row.id==lab.current_draft_id,
+        } for row in rows]})
+    @action(detail=True,methods=["post"],url_path=r"revisions/(?P<revision_id>[^/.]+)/restore")
+    def restore_revision(self,request,pk=None,revision_id=None):
+        lab=self.get_object()
+        if project_role(request.user,lab.project) not in (models.ProjectMembership.Role.ADMIN,models.ProjectMembership.Role.EDITOR):
+            from rest_framework.exceptions import PermissionDenied; raise PermissionDenied()
+        try: source_id=uuid.UUID(str(revision_id))
+        except (ValueError,TypeError,AttributeError): return Response({"error":{"code":"invalid_revision"}},status=422)
+        source=lab.revisions.filter(pk=source_id).first()
+        if not source: return Response({"error":{"code":"revision_not_found"}},status=404)
+        key=request.headers.get("Idempotency-Key")
+        if not key: return Response({"error":{"code":"idempotency_key_required"}},status=400)
+        existing=models.OperationJob.objects.filter(owner=request.user,idempotency_key=key).first()
+        if existing:
+            if existing.operation_type!="restore_revision" or existing.target_id!=source.id:
+                return Response({"error":{"code":"idempotency_conflict"}},status=409)
+            restored=lab.revisions.filter(pk=existing.result_payload.get("revision_id")).first()
+            if not restored: return Response({"error":{"code":"restore_result_unavailable"}},status=409)
+            return Response({"revision_id":str(restored.id),"revision_number":restored.revision_number,"edit_version":restored.edit_version,
+                "node_count":restored.nodes.count(),"link_count":restored.links.count(),"operation_id":str(existing.id)},status=200)
+        expected=request.data.get("expected_current_draft")
+        expected=str(expected) if expected else None
+        bundle=export_lab_bundle(lab,source)
+        try:
+            with transaction.atomic():
+                locked=models.Lab.objects.select_for_update().get(pk=lab.pk)
+                actual=str(locked.current_draft_id) if locked.current_draft_id else None
+                if actual!=expected:
+                    return Response({"error":{"code":"draft_changed","details":"The active draft changed while revision history was open.",
+                        "current_draft":actual}},status=409)
+                job=models.OperationJob.objects.create(owner=request.user,operation_type="restore_revision",target_id=source.id,
+                    idempotency_key=key,state="started",progress=25,request_payload={"lab_id":str(lab.id),"expected_current_draft":expected})
+                restored=import_lab_bundle(locked,request.user,bundle)
+                job.state="succeeded";job.progress=100;job.result_payload={"revision_id":str(restored.id),"source_revision_id":str(source.id)}
+                job.save(update_fields=["state","progress","result_payload","updated_at"])
+                models.AuditEvent.objects.create(actor=request.user,project=lab.project,action="lab.revision_restored",target_type="LabRevision",
+                    target_id=restored.id,correlation_id=getattr(request,"correlation_id",""),metadata={"lab":str(lab.id),
+                        "source_revision":str(source.id),"source_revision_number":source.revision_number,"operation":str(job.id),
+                        "node_count":restored.nodes.count(),"link_count":restored.links.count()})
+        except BundleError as exc:
+            return Response({"error":{"code":"revision_restore_failed","details":str(exc)}},status=422)
+        except IntegrityError:
+            return Response({"error":{"code":"operation_conflict"}},status=409)
+        return Response({"revision_id":str(restored.id),"revision_number":restored.revision_number,"edit_version":restored.edit_version,
+            "node_count":restored.nodes.count(),"link_count":restored.links.count(),"operation_id":str(job.id)},status=201)
     @action(detail=True,methods=["get"],url_path="export")
     def export_bundle(self,request,pk=None):
         lab=self.get_object()

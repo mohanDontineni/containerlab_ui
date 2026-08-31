@@ -1,4 +1,5 @@
 import pytest
+import uuid
 from pathlib import Path
 from django.conf import settings
 from django.utils import timezone
@@ -142,6 +143,44 @@ def test_lab_clone_is_deep_project_scoped_audited_and_quota_enforced():
     Lab.objects.create(project=project,name="quota filler")
     quota=client.post(f"/api/v1/labs/{lab.id}/clone/",{"name":"over quota"},format="json")
     assert quota.status_code==409 and quota.data["error"]["code"]=="project_quota_exceeded"
+
+@pytest.mark.django_db
+def test_revision_history_restore_creates_new_draft_is_concurrency_safe_and_idempotent():
+    owner=User.objects.create_user("history-owner",password="long-enough-password");viewer=User.objects.create_user("history-viewer",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="history-project");ProjectMembership.objects.create(project=project,user=viewer,role="viewer")
+    lab=Lab.objects.create(project=project,name="history-lab");template=DeviceTemplateVersion.objects.get(template__name="Linux Host")
+    artifact=ImageArtifact.objects.create(project=project,owner=owner,source_type="registry",original_filename="alpine",detected_format="oci-registry",
+        byte_size=0,checksum="1"*64,architecture="amd64",storage_reference="docker.io/alpine",validation_status="validated")
+    image=PublishedImage.objects.create(artifact=artifact,registry_digest="docker.io/alpine@sha256:"+"1"*64,repository="docker.io/alpine",architecture="amd64")
+    config=ConfigurationVersion.objects.create(project=project,name="history/r1/startup",version=1,encrypted_content=encrypt_configuration("hostname restored\n"),checksum="2"*64,created_by=owner)
+    published=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="3"*64,immutable=True,annotations=[{"text":"known-good"}])
+    source_node=LabNode.objects.create(revision=published,name="r1",template_version=template,published_image=image,startup_configuration=config,position={"x":10,"y":20})
+    for number in range(1,5): LabInterface.objects.create(node=source_node,name=f"eth{number}")
+    LabDeployment.objects.create(revision=published,cluster_identity="test",namespace="clab-history-test",runtime_version="0.8.0",observed_state="stopped")
+    draft=LabRevision.objects.create(lab=lab,revision_number=2,topology_checksum="4"*64)
+    draft_node=LabNode.objects.create(revision=draft,name="temporary",template_version=template,published_image=image)
+    for number in range(1,5): LabInterface.objects.create(node=draft_node,name=f"eth{number}")
+    lab.current_draft=draft;lab.save(update_fields=["current_draft"])
+    client=APIClient();client.force_authenticate(viewer)
+    history=client.get(f"/api/v1/labs/{lab.id}/revisions/")
+    assert history.status_code==200 and history.data["current_draft"]==str(draft.id) and len(history.data["revisions"])==2
+    assert history.data["revisions"][1]["deployment_count"]==1
+    endpoint=f"/api/v1/labs/{lab.id}/revisions/{published.id}/restore/"
+    assert client.post(endpoint,{"expected_current_draft":str(draft.id)},format="json",HTTP_IDEMPOTENCY_KEY="viewer-restore").status_code==403
+    client.force_authenticate(owner)
+    stale=client.post(endpoint,{"expected_current_draft":None},format="json",HTTP_IDEMPOTENCY_KEY="stale-restore")
+    assert stale.status_code==409 and stale.data["error"]["code"]=="draft_changed"
+    restored=client.post(endpoint,{"expected_current_draft":str(draft.id)},format="json",HTTP_IDEMPOTENCY_KEY="restore-v1")
+    assert restored.status_code==201 and restored.data["revision_number"]==3 and restored.data["node_count"]==1
+    replay=client.post(endpoint,{"expected_current_draft":str(draft.id)},format="json",HTTP_IDEMPOTENCY_KEY="restore-v1")
+    assert replay.status_code==200 and replay.data["revision_id"]==restored.data["revision_id"]
+    lab.refresh_from_db();new_draft=lab.current_draft
+    assert new_draft.id==uuid.UUID(restored.data["revision_id"]) and not LabRevision.objects.filter(id=draft.id).exists()
+    assert LabRevision.objects.filter(id=published.id,immutable=True).exists() and new_draft.annotations==[{"text":"known-good"}]
+    cloned_node=new_draft.nodes.get();assert cloned_node.name=="r1" and cloned_node.id!=source_node.id
+    assert decrypt_configuration(cloned_node.startup_configuration.encrypted_content)=="hostname restored\n"
+    assert OperationJob.objects.filter(owner=owner,operation_type="restore_revision",idempotency_key="restore-v1",state="succeeded").count()==1
+    assert AuditEvent.objects.filter(project=project,action="lab.revision_restored",target_id=new_draft.id,metadata__source_revision=str(published.id)).exists()
 
 @pytest.mark.django_db
 def test_upload_creation_is_project_scoped_and_checksum_optional():

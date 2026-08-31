@@ -85,6 +85,8 @@ type SavedLink = {
 };
 type Snapshot = { nodes: Node<DeviceData>[]; edges: Edge[] };
 type PublishedImage = { id: string; name: string; digest: string; architecture: string; status: string };
+type RevisionSummary = { id:string; revision_number:number; edit_version:number; immutable:boolean; topology_checksum:string;
+  node_count:number; link_count:number; deployment_count:number; created_at:string; is_current_draft:boolean };
 const params = new URLSearchParams(location.search);
 const labId = params.get("lab") || "";
 const labName = params.get("name") || "Topology Workspace";
@@ -164,6 +166,11 @@ function Workspace() {
   const [cloneOpen, setCloneOpen] = useState(false);
   const [cloneName, setCloneName] = useState(`${labName} copy`);
   const [cloning, setCloning] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [restoring, setRestoring] = useState<string | null>(null);
+  const [revisions, setRevisions] = useState<RevisionSummary[]>([]);
+  const [currentDraftId, setCurrentDraftId] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [notice, setNotice] = useState("Ready");
   const [history, setHistory] = useState<Snapshot[]>([]);
@@ -427,6 +434,27 @@ function Workspace() {
       location.href=data.workspace_url;
     } catch (error) { setNotice(error instanceof Error ? error.message : "Copy failed"); setCloning(false); }
   };
+  const openHistory = async () => {
+    if (dirty) { setNotice("Save the draft before opening revision history"); return; }
+    setHistoryOpen(true);setHistoryLoading(true);
+    try {
+      const response=await fetch(`/api/v1/labs/${labId}/revisions/`,{credentials:"same-origin"});const data=await response.json();
+      if (!response.ok) throw new Error(data.error?.details||"Unable to load revision history");
+      setRevisions(data.revisions);setCurrentDraftId(data.current_draft);
+    } catch (error) { setNotice(error instanceof Error?error.message:"Unable to load revision history");setHistoryOpen(false); }
+    finally { setHistoryLoading(false); }
+  };
+  const restoreRevision = async (revision:RevisionSummary) => {
+    if (!confirm(`Restore revision ${revision.revision_number} as a new editable draft? Your current saved draft will be replaced.`)) return;
+    setRestoring(revision.id);setNotice(`Restoring revision ${revision.revision_number}…`);
+    try {
+      const response=await fetch(`/api/v1/labs/${labId}/revisions/${revision.id}/restore/`,{method:"POST",credentials:"same-origin",
+        headers:{"Content-Type":"application/json","X-CSRFToken":csrf(),"Idempotency-Key":crypto.randomUUID()},
+        body:JSON.stringify({expected_current_draft:currentDraftId})});const data=await response.json();
+      if (!response.ok) throw new Error(data.error?.details||data.error?.code||"Restore failed");
+      setNotice(`Revision ${revision.revision_number} restored as draft revision ${data.revision_number}`);location.reload();
+    } catch (error) { setNotice(error instanceof Error?error.message:"Restore failed");setRestoring(null); }
+  };
   const importBundle = async (file?: File) => {
     if (!file) return;
     if (dirty && !confirm("Importing replaces this unsaved draft. Continue?")) return;
@@ -554,6 +582,7 @@ function Workspace() {
           <button onClick={() => rf?.fitView({ padding: 0.2 })}>Fit</button>
           <button onClick={exportBundle} disabled={dirty}>Export</button>
           <button onClick={() => setCloneOpen(true)} disabled={dirty}>Save as</button>
+          <button onClick={openHistory} disabled={dirty}>History</button>
           <button onClick={() => importInput.current?.click()}>Import</button>
           <input ref={importInput} className="file-input" type="file" accept=".json,.clabstudio.json,application/json" onChange={(e)=>importBundle(e.target.files?.[0])}/>
           <button>
@@ -576,6 +605,17 @@ function Workspace() {
           <p>Create an independent editable copy with the same devices, links, pinned images, annotations, and startup configurations.</p>
           <label>New lab name<input autoFocus maxLength={120} value={cloneName} onChange={(event)=>setCloneName(event.target.value)} onKeyDown={(event)=>event.key==="Enter"&&cloneLab()}/></label>
           <div><button onClick={()=>setCloneOpen(false)} disabled={cloning}>Cancel</button><button className="primary" onClick={cloneLab} disabled={cloning||!cloneName.trim()}>{cloning?"Creating…":"Create lab copy"}</button></div>
+        </section>
+      </div>}
+      {historyOpen && <div className="modal-backdrop" role="presentation" onMouseDown={()=>!restoring&&setHistoryOpen(false)}>
+        <section className="history-dialog" role="dialog" aria-modal="true" aria-labelledby="history-title" onMouseDown={(event)=>event.stopPropagation()}>
+          <header><div><p className="dialog-eyebrow">VERSION CONTROL</p><h2 id="history-title">Topology revision history</h2><p>Published versions remain immutable. Restore creates a new editable draft.</p></div><button aria-label="Close revision history" onClick={()=>setHistoryOpen(false)} disabled={!!restoring}>×</button></header>
+          <div className="revision-list">{historyLoading?<p className="history-empty">Loading revision history…</p>:revisions.length===0?<p className="history-empty">No saved revisions yet.</p>:revisions.map((revision)=><article key={revision.id} className={revision.is_current_draft?"current":""}>
+            <span className="revision-mark">{revision.revision_number}</span><div className="revision-copy"><strong>Revision {revision.revision_number} {revision.is_current_draft&&<em>Current draft</em>}</strong><small>{new Date(revision.created_at).toLocaleString()} · {revision.node_count} devices · {revision.link_count} links</small><code>{revision.topology_checksum.slice(0,12)}</code></div>
+            <span className={`revision-state ${revision.immutable?"published":"draft"}`}>{revision.immutable?`Published · ${revision.deployment_count} deploy${revision.deployment_count===1?"":"s"}`:"Editable"}</span>
+            <button onClick={()=>restoreRevision(revision)} disabled={revision.is_current_draft||!!restoring}>{restoring===revision.id?"Restoring…":"Restore"}</button>
+          </article>)}</div>
+          <footer><span>Restoring never changes an existing deployment.</span><button onClick={()=>setHistoryOpen(false)} disabled={!!restoring}>Close</button></footer>
         </section>
       </div>}
       <div className="workspace-body">

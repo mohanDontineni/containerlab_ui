@@ -30,8 +30,10 @@ class LabBundleParser(BaseParser):
         return content
 
 
-def export_lab_bundle(lab):
-    revision = lab.current_draft or lab.revisions.order_by("-revision_number").first()
+def export_lab_bundle(lab, revision=None):
+    revision = revision or lab.current_draft or lab.revisions.order_by("-revision_number").first()
+    if revision and revision.lab_id != lab.id:
+        raise BundleError("Revision does not belong to this lab")
     nodes, links = [], []
     if revision:
         for node in revision.nodes.select_related(
