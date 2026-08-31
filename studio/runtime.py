@@ -91,10 +91,13 @@ class ClabernetesAdapter:
             f"sleep {duration}; "
             "kill -TERM \"$capture_pid\" 2>/dev/null || true; sleep 1; "
             "kill -KILL \"$capture_pid\" 2>/dev/null || true; wait \"$capture_pid\" 2>/dev/null || true; "
-            "base64 -w 0 \"$capture_file\""
+            "printf '__STUDIO_PCAP_BEGIN__'; base64 -w 0 \"$capture_file\"; printf '__STUDIO_PCAP_END__'"
         )
         encoded=stream(self.core.connect_get_namespaced_pod_exec,pod,deployment.namespace,command=["sh","-c",command],
-            stderr=False,stdin=False,stdout=True,tty=False,_request_timeout=duration+15)
+            stderr=True,stdin=False,stdout=True,tty=False,_request_timeout=duration+15)
+        begin="__STUDIO_PCAP_BEGIN__"; end="__STUDIO_PCAP_END__"
+        if begin not in encoded or end not in encoded: raise CapabilityError("Launcher did not complete the capture stream")
+        encoded=encoded.split(begin,1)[1].split(end,1)[0]
         if len(encoded)>4*1024*1024: raise CapabilityError("Capture exceeded the encoded transfer limit")
         try: payload=base64.b64decode(encoded,validate=True)
         except (binascii.Error,ValueError) as exc: raise CapabilityError("Launcher returned an invalid capture stream") from exc

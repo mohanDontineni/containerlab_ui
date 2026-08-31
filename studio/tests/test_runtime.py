@@ -45,7 +45,7 @@ def test_device_restart_replaces_only_selected_clabernetes_pod():
 def test_bounded_capture_uses_verified_host_interface_and_returns_pcap(monkeypatch):
     pcap=b"\xd4\xc3\xb2\xa1"+b"\x00"*20
     calls=[]
-    monkeypatch.setattr("studio.runtime.stream",lambda method,pod,namespace,**kwargs: calls.append((pod,namespace,kwargs)) or base64.b64encode(pcap).decode())
+    monkeypatch.setattr("studio.runtime.stream",lambda method,pod,namespace,**kwargs: calls.append((pod,namespace,kwargs)) or "Killed\n__STUDIO_PCAP_BEGIN__"+base64.b64encode(pcap).decode()+"__STUDIO_PCAP_END__")
     core=SimpleNamespace(connect_get_namespaced_pod_exec=object())
     adapter=ClabernetesAdapter(custom_api=SimpleNamespace(),core_api=core)
     node=SimpleNamespace(name="r1"); interface=SimpleNamespace(name="eth2")
@@ -55,5 +55,5 @@ def test_bounded_capture_uses_verified_host_interface_and_returns_pcap(monkeypat
     command=calls[0][2]["command"]
     assert command[:2]==["sh","-c"] and "r1-eth2" in command[2] and "-s 256" in command[2] and "-c 250" in command[2]
     assert "mktemp /tmp/studio-capture" in command[2] and "sleep 7" in command[2] and "kill -KILL" in command[2]
-    assert calls[0][2]["stderr"] is False
+    assert calls[0][2]["stderr"] is True
     assert calls[0][2]["_request_timeout"]==22
