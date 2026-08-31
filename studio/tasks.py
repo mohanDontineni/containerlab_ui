@@ -19,7 +19,7 @@ def execute_operation(self,job_id):
         if job.state=="succeeded": return str(job.id)
         job.state="started"; job.attempts+=1; job.heartbeat=timezone.now(); job.progress=10; job.save()
     adapter=ClabernetesAdapter()
-    device_operations=("restart_device","suspend_device","resume_device","collect_configuration")
+    device_operations=("restart_device","stop_device","start_device","suspend_device","resume_device","collect_configuration")
     try:
         if job.operation_type=="publish_image":
             artifact=ImageArtifact.objects.get(pk=job.target_id)
@@ -58,11 +58,12 @@ def execute_operation(self,job_id):
         elif job.operation_type in device_operations:
             device=DeviceInstance.objects.select_related("lab_node").get(pk=job.target_id,deployment=job.deployment)
             result=getattr(adapter,job.operation_type)(job.deployment,device)
-            if job.operation_type in ("restart_device","suspend_device","resume_device"):
+            if job.operation_type in ("restart_device","stop_device","start_device","suspend_device","resume_device"):
                 device.observed_readiness=result["readiness"]
                 resources={**device.runtime_resources,"manual_lifecycle":job.operation_type,"manual_lifecycle_at":timezone.now().isoformat()}
                 if job.operation_type=="suspend_device": resources["manual_desired_state"]="suspended"
-                elif job.operation_type in ("resume_device","restart_device"): resources.pop("manual_desired_state",None)
+                elif job.operation_type=="stop_device": resources["manual_desired_state"]="stopped"
+                elif job.operation_type in ("start_device","resume_device","restart_device"): resources.pop("manual_desired_state",None)
                 device.runtime_resources=resources
                 device.save(update_fields=["observed_readiness","runtime_resources","updated_at"])
             else:
@@ -103,7 +104,7 @@ def execute_operation(self,job_id):
                 error_details={"type":type(exc).__name__,"message":str(exc)[:2000]},last_reconciliation=timezone.now())
         job.state="failed"; job.error_details={"type":type(exc).__name__,"message":str(exc)[:2000]}; raise
     finally: job.heartbeat=timezone.now(); job.save()
-    if job.operation_type=="restart_device":
+    if job.operation_type in ("restart_device","start_device"):
         for countdown in (3,10,30): reconcile_deployment.apply_async(args=[str(job.deployment_id)],countdown=countdown)
     return result
 
@@ -127,25 +128,30 @@ def reconcile_deployment(self,deployment_id):
             if node:
                 current=DeviceInstance.objects.filter(deployment=deployment,lab_node=node).first()
                 desired_suspended=current and current.runtime_resources.get("manual_desired_state")=="suspended"
+                desired_stopped=current and current.runtime_resources.get("manual_desired_state")=="stopped"
                 resources={"node_uid":observed_device["node_uid"],"pod":observed_device["pod"],"pod_uid":observed_device["pod_uid"],"pod_phase":observed_device["pod_phase"],"appliance_running":observed_device["appliance_running"],"appliance_paused":observed_device["appliance_paused"]}
                 same_launcher=current and current.runtime_resources.get("pod_uid")==observed_device["pod_uid"]
                 if same_launcher: resources={**current.runtime_resources,**resources}
-                if desired_suspended:
-                    resources["manual_desired_state"]="suspended"
+                if desired_suspended or desired_stopped:
+                    resources["manual_desired_state"]="suspended" if desired_suspended else "stopped"
                     if current.runtime_resources.get("manual_lifecycle"): resources["manual_lifecycle"]=current.runtime_resources["manual_lifecycle"]
                     if current.runtime_resources.get("manual_lifecycle_at"): resources["manual_lifecycle_at"]=current.runtime_resources["manual_lifecycle_at"]
                 linked_interfaces=adapter.linked_data_interfaces(node) if desired_suspended else []
-                if desired_suspended and observed_device["appliance_running"] and not observed_device["appliance_paused"]:
+                if desired_stopped:
+                    adapter.ensure_device_stopped(deployment,current)
+                    resources.update({"pod":None,"pod_uid":None,"pod_phase":"Stopped","appliance_running":False,"appliance_paused":False})
+                elif desired_suspended and observed_device["appliance_running"] and not observed_device["appliance_paused"]:
                     adapter.set_device_pause(deployment,node.name,observed_device["pod"],True,linked_interfaces)
                     resources.update({"appliance_running":False,"appliance_paused":True})
                 elif desired_suspended and observed_device["appliance_paused"]:
                     adapter.set_device_links(deployment,node.name,observed_device["pod"],linked_interfaces,False)
-                readiness="suspended" if desired_suspended and resources["appliance_paused"] else observed_device["readiness"]
+                readiness="stopped" if desired_stopped else "suspended" if desired_suspended and resources["appliance_paused"] else observed_device["readiness"]
                 DeviceInstance.objects.update_or_create(deployment=deployment,lab_node=node,defaults={
                     "runtime_resources":resources,"observed_readiness":readiness,
                     "worker_placement":observed_device["worker"] or ""})
         waiting=[item["name"] for item in observed_devices if item["readiness"]!="ready" and not DeviceInstance.objects.filter(
-            deployment=deployment,lab_node__name=item["name"],observed_readiness="suspended",runtime_resources__manual_desired_state="suspended").exists()]
+            deployment=deployment,lab_node__name=item["name"],observed_readiness__in=("suspended","stopped"),
+            runtime_resources__manual_desired_state__in=("suspended","stopped")).exists()]
         if observed==LabDeployment.State.RUNNING and waiting:
             deployment.observed_state=observed=LabDeployment.State.DEPLOYING
             deployment.error_details={"waiting_for_devices":waiting}

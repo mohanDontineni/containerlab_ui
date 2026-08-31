@@ -14,6 +14,7 @@ from kubernetes.stream import stream
 from .configurations import decrypt_configuration
 
 API_GROUP="c9s.run"; API_VERSION="v1alpha1"; RUNTIME_VERSION="0.8.0"
+DISABLE_DEPLOYMENTS_LABEL="c9s.run/disableDeployments"
 
 class CapabilityError(RuntimeError): pass
 PCAP_MAGICS=(b"\xd4\xc3\xb2\xa1",b"\xa1\xb2\xc3\xd4",b"\x4d\x3c\xb2\xa1",b"\xa1\xb2\x3c\x4d")
@@ -40,12 +41,13 @@ class Plan: namespace:str; topology_name:str; manifest:dict; config_maps:tuple=(
 
 class ClabernetesAdapter:
     capabilities={"deploy_lab":"supported","get_observed_state":"supported","delete_runtime":"supported","restart_device":"supported",
-        "resolve_console_target":"supported","start_capture":"experimental","stop_lab":"delete_and_redeploy","set_link_condition":"supported","collect_configuration":"template_dependent"}
-    def __init__(self, custom_api=None, core_api=None, batch_api=None):
+        "stop_device":"supported","start_device":"supported","resolve_console_target":"supported","start_capture":"experimental",
+        "stop_lab":"delete_and_redeploy","set_link_condition":"supported","collect_configuration":"template_dependent"}
+    def __init__(self, custom_api=None, core_api=None, batch_api=None, apps_api=None):
         if custom_api is None:
             try: config.load_incluster_config()
             except config.ConfigException: config.load_kube_config()
-        self.custom=custom_api or client.CustomObjectsApi(); self.core=core_api or client.CoreV1Api(); self.batch=batch_api or client.BatchV1Api()
+        self.custom=custom_api or client.CustomObjectsApi(); self.core=core_api or client.CoreV1Api(); self.batch=batch_api or client.BatchV1Api();self.apps=apps_api or client.AppsV1Api()
     @staticmethod
     def validate_topology(revision):
         errors=[]
@@ -233,6 +235,26 @@ class ClabernetesAdapter:
         name=device.lab_node.name
         self.core.delete_namespaced_pod(pod,deployment.namespace,body=client.V1DeleteOptions(grace_period_seconds=0,propagation_policy="Background"))
         return {"device":name,"operation":"restart","replaced_pod":pod,"readiness":"restarting"}
+    def ensure_device_stopped(self,deployment,device):
+        if device.deployment_id!=deployment.id: raise CapabilityError("Device does not belong to this deployment")
+        name=device.lab_node.name
+        self.custom.patch_namespaced_custom_object(API_GROUP,API_VERSION,deployment.namespace,"nodes",name,
+            {"metadata":{"labels":{DISABLE_DEPLOYMENTS_LABEL:"true"}}})
+        try:
+            self.apps.delete_namespaced_deployment(name,deployment.namespace,
+                body=client.V1DeleteOptions(propagation_policy="Background"))
+            deleted=True
+        except ApiException as exc:
+            if exc.status!=404: raise
+            deleted=False
+        return {"device":name,"operation":"stop","desired_state":"stopped","readiness":"stopped","launcher_deleted":deleted}
+    def stop_device(self,deployment,device): return self.ensure_device_stopped(deployment,device)
+    def start_device(self,deployment,device):
+        if device.deployment_id!=deployment.id: raise CapabilityError("Device does not belong to this deployment")
+        name=device.lab_node.name
+        self.custom.patch_namespaced_custom_object(API_GROUP,API_VERSION,deployment.namespace,"nodes",name,
+            {"metadata":{"labels":{DISABLE_DEPLOYMENTS_LABEL:None}}})
+        return {"device":name,"operation":"start","desired_state":"running","readiness":"starting"}
     @staticmethod
     def linked_data_interfaces(node):
         return list(node.interfaces.filter(Q(links_as_a__isnull=False)|Q(links_as_b__isnull=False),reserved_management=False).distinct().values_list("name",flat=True))

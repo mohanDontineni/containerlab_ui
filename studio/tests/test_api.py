@@ -415,6 +415,34 @@ def test_device_suspend_resume_is_authorized_audited_and_persists_desired_state(
     assert device.observed_readiness=="ready" and "manual_desired_state" not in device.runtime_resources
 
 @pytest.mark.django_db
+def test_device_stop_start_is_authorized_audited_idempotent_and_persists_desired_state(monkeypatch):
+    monkeypatch.setattr("studio.api.execute_operation.delay",lambda *_:None)
+    monkeypatch.setattr("studio.tasks.reconcile_deployment.apply_async",lambda *args,**kwargs:None)
+    owner=User.objects.create_user("stop-owner",password="long-enough-password");viewer=User.objects.create_user("stop-viewer",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="stop-project");ProjectMembership.objects.create(project=project,user=viewer,role="viewer")
+    lab=Lab.objects.create(project=project,name="stop-lab");revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="8"*64,immutable=True)
+    node=LabNode.objects.create(revision=revision,name="r2",template_version=DeviceTemplateVersion.objects.get(template__name="FRR Router"))
+    deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-stop",runtime_version="0.8.0",observed_state="running")
+    device=DeviceInstance.objects.create(deployment=deployment,lab_node=node,observed_readiness="ready",runtime_resources={"pod":"r2-pod"})
+    client=APIClient();payload={"device_id":str(device.id),"operation":"stop_device"};client.force_authenticate(viewer)
+    assert client.post(f"/api/v1/deployments/{deployment.id}/device-operations/",payload,format="json",HTTP_IDEMPOTENCY_KEY="viewer-stop").status_code==403
+    client.force_authenticate(owner);stop=client.post(f"/api/v1/deployments/{deployment.id}/device-operations/",payload,format="json",HTTP_IDEMPOTENCY_KEY="owner-stop")
+    replay=client.post(f"/api/v1/deployments/{deployment.id}/device-operations/",payload,format="json",HTTP_IDEMPOTENCY_KEY="owner-stop")
+    assert stop.status_code==replay.status_code==202 and stop.data["id"]==replay.data["id"]
+    class Adapter:
+        def stop_device(self,*_): return {"device":"r2","operation":"stop","desired_state":"stopped","readiness":"stopped","launcher_deleted":True}
+        def start_device(self,*_): return {"device":"r2","operation":"start","desired_state":"running","readiness":"starting"}
+    monkeypatch.setattr("studio.tasks.ClabernetesAdapter",Adapter);execute_operation.run(str(stop.data["id"]));device.refresh_from_db()
+    assert device.observed_readiness=="stopped" and device.runtime_resources["manual_desired_state"]=="stopped"
+    assert AuditEvent.objects.filter(action="device.stop",target_id=device.id).count()==1
+    blocked=client.post(f"/api/v1/deployments/{deployment.id}/device-operations/",{"device_id":str(device.id),"operation":"restart_device"},format="json",HTTP_IDEMPOTENCY_KEY="restart-stopped")
+    assert blocked.status_code==409 and blocked.data["error"]["code"]=="device_stopped"
+    start=client.post(f"/api/v1/deployments/{deployment.id}/device-operations/",{"device_id":str(device.id),"operation":"start_device"},format="json",HTTP_IDEMPOTENCY_KEY="owner-start")
+    assert start.status_code==202 and AuditEvent.objects.filter(action="device.start",target_id=device.id).exists()
+    execute_operation.run(str(start.data["id"]));device.refresh_from_db()
+    assert device.observed_readiness=="starting" and "manual_desired_state" not in device.runtime_resources
+
+@pytest.mark.django_db
 def test_live_configuration_collection_is_operator_only_versioned_and_encrypted(monkeypatch):
     monkeypatch.setattr("studio.api.execute_operation.delay",lambda *_:None)
     owner=User.objects.create_user("collector-owner",password="long-enough-password")
@@ -511,6 +539,28 @@ def test_reconciliation_reapplies_intentional_suspension_after_launcher_replacem
     device.refresh_from_db();deployment.refresh_from_db()
     assert pauses==[("r1","new-pod",True,["eth1"])] and device.observed_readiness=="suspended"
     assert device.runtime_resources["appliance_paused"] is True and device.runtime_resources["manual_desired_state"]=="suspended"
+    assert deployment.error_details=={}
+
+@pytest.mark.django_db
+def test_reconciliation_reapplies_durable_stop_if_launcher_reappears(monkeypatch):
+    owner=User.objects.create_user("durable-stop",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="durable-stop-project");lab=Lab.objects.create(project=project,name="durable-stop-lab")
+    revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="a"*64,immutable=True)
+    node=LabNode.objects.create(revision=revision,name="r2",template_version=DeviceTemplateVersion.objects.get(template__name="FRR Router"))
+    deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-durable-stop",runtime_version="0.8.0",observed_state="running")
+    device=DeviceInstance.objects.create(deployment=deployment,lab_node=node,observed_readiness="stopped",
+        runtime_resources={"pod":None,"pod_uid":None,"manual_desired_state":"stopped"})
+    stopped=[]
+    class Adapter:
+        def get_observed_state(self,_): return {"topologyReady":True}
+        def observe_devices(self,_): return [{"name":"r2","node_uid":"node-uid","readiness":"ready","pod":"unexpected-pod","pod_uid":"unexpected-uid",
+            "worker":"worker","pod_phase":"Running","appliance_running":True,"appliance_paused":False}]
+        def ensure_device_stopped(self,deployment,current): stopped.append((deployment.id,current.id))
+    monkeypatch.setattr("studio.tasks.ClabernetesAdapter",Adapter)
+    assert reconcile_deployment.run(str(deployment.id))==LabDeployment.State.RUNNING
+    device.refresh_from_db();deployment.refresh_from_db()
+    assert stopped==[(deployment.id,device.id)] and device.observed_readiness=="stopped"
+    assert device.runtime_resources["manual_desired_state"]=="stopped" and device.runtime_resources["pod"] is None
     assert deployment.error_details=={}
 
 @pytest.mark.django_db

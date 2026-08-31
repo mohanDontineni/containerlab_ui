@@ -2,7 +2,7 @@ import yaml
 import base64
 import struct
 from types import SimpleNamespace
-from studio.runtime import ClabernetesAdapter,API_GROUP,API_VERSION,RUNTIME_VERSION,CapabilityError,CAPTURE_STOP_MARKER,CAPTURE_STOP_DESTINATION,strip_capture_stop_packets
+from studio.runtime import ClabernetesAdapter,API_GROUP,API_VERSION,RUNTIME_VERSION,CapabilityError,CAPTURE_STOP_MARKER,CAPTURE_STOP_DESTINATION,DISABLE_DEPLOYMENTS_LABEL,strip_capture_stop_packets
 def test_adapter_is_pinned(): assert (API_GROUP,API_VERSION,RUNTIME_VERSION)==("c9s.run","v1alpha1","0.8.0")
 def test_unsupported_capability_is_explicit():
     adapter=object.__new__(ClabernetesAdapter)
@@ -129,6 +129,20 @@ def test_device_restart_replaces_only_selected_clabernetes_pod():
     assert result=={"device":"r1","operation":"restart","replaced_pod":"r1-launcher","readiness":"restarting"}
     assert calls[0][0:2]==("r1-launcher","lab-one")
     assert calls[0][2].grace_period_seconds==0
+
+def test_device_stop_disables_clabernetes_reconcile_deletes_only_launcher_and_start_reenables_it():
+    patches=[];deletes=[]
+    custom=SimpleNamespace(patch_namespaced_custom_object=lambda *args:patches.append(args) or {})
+    apps=SimpleNamespace(delete_namespaced_deployment=lambda name,namespace,body:deletes.append((name,namespace,body.propagation_policy)))
+    adapter=ClabernetesAdapter(custom_api=custom,core_api=SimpleNamespace(),apps_api=apps)
+    deployment=SimpleNamespace(id="deployment-id",namespace="lab-one")
+    device=SimpleNamespace(deployment_id="deployment-id",lab_node=SimpleNamespace(name="r2"))
+    stopped=adapter.stop_device(deployment,device);started=adapter.start_device(deployment,device)
+    assert stopped=={"device":"r2","operation":"stop","desired_state":"stopped","readiness":"stopped","launcher_deleted":True}
+    assert started=={"device":"r2","operation":"start","desired_state":"running","readiness":"starting"}
+    assert deletes==[("r2","lab-one","Background")]
+    assert patches[0][-1]=={"metadata":{"labels":{DISABLE_DEPLOYMENTS_LABEL:"true"}}}
+    assert patches[1][-1]=={"metadata":{"labels":{DISABLE_DEPLOYMENTS_LABEL:None}}}
 
 def test_stop_removes_plaintext_runtime_configuration_maps():
     deleted=[]
