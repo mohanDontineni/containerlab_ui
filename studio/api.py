@@ -20,7 +20,7 @@ from .runtime import ClabernetesAdapter
 from .tasks import execute_operation, reconcile_deployment
 from .uploads import UploadError, append_chunk, finalize
 from .bundles import BundleError, LabBundleParser, export_lab_bundle, import_lab_bundle
-from .quotas import normalized_quotas,project_usage,quota_exceeded,validate_quotas
+from .quotas import ProjectQuotaExceeded,normalized_quotas,project_usage,quota_exceeded,validate_quotas
 
 class OctetStreamParser(BaseParser):
     media_type="application/octet-stream"
@@ -115,8 +115,7 @@ class LabViewSet(viewsets.ModelViewSet):
         with transaction.atomic():
             project=models.Project.objects.select_for_update().get(pk=project.pk)
             used=project.labs.count();limit=normalized_quotas(project)["max_labs"]
-            if used>=limit:
-                from rest_framework.exceptions import ValidationError; raise ValidationError(quota_exceeded("labs",limit,used)["error"])
+            if used>=limit: raise ProjectQuotaExceeded("labs",limit,used)
             serializer.save(project=project)
     @action(detail=True,methods=["get"],url_path="export")
     def export_bundle(self,request,pk=None):
@@ -185,7 +184,7 @@ class UploadViewSet(viewsets.ModelViewSet):
             project=models.Project.objects.select_for_update().get(pk=project.pk)
             usage=project_usage(project);limit=normalized_quotas(project)["max_image_bytes"]
             if usage["image_bytes"]+usage["reserved_upload_bytes"]+size>limit:
-                from rest_framework.exceptions import ValidationError; raise ValidationError(quota_exceeded("image_bytes",limit,usage["image_bytes"]+usage["reserved_upload_bytes"],size)["error"])
+                raise ProjectQuotaExceeded("image_bytes",limit,usage["image_bytes"]+usage["reserved_upload_bytes"],size)
             uid=uuid.uuid4(); destination=Path(settings.MEDIA_ROOT)/"quarantine"/str(uid)
             session=serializer.save(id=uid,project=project,owner=self.request.user,artifact_destination=str(destination),expires_at=timezone.now()+timezone.timedelta(hours=24))
         models.AuditEvent.objects.create(actor=self.request.user,project=project,action="image.upload_created",target_type="UploadSession",target_id=session.id,

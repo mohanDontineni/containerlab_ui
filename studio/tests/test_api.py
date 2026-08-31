@@ -79,11 +79,11 @@ def test_project_quotas_are_admin_managed_reported_and_enforced_for_labs_members
     assert response.data["usage"]["members"]==2
     first=client.post("/api/v1/labs/",{"project":str(project.id),"name":"allowed","tags":[]},format="json")
     second=client.post("/api/v1/labs/",{"project":str(project.id),"name":"blocked","tags":[]},format="json")
-    assert first.status_code==201 and second.status_code==400
+    assert first.status_code==201 and second.status_code==409 and second.data["error"]["code"]=="project_quota_exceeded"
     member=client.post(f"/api/v1/projects/{project.id}/members/",{"username":candidate.username,"role":"viewer"},format="json")
     assert member.status_code==409 and member.data["error"]["code"]=="project_quota_exceeded"
     upload=client.post("/api/v1/uploads/",{"project":str(project.id),"original_filename":"too-large.tar","expected_size":2*1024**3},format="json")
-    assert upload.status_code==400
+    assert upload.status_code==409 and upload.data["error"]["code"]=="project_quota_exceeded"
     project.refresh_from_db();assert project.quotas["max_members"]==2
     assert AuditEvent.objects.filter(project=project,action="project.quotas_changed").count()==1
 

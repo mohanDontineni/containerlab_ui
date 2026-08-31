@@ -1,5 +1,6 @@
 from django.db.models import Count,Max,Sum
 from django.utils import timezone
+from rest_framework.exceptions import APIException
 from .models import ImageArtifact, LabDeployment, LabNode, ProjectMembership, UploadSession
 
 DEFAULT_PROJECT_QUOTAS={
@@ -44,3 +45,10 @@ def project_usage(project):
 
 def quota_exceeded(code,limit,used,requested=1):
     return {"error":{"code":"project_quota_exceeded","details":{"resource":code,"limit":limit,"used":used,"requested":requested}}}
+
+class ProjectQuotaExceeded(APIException):
+    status_code=409
+    default_code="project_quota_exceeded"
+    default_detail="Project quota exceeded"
+    def __init__(self,resource,limit,used,requested=1):
+        super().__init__({"resource":resource,"limit":limit,"used":used,"requested":requested})
