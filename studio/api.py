@@ -1,5 +1,6 @@
 import uuid
 import ipaddress
+import hashlib
 from pathlib import Path
 from django.conf import settings
 from django.db import IntegrityError, transaction
@@ -139,3 +140,24 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
                 return Response({"error":{"code":"diagnostic_in_progress","details":"Wait for the active diagnostic to finish."}},status=409)
         if job.state in ("accepted","scheduled"): execute_operation.delay(str(job.id))
         return Response(serializers.OperationSerializer(job).data,status=202)
+    @action(detail=True,methods=["post"])
+    def consoles(self,request,pk=None):
+        deployment=self.get_object()
+        try: device_id=uuid.UUID(str(request.data.get("device_id")))
+        except (ValueError,TypeError,AttributeError): return Response({"error":{"code":"invalid_device"}},status=422)
+        device=deployment.devices.select_related("lab_node__template_version","deployment__revision__lab__project").filter(id=device_id).first()
+        if not device: return Response({"error":{"code":"invalid_device"}},status=422)
+        if device.observed_readiness!="ready" or not device.runtime_resources.get("pod"):
+            return Response({"error":{"code":"device_not_ready"}},status=409)
+        if device.lab_node.template_version.containerlab_kind not in ("linux","bridge"):
+            return Response({"error":{"code":"console_unsupported","details":"This template does not have a verified browser-console adapter."}},status=422)
+        role=project_role(request.user,deployment.revision.lab.project)
+        read_only=role==models.ProjectMembership.Role.VIEWER
+        session_id=uuid.uuid4(); browser_key=request.session.session_key
+        if not browser_key: request.session.create(); browser_key=request.session.session_key
+        token_hash=hashlib.sha256(f"{browser_key}:{session_id}".encode()).hexdigest()
+        console=models.ConsoleSession.objects.create(id=session_id,device=device,user=request.user,token_hash=token_hash,
+            expires_at=timezone.now()+timezone.timedelta(minutes=15),read_only=read_only)
+        models.AuditEvent.objects.create(actor=request.user,project=deployment.revision.lab.project,action="console.authorized",
+            target_type="DeviceInstance",target_id=device.id,correlation_id=getattr(request,"correlation_id",""),metadata={"console_session":str(console.id),"read_only":read_only})
+        return Response({"id":str(console.id),"websocket":f"/ws/consoles/{console.id}/","expires_at":console.expires_at,"read_only":read_only,"device":{"id":str(device.id),"name":device.lab_node.name}},status=201)

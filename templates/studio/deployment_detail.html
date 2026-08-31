@@ -25,6 +25,7 @@
     </form><pre id="diagnostic-output">No diagnostic has been run.</pre>
   </section>
   <section class="panel runtime-operations"><div class="panel-header"><div><p class="eyebrow">AUDIT TRAIL</p><h2>Recent operations</h2></div></div><div id="runtime-operations" class="runtime-operation-list"></div></section>
+  <section class="runtime-console"><iframe title="Device consoles" src="/static/editor/console.html?deployment={{ deployment.id }}"></iframe></section>
 </div>
 <script>
 (()=>{const root=document.querySelector('.runtime-grid'),id=root.dataset.deployment,canOperate=root.dataset.canOperate==='true';

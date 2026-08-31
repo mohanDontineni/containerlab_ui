@@ -30,6 +30,33 @@ spec: {selector: {app: containerlab-studio-web},ports: [{port: 8000,targetPort: 
 ---
 apiVersion: apps/v1
 kind: Deployment
+metadata: {name: containerlab-studio-console}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: containerlab-studio-console}}
+  template:
+    metadata: {labels: {app: containerlab-studio-console}}
+    spec:
+      serviceAccountName: containerlab-studio-reconciler
+      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      containers:
+      - name: console
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        command: [gunicorn,config.asgi:application,-k,uvicorn.workers.UvicornWorker,--bind,0.0.0.0:8000,--workers,1,--access-logfile,-]
+        envFrom: [{configMapRef: {name: containerlab-studio-config}},{secretRef: {name: containerlab-studio-secrets}}]
+        ports: [{containerPort: 8000}]
+        securityContext: {allowPrivilegeEscalation: false,capabilities: {drop: [ALL]}}
+        resources: {{ toYaml .Values.resources.worker | nindent 10 }}
+        readinessProbe: {httpGet: {path: /accounts/login/,port: 8000,httpHeaders: [{name: Host,value: localhost}]},initialDelaySeconds: 5,periodSeconds: 10}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: containerlab-studio-console}
+spec: {selector: {app: containerlab-studio-console},ports: [{port: 8000,targetPort: 8000}]}
+---
+apiVersion: apps/v1
+kind: Deployment
 metadata: {name: containerlab-studio-worker}
 spec:
   replicas: 1

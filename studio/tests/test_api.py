@@ -1,7 +1,7 @@
 import pytest
 from django.conf import settings
 from rest_framework.test import APIClient
-from studio.models import (DeviceTemplateVersion, ImageArtifact, Lab, LabDeployment, LabNode, LabRevision,
+from studio.models import (AuditEvent, ConsoleSession, DeviceInstance, DeviceTemplateVersion, ImageArtifact, Lab, LabDeployment, LabNode, LabRevision,
     Project, ProjectMembership, PublishedImage, User)
 from studio.tasks import execute_operation
 
@@ -78,8 +78,28 @@ def test_runtime_device_contract_exposes_logical_node_identity():
     template=DeviceTemplateVersion.objects.first()
     node=LabNode.objects.create(revision=revision,name="r1",template_version=template)
     deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-device-test",runtime_version="0.8.0")
-    from studio.models import DeviceInstance
     DeviceInstance.objects.create(deployment=deployment,lab_node=node,observed_readiness="ready")
     c=APIClient(); c.force_authenticate(owner)
     device=c.get(f"/api/v1/deployments/{deployment.id}/runtime/").data["devices"][0]
     assert str(device["node_id"])==str(node.id)
+
+@pytest.mark.django_db
+def test_console_authorization_is_session_bound_and_viewer_read_only():
+    owner=User.objects.create_user("console-owner",password="long-enough-password")
+    viewer=User.objects.create_user("console-viewer",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="console-project")
+    ProjectMembership.objects.create(project=project,user=viewer,role="viewer")
+    lab=Lab.objects.create(project=project,name="console-lab")
+    revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="1"*64,immutable=True)
+    template=DeviceTemplateVersion.objects.filter(containerlab_kind="linux").first()
+    node=LabNode.objects.create(revision=revision,name="client",template_version=template)
+    deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-console-test",runtime_version="0.8.0",observed_state="running")
+    device=DeviceInstance.objects.create(deployment=deployment,lab_node=node,observed_readiness="ready",runtime_resources={"pod":"client-pod"})
+    c=APIClient(); c.force_authenticate(viewer)
+    response=c.post(f"/api/v1/deployments/{deployment.id}/consoles/",{"device_id":str(device.id)},format="json")
+    assert response.status_code==201, response.data
+    assert response.data["read_only"] is True
+    assert "token" not in response.data and response.data["websocket"].endswith("/")
+    session=ConsoleSession.objects.get(id=response.data["id"])
+    assert session.token_hash and session.user==viewer
+    assert AuditEvent.objects.filter(action="console.authorized",target_id=device.id).exists()

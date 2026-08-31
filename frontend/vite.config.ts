@@ -1,3 +1,3 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
-export default defineConfig({plugins:[react()],base:'/static/editor/'});
+export default defineConfig({plugins:[react()],base:'/static/editor/',build:{rollupOptions:{input:{editor:'index.html',console:'console.html'}}}});
