@@ -3,7 +3,7 @@ from pathlib import Path
 from django.conf import settings
 from django.utils import timezone
 from rest_framework.test import APIClient
-from studio.configurations import decrypt_configuration
+from studio.configurations import decrypt_configuration, encrypt_configuration
 from studio.models import (AuditEvent, CaptureSession, ConsoleSession, DeviceInstance, DeviceTemplateVersion, ImageArtifact, Lab, LabDeployment,
     ConfigurationVersion, LabArtifact, LabInterface, LabLink, LabNode, LabRevision, OperationJob, Project, ProjectMembership, PublishedImage, UploadSession, User)
 from studio.tasks import execute_operation, reconcile_active_deployments, reconcile_deployment
@@ -105,6 +105,39 @@ def test_quota_cannot_be_lowered_below_current_usage():
     client=APIClient();client.force_authenticate(owner)
     response=client.patch(f"/api/v1/projects/{project.id}/quotas/",{"max_labs":1},format="json")
     assert response.status_code==409 and response.data["error"]["code"]=="quota_below_current_usage"
+
+@pytest.mark.django_db
+def test_lab_clone_is_deep_project_scoped_audited_and_quota_enforced():
+    owner=User.objects.create_user("clone-owner",password="long-enough-password")
+    viewer=User.objects.create_user("clone-viewer",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="clone-project",quotas={"max_labs":2})
+    ProjectMembership.objects.create(project=project,user=viewer,role="viewer")
+    lab=Lab.objects.create(project=project,name="source",description="reference",tags=["bgp"])
+    revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="c"*64,annotations=[{"type":"text","text":"edge"}])
+    lab.current_draft=revision;lab.save(update_fields=["current_draft"])
+    template=DeviceTemplateVersion.objects.get(template__name="Linux Host")
+    artifact=ImageArtifact.objects.create(project=project,owner=owner,source_type="registry",original_filename="alpine",detected_format="oci-registry",
+        byte_size=0,checksum="d"*64,architecture="amd64",storage_reference="docker.io/alpine",validation_status="validated")
+    image=PublishedImage.objects.create(artifact=artifact,registry_digest="docker.io/alpine@sha256:"+"d"*64,repository="docker.io/alpine",architecture="amd64")
+    configuration=ConfigurationVersion.objects.create(project=project,name="source/client/startup",version=1,
+        encrypted_content=encrypt_configuration("hostname client\n"),checksum="e"*64,created_by=owner)
+    nodes=[]
+    for index,name in enumerate(("client","server")):
+        node=LabNode.objects.create(revision=revision,name=name,template_version=template,published_image=image,position={"x":index*200,"y":80},startup_configuration=configuration if index==0 else None)
+        interfaces=[LabInterface.objects.create(node=node,name=f"eth{number}") for number in range(1,5)];nodes.append((node,interfaces))
+    LabLink.objects.create(revision=revision,endpoint_a=nodes[0][1][0],endpoint_b=nodes[1][1][0],label="data")
+    client=APIClient();client.force_authenticate(viewer)
+    assert client.post(f"/api/v1/labs/{lab.id}/clone/",{"name":"viewer-copy"},format="json").status_code==403
+    client.force_authenticate(owner);response=client.post(f"/api/v1/labs/{lab.id}/clone/",{"name":"source copy"},format="json")
+    assert response.status_code==201 and response.data["node_count"]==2 and response.data["link_count"]==1
+    clone=Lab.objects.get(pk=response.data["id"]);cloned=clone.current_draft
+    assert clone.description=="reference" and clone.tags==["bgp"] and cloned.id!=revision.id and cloned.annotations==revision.annotations
+    assert set(cloned.nodes.values_list("name",flat=True))=={"client","server"} and cloned.links.get().label=="data"
+    cloned_config=cloned.nodes.get(name="client").startup_configuration
+    assert cloned_config.id!=configuration.id and decrypt_configuration(cloned_config.encrypted_content)=="hostname client\n"
+    assert AuditEvent.objects.filter(project=project,action="lab.cloned",target_id=clone.id,metadata__source_lab=str(lab.id)).exists()
+    conflict=client.post(f"/api/v1/labs/{lab.id}/clone/",{"name":"source copy"},format="json")
+    assert conflict.status_code==409 and conflict.data["error"]["code"]=="project_quota_exceeded"
 
 @pytest.mark.django_db
 def test_upload_creation_is_project_scoped_and_checksum_optional():

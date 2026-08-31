@@ -28,6 +28,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import "./style.css";
+import "./clone.css";
 import "./configuration.css";
 
 type Template = {
@@ -160,6 +161,9 @@ function Workspace() {
   const [editVersion, setEditVersion] = useState(0);
   const [saving, setSaving] = useState(false);
   const [deploying, setDeploying] = useState(false);
+  const [cloneOpen, setCloneOpen] = useState(false);
+  const [cloneName, setCloneName] = useState(`${labName} copy`);
+  const [cloning, setCloning] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [notice, setNotice] = useState("Ready");
   const [history, setHistory] = useState<Snapshot[]>([]);
@@ -409,6 +413,20 @@ function Workspace() {
     if (dirty) { setNotice("Save the draft before exporting"); return; }
     location.href = `/api/v1/labs/${labId}/export/`;
   };
+  const cloneLab = async () => {
+    const name=cloneName.trim();
+    if (!name) { setNotice("Enter a name for the copied lab"); return; }
+    if (dirty) { setNotice("Save the draft before creating a copy"); setCloneOpen(false); return; }
+    setCloning(true); setNotice("Creating an independent lab copy…");
+    try {
+      const response=await fetch(`/api/v1/labs/${labId}/clone/`,{method:"POST",credentials:"same-origin",
+        headers:{"Content-Type":"application/json","X-CSRFToken":csrf()},body:JSON.stringify({name})});
+      const data=await response.json();
+      if (!response.ok) throw new Error(data.error?.details || data.error?.code || "Copy failed");
+      setNotice(`Created ${data.node_count}-device copy`);
+      location.href=data.workspace_url;
+    } catch (error) { setNotice(error instanceof Error ? error.message : "Copy failed"); setCloning(false); }
+  };
   const importBundle = async (file?: File) => {
     if (!file) return;
     if (dirty && !confirm("Importing replaces this unsaved draft. Continue?")) return;
@@ -535,6 +553,7 @@ function Workspace() {
           <i></i>
           <button onClick={() => rf?.fitView({ padding: 0.2 })}>Fit</button>
           <button onClick={exportBundle} disabled={dirty}>Export</button>
+          <button onClick={() => setCloneOpen(true)} disabled={dirty}>Save as</button>
           <button onClick={() => importInput.current?.click()}>Import</button>
           <input ref={importInput} className="file-input" type="file" accept=".json,.clabstudio.json,application/json" onChange={(e)=>importBundle(e.target.files?.[0])}/>
           <button>
@@ -551,6 +570,14 @@ function Workspace() {
           </button>
         </div>
       </header>
+      {cloneOpen && <div className="modal-backdrop" role="presentation" onMouseDown={()=>!cloning&&setCloneOpen(false)}>
+        <section className="clone-dialog" role="dialog" aria-modal="true" aria-labelledby="clone-title" onMouseDown={(event)=>event.stopPropagation()}>
+          <p className="dialog-eyebrow">LAB WORKFLOW</p><h2 id="clone-title">Save topology as a new lab</h2>
+          <p>Create an independent editable copy with the same devices, links, pinned images, annotations, and startup configurations.</p>
+          <label>New lab name<input autoFocus maxLength={120} value={cloneName} onChange={(event)=>setCloneName(event.target.value)} onKeyDown={(event)=>event.key==="Enter"&&cloneLab()}/></label>
+          <div><button onClick={()=>setCloneOpen(false)} disabled={cloning}>Cancel</button><button className="primary" onClick={cloneLab} disabled={cloning||!cloneName.trim()}>{cloning?"Creating…":"Create lab copy"}</button></div>
+        </section>
+      </div>}
       <div className="workspace-body">
         <aside className="palette">
           <div className="pane-title">

@@ -118,6 +118,32 @@ class LabViewSet(viewsets.ModelViewSet):
             used=project.labs.count();limit=normalized_quotas(project)["max_labs"]
             if used>=limit: raise ProjectQuotaExceeded("labs",limit,used)
             serializer.save(project=project)
+    @action(detail=True,methods=["post"],url_path="clone")
+    def clone_lab(self,request,pk=None):
+        source=self.get_object()
+        if project_role(request.user,source.project) not in (models.ProjectMembership.Role.ADMIN,models.ProjectMembership.Role.EDITOR):
+            from rest_framework.exceptions import PermissionDenied; raise PermissionDenied()
+        name=str(request.data.get("name","")).strip()
+        if not name or len(name)>120:
+            return Response({"error":{"code":"invalid_lab_name","details":"Name must contain 1 to 120 characters."}},status=422)
+        bundle=export_lab_bundle(source)
+        with transaction.atomic():
+            project=models.Project.objects.select_for_update().get(pk=source.project_id)
+            used=project.labs.count();limit=normalized_quotas(project)["max_labs"]
+            if used>=limit: return Response(quota_exceeded("labs",limit,used),status=409)
+            if project.labs.filter(name=name).exists():
+                return Response({"error":{"code":"lab_name_conflict","details":"A lab with this name already exists in the project."}},status=409)
+            clone=models.Lab.objects.create(project=project,name=name,description=source.description,tags=source.tags)
+            try: revision=import_lab_bundle(clone,request.user,bundle)
+            except BundleError as exc:
+                transaction.set_rollback(True)
+                return Response({"error":{"code":"lab_clone_failed","details":str(exc)}},status=422)
+            models.AuditEvent.objects.create(actor=request.user,project=project,action="lab.cloned",target_type="Lab",target_id=clone.id,
+                correlation_id=getattr(request,"correlation_id",""),metadata={"source_lab":str(source.id),"revision":str(revision.id),
+                    "node_count":revision.nodes.count(),"link_count":revision.links.count()})
+        payload=serializers.LabSerializer(clone).data
+        payload.update({"workspace_url":f"/labs/{clone.id}/topology/","node_count":revision.nodes.count(),"link_count":revision.links.count()})
+        return Response(payload,status=201)
     @action(detail=True,methods=["get"],url_path="export")
     def export_bundle(self,request,pk=None):
         lab=self.get_object()
