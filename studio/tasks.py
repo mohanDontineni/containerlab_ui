@@ -126,10 +126,14 @@ def reconcile_deployment(self,deployment_id):
             node=deployment.revision.nodes.filter(name=observed_device["name"]).first()
             if node:
                 current=DeviceInstance.objects.filter(deployment=deployment,lab_node=node).first()
+                desired_suspended=current and current.runtime_resources.get("manual_desired_state")=="suspended"
                 resources={"node_uid":observed_device["node_uid"],"pod":observed_device["pod"],"pod_uid":observed_device["pod_uid"],"pod_phase":observed_device["pod_phase"],"appliance_running":observed_device["appliance_running"],"appliance_paused":observed_device["appliance_paused"]}
                 same_launcher=current and current.runtime_resources.get("pod_uid")==observed_device["pod_uid"]
                 if same_launcher: resources={**current.runtime_resources,**resources}
-                desired_suspended=current and current.runtime_resources.get("manual_desired_state")=="suspended"
+                if desired_suspended:
+                    resources["manual_desired_state"]="suspended"
+                    if current.runtime_resources.get("manual_lifecycle"): resources["manual_lifecycle"]=current.runtime_resources["manual_lifecycle"]
+                    if current.runtime_resources.get("manual_lifecycle_at"): resources["manual_lifecycle_at"]=current.runtime_resources["manual_lifecycle_at"]
                 linked_interfaces=adapter.linked_data_interfaces(node) if desired_suspended else []
                 if desired_suspended and observed_device["appliance_running"] and not observed_device["appliance_paused"]:
                     adapter.set_device_pause(deployment,node.name,observed_device["pod"],True,linked_interfaces)

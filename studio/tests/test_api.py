@@ -434,7 +434,27 @@ def test_reconciliation_reapplies_intentional_suspension_after_launcher_replacem
     assert reconcile_deployment.run(str(deployment.id))==LabDeployment.State.RUNNING
     device.refresh_from_db();deployment.refresh_from_db()
     assert pauses==[("r1","new-pod",True,["eth1"])] and device.observed_readiness=="suspended"
-    assert device.runtime_resources["appliance_paused"] is True and deployment.error_details=={}
+    assert device.runtime_resources["appliance_paused"] is True and device.runtime_resources["manual_desired_state"]=="suspended"
+    assert deployment.error_details=={}
+
+@pytest.mark.django_db
+def test_reconciliation_preserves_suspension_while_replacement_appliance_starts(monkeypatch):
+    owner=User.objects.create_user("starting-suspend",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="starting-project");lab=Lab.objects.create(project=project,name="starting-lab")
+    revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="9"*64,immutable=True)
+    node=LabNode.objects.create(revision=revision,name="r1",template_version=DeviceTemplateVersion.objects.get(template__name="FRR Router"))
+    deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-starting",runtime_version="0.8.0",observed_state="running")
+    device=DeviceInstance.objects.create(deployment=deployment,lab_node=node,observed_readiness="suspended",
+        runtime_resources={"pod":"old-pod","pod_uid":"old-uid","manual_desired_state":"suspended"})
+    class Adapter:
+        def get_observed_state(self,_): return {"topologyReady":True}
+        def observe_devices(self,_): return [{"name":"r1","node_uid":"node-uid","readiness":"starting","pod":"new-pod","pod_uid":"new-uid",
+            "worker":"worker","pod_phase":"Running","appliance_running":False,"appliance_paused":False}]
+        def linked_data_interfaces(self,node): return ["eth1"]
+    monkeypatch.setattr("studio.tasks.ClabernetesAdapter",Adapter)
+    assert reconcile_deployment.run(str(deployment.id))==LabDeployment.State.DEPLOYING
+    device.refresh_from_db()
+    assert device.runtime_resources["manual_desired_state"]=="suspended" and device.runtime_resources["pod_uid"]=="new-uid"
 
 @pytest.mark.django_db
 def test_capture_api_is_bounded_idempotent_and_operator_only(monkeypatch):
