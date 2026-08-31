@@ -13,10 +13,17 @@ def execute_operation(self,job_id):
         if job.state=="succeeded": return str(job.id)
         job.state="started"; job.attempts+=1; job.heartbeat=timezone.now(); job.progress=10; job.save()
     adapter=ClabernetesAdapter()
+    device_operations=("start_device","stop_device","restart_device")
     try:
         if job.operation_type=="ping":
             node=LabNode.objects.get(pk=job.request_payload["node_id"],revision=job.deployment.revision)
             result=adapter.ping(job.deployment,node,job.request_payload["target"],job.request_payload["count"],job.request_payload["timeout"])
+        elif job.operation_type in device_operations:
+            device=DeviceInstance.objects.select_related("lab_node").get(pk=job.target_id,deployment=job.deployment)
+            result=getattr(adapter,job.operation_type)(job.deployment,device)
+            device.observed_readiness=result["readiness"]
+            device.runtime_resources={**device.runtime_resources,"manual_lifecycle":job.operation_type,"manual_lifecycle_at":timezone.now().isoformat()}
+            device.save(update_fields=["observed_readiness","runtime_resources","updated_at"])
         else:
             result=getattr(adapter,job.operation_type)(job.deployment)
         deployment=job.deployment
@@ -25,14 +32,14 @@ def execute_operation(self,job_id):
             deployment.resource_identities={"topology":{"name":"topology","namespace":deployment.namespace}}
         elif job.operation_type in ("stop_lab","delete_runtime"):
             deployment.observed_state=LabDeployment.State.STOPPED
-        if job.operation_type!="ping":
+        if job.operation_type not in ("ping",*device_operations):
             deployment.last_reconciliation=timezone.now()
             deployment.error_details={}
             deployment.save(update_fields=["observed_state","resource_identities","last_reconciliation","error_details","updated_at"])
         job.state="succeeded"; job.progress=100; job.error_details={}
-        if job.operation_type=="ping": job.result_payload=result
+        if job.operation_type=="ping" or job.operation_type in device_operations: job.result_payload=result
     except Exception as exc:
-        if job.deployment_id and job.operation_type!="ping":
+        if job.deployment_id and job.operation_type not in ("ping",*device_operations):
             LabDeployment.objects.filter(pk=job.deployment_id).update(observed_state=LabDeployment.State.FAILED,
                 error_details={"type":type(exc).__name__,"message":str(exc)[:2000]},last_reconciliation=timezone.now())
         job.state="failed"; job.error_details={"type":type(exc).__name__,"message":str(exc)[:2000]}; raise

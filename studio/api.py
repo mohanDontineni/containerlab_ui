@@ -146,6 +146,33 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
             job=models.OperationJob.objects.filter(owner=request.user,idempotency_key=key).first()
             if not job: return Response({"error":{"code":"operation_conflict"}},status=409)
         execute_operation.delay(str(job.id)); return Response(serializers.OperationSerializer(job).data,status=202)
+    @action(detail=True,methods=["post"],url_path="device-operations")
+    def device_operations(self,request,pk=None):
+        deployment=self.get_object(); self._require_operator(deployment)
+        operation=str(request.data.get("operation",""))
+        if operation not in ("start_device","stop_device","restart_device"):
+            return Response({"error":{"code":"unsupported_operation"}},status=422)
+        try: device_id=uuid.UUID(str(request.data.get("device_id")))
+        except (ValueError,TypeError,AttributeError): return Response({"error":{"code":"invalid_device"}},status=422)
+        key=request.headers.get("Idempotency-Key")
+        if not key: return Response({"error":{"code":"idempotency_key_required"}},status=400)
+        existing=models.OperationJob.objects.filter(owner=request.user,idempotency_key=key).first()
+        if existing:
+            if existing.target_id!=device_id or existing.operation_type!=operation: return Response({"error":{"code":"idempotency_conflict"}},status=409)
+            if existing.state in ("accepted","scheduled"): execute_operation.delay(str(existing.id))
+            return Response(serializers.OperationSerializer(existing).data,status=202)
+        with transaction.atomic():
+            device=deployment.devices.select_for_update().select_related("lab_node").filter(id=device_id).first()
+            if not device: return Response({"error":{"code":"invalid_device"}},status=422)
+            if not device.runtime_resources.get("pod"): return Response({"error":{"code":"device_launcher_unavailable"}},status=409)
+            if models.OperationJob.objects.filter(target_id=device.id,state__in=("accepted","scheduled","started")).exists():
+                return Response({"error":{"code":"device_operation_in_progress"}},status=409)
+            job=models.OperationJob.objects.create(deployment=deployment,owner=request.user,operation_type=operation,
+                target_id=device.id,idempotency_key=key,state="scheduled",request_payload={"device_id":str(device.id)})
+            models.AuditEvent.objects.create(actor=request.user,project=deployment.revision.lab.project,action=f"device.{operation.removesuffix('_device')}",
+                target_type="DeviceInstance",target_id=device.id,correlation_id=getattr(request,"correlation_id",""),metadata={"operation_job":str(job.id),"node":device.lab_node.name})
+            transaction.on_commit(lambda: execute_operation.delay(str(job.id)))
+        return Response(serializers.OperationSerializer(job).data,status=202)
     @action(detail=True,methods=["post"])
     def diagnostics(self,request,pk=None):
         deployment=self.get_object(); self._require_operator(deployment)

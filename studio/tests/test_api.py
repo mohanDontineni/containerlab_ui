@@ -2,7 +2,7 @@ import pytest
 from django.conf import settings
 from rest_framework.test import APIClient
 from studio.models import (AuditEvent, ConsoleSession, DeviceInstance, DeviceTemplateVersion, ImageArtifact, Lab, LabDeployment, LabNode, LabRevision,
-    Project, ProjectMembership, PublishedImage, User)
+    OperationJob, Project, ProjectMembership, PublishedImage, User)
 from studio.tasks import execute_operation
 
 def test_web_process_uses_configured_celery_broker():
@@ -103,3 +103,47 @@ def test_console_authorization_is_session_bound_and_viewer_read_only():
     session=ConsoleSession.objects.get(id=response.data["id"])
     assert session.token_hash and session.user==viewer
     assert AuditEvent.objects.filter(action="console.authorized",target_id=device.id).exists()
+
+@pytest.mark.django_db
+def test_device_lifecycle_is_idempotent_audited_and_operator_only(monkeypatch):
+    monkeypatch.setattr("studio.api.execute_operation.delay",lambda *_: None)
+    owner=User.objects.create_user("lifecycle-owner",password="long-enough-password")
+    viewer=User.objects.create_user("lifecycle-viewer",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="lifecycle-project")
+    ProjectMembership.objects.create(project=project,user=viewer,role="viewer")
+    lab=Lab.objects.create(project=project,name="lifecycle-lab")
+    revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="2"*64,immutable=True)
+    template=DeviceTemplateVersion.objects.filter(containerlab_kind="linux").first()
+    node=LabNode.objects.create(revision=revision,name="client",template_version=template)
+    deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-lifecycle-test",runtime_version="0.8.0",observed_state="running")
+    device=DeviceInstance.objects.create(deployment=deployment,lab_node=node,observed_readiness="ready",runtime_resources={"pod":"client-pod"})
+    payload={"device_id":str(device.id),"operation":"restart_device"}
+    client=APIClient(); client.force_authenticate(viewer)
+    assert client.post(f"/api/v1/deployments/{deployment.id}/device-operations/",payload,format="json",HTTP_IDEMPOTENCY_KEY="viewer-restart").status_code==403
+    client.force_authenticate(owner)
+    first=client.post(f"/api/v1/deployments/{deployment.id}/device-operations/",payload,format="json",HTTP_IDEMPOTENCY_KEY="owner-restart")
+    second=client.post(f"/api/v1/deployments/{deployment.id}/device-operations/",payload,format="json",HTTP_IDEMPOTENCY_KEY="owner-restart")
+    assert first.status_code==second.status_code==202
+    assert first.data["id"]==second.data["id"]
+    assert AuditEvent.objects.filter(action="device.restart",target_id=device.id).count()==1
+
+@pytest.mark.django_db
+def test_device_worker_updates_node_without_failing_running_lab(monkeypatch):
+    owner=User.objects.create_user("device-worker",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="device-worker-project")
+    lab=Lab.objects.create(project=project,name="device-worker-lab")
+    revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="3"*64,immutable=True)
+    node=LabNode.objects.create(revision=revision,name="node-a",template_version=DeviceTemplateVersion.objects.filter(containerlab_kind="linux").first())
+    deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-worker-test",runtime_version="0.8.0",observed_state="running")
+    device=DeviceInstance.objects.create(deployment=deployment,lab_node=node,observed_readiness="ready",runtime_resources={"pod":"node-a-pod"})
+    job=OperationJob.objects.create(deployment=deployment,owner=owner,operation_type="stop_device",target_id=device.id,idempotency_key="worker-stop",state="scheduled")
+    class Adapter:
+        def stop_device(self,received_deployment,received_device):
+            assert received_deployment.id==deployment.id and received_device.id==device.id
+            return {"device":"node-a","operation":"stop","output":"node-a","readiness":"stopped"}
+    monkeypatch.setattr("studio.tasks.ClabernetesAdapter",Adapter)
+    execute_operation.run(str(job.id))
+    job.refresh_from_db(); device.refresh_from_db(); deployment.refresh_from_db()
+    assert job.state=="succeeded" and job.result_payload["readiness"]=="stopped"
+    assert device.observed_readiness=="stopped"
+    assert deployment.observed_state=="running"
