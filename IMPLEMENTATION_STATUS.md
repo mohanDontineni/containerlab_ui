@@ -27,6 +27,7 @@
 - A hardened Celery Beat scheduler that reconciles active deployments every 30 seconds without a Kubernetes service-account token, writable root filesystem, or Linux capabilities.
 - EVE-style Save As workflow in the topology workspace with an accessible modal, project authorization, quota/name-conflict handling, deep topology identity remapping, encrypted configuration re-versioning, and audit history.
 - Topology revision-history workspace with immutable/deployed/draft status, counts and checksums, optimistic draft-conflict protection, idempotent restore into a new editable revision, encrypted configuration re-versioning, and audited provenance.
+- Native self-service account and security page with profile/timezone management, normalized email, verified current-password changes, strengthened password validation, CSRF protection, session continuity, legacy-route safety, and content-free audit events.
 
 ## Acceptance results
 
@@ -64,8 +65,9 @@
 | 30 | Convergent device lifecycle | PASS | After the suspended server launcher was deleted, Kubernetes assigned a new pod and UID; periodic reconciliation preserved suspend intent, re-paused the replacement, kept its data interface down, and maintained 100% packet loss until Resume. |
 | 31 | Lab Save As / deep clone | PASS | A deployed immutable two-router BGP revision was copied through the production API with new revision/node/configuration identities, preserved two nodes/one link/two encrypted FRR configs, a non-null editable draft, and an audit event; the cloned lab deployed, established eBGP, and passed 3/3 sourced loopback pings in both directions. |
 | 32 | Revision history and restore | PASS | The deployed BGP revision remained immutable and its original runtime stayed healthy while restore created revision 2 as a new editable draft with two encrypted FRR configs; replay returned the same result, a stale draft token returned typed 409, and deploying the restored revision established eBGP and passed 3/3 routed pings both ways. |
+| 33 | Self-service account security | PASS | A temporary production account rendered the native page, rejected an incorrect current password, normalized and saved profile/timezone data, changed to a policy-compliant password, authenticated with the replacement credential, retained its active session, and emitted content-free profile/password audit events; the temporary user was then removed. |
 
-Automated tests: **88 passed**. Django checks and migration drift checks: **pass**. React TypeScript/Vite production build: **pass in the clean multi-stage image build**. Helm lint/render: **pass**. Native runtime ping: **3 transmitted, 3 received, 0% loss, 0.445 ms average RTT**. Bidirectional 120 ms link condition: **240.563 ms average RTT**. Disabled link: **100% loss**. Restored qdiscs: **native `noqueue` on both endpoints**.
+Automated tests: **91 passed**. Django checks and migration drift checks: **pass**. React TypeScript/Vite production build: **pass in the clean multi-stage image build**. Helm lint/render: **pass**. Native runtime ping: **3 transmitted, 3 received, 0% loss, 0.445 ms average RTT**. Bidirectional 120 ms link condition: **240.563 ms average RTT**. Disabled link: **100% loss**. Restored qdiscs: **native `noqueue` on both endpoints**.
 
 ## Known limitations
 

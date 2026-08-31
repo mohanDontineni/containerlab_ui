@@ -4,6 +4,10 @@ The web ServiceAccount has token automount disabled. The worker/reconciler gets 
 
 The current home-lab certificate is self-signed. Kubernetes Secrets are not described as encrypted at rest; enable Kubernetes encryption-at-rest separately. Namespaces do not strongly isolate privileged network devices.
 
+## Account security
+
+The native account page requires an authenticated same-origin session and CSRF token. Profile changes accept only IANA time zones and record changed field names rather than profile values. Password replacement requires the current credential and applies similarity, 12-character minimum, common-password, and numeric-only validators. Django rotates the session authentication hash after a successful change so the verified current browser stays signed in; no password value or derivative is written to an operation result or audit event. Legacy Django password-change URLs redirect to the native workflow instead of exposing an unstyled secondary surface.
+
 ## Node-local image publisher
 
 The single-node installation publishes validated Docker/OCI archives through a short-lived Kubernetes Job. A non-root init container reads the artifact PVC and stages only the selected archive into an `emptyDir`; the publisher then runs as UID 0 with all Linux capabilities dropped and can access the host containerd socket. The worker ServiceAccount can create and observe Jobs, while the web ServiceAccount has no Kubernetes token.
