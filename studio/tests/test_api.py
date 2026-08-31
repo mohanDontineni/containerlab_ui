@@ -110,7 +110,7 @@ def test_quota_cannot_be_lowered_below_current_usage():
 def test_lab_clone_is_deep_project_scoped_audited_and_quota_enforced():
     owner=User.objects.create_user("clone-owner",password="long-enough-password")
     viewer=User.objects.create_user("clone-viewer",password="long-enough-password")
-    project=Project.objects.create(owner=owner,name="clone-project",quotas={"max_labs":2})
+    project=Project.objects.create(owner=owner,name="clone-project",quotas={"max_labs":3})
     ProjectMembership.objects.create(project=project,user=viewer,role="viewer")
     lab=Lab.objects.create(project=project,name="source",description="reference",tags=["bgp"])
     revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="c"*64,annotations=[{"type":"text","text":"edge"}])
@@ -138,7 +138,10 @@ def test_lab_clone_is_deep_project_scoped_audited_and_quota_enforced():
     assert cloned_config.id!=configuration.id and decrypt_configuration(cloned_config.encrypted_content)=="hostname client\n"
     assert AuditEvent.objects.filter(project=project,action="lab.cloned",target_id=clone.id,metadata__source_lab=str(lab.id)).exists()
     conflict=client.post(f"/api/v1/labs/{lab.id}/clone/",{"name":"source copy"},format="json")
-    assert conflict.status_code==409 and conflict.data["error"]["code"]=="project_quota_exceeded"
+    assert conflict.status_code==409 and conflict.data["error"]["code"]=="lab_name_conflict"
+    Lab.objects.create(project=project,name="quota filler")
+    quota=client.post(f"/api/v1/labs/{lab.id}/clone/",{"name":"over quota"},format="json")
+    assert quota.status_code==409 and quota.data["error"]["code"]=="project_quota_exceeded"
 
 @pytest.mark.django_db
 def test_upload_creation_is_project_scoped_and_checksum_optional():

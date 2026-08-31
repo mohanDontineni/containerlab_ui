@@ -14,11 +14,10 @@ Kubernetes 1.36.3/amd64 was verified. Native Linux containers work. VM-backed de
 |---|---|---|
 | Topology compile/deploy/delete/observe | Supported | Verified with real Node/Link resources. |
 | Native Linux device and point-to-point link | Supported | Alpine smoke topology and ICMP verified. |
-| Browser SSH console | Unverified | Server authorization model exists; transport incomplete. |
-| Per-device restart and PCAP | Experimental | Runtime supports underlying access, Studio mapping disabled pending validation. |
-| Live link impairment/rewiring | Unsupported | No verified 0.8.0 per-link API exposed by Studio. |
+| Browser console | Supported | Session-bound WebSocket console was exercised against live nested appliances; viewer sessions are read-only. |
+| Per-device restart and PCAP | Supported | Launcher replacement and authenticated packet capture/download were verified against live deployments. |
+| Live link impairment | Supported | Bidirectional latency, loss/disable, and clean qdisc restore were verified through Studio operations. |
 | VM-backed vendor devices | Unsupported here | KVM missing; licensed images not supplied. |
 | Private registry credentials | Unverified | Launcher-internal pull trust must be configured independently of pod pull secrets. |
 
 Examples: a digest-pinned Alpine Linux node is within the native supported subset. A Cisco IOS-XRv disk is not accepted merely because it is qcow2; it needs licensing, an approved vrnetlab recipe, KVM, and a verified template.
-
