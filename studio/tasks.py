@@ -44,7 +44,8 @@ def execute_operation(self,job_id):
                 error_details={"type":type(exc).__name__,"message":str(exc)[:2000]},last_reconciliation=timezone.now())
         job.state="failed"; job.error_details={"type":type(exc).__name__,"message":str(exc)[:2000]}; raise
     finally: job.heartbeat=timezone.now(); job.save()
-    if job.operation_type=="restart_device": reconcile_deployment.apply_async(args=[str(job.deployment_id)],countdown=3)
+    if job.operation_type=="restart_device":
+        for countdown in (3,10,30): reconcile_deployment.apply_async(args=[str(job.deployment_id)],countdown=countdown)
     return result
 
 @shared_task(bind=True,autoretry_for=(ConnectionError,),retry_backoff=True,max_retries=5)

@@ -142,12 +142,14 @@ def test_device_worker_updates_node_without_failing_running_lab(monkeypatch):
             assert received_deployment.id==deployment.id and received_device.id==device.id
             return {"device":"node-a","operation":"restart","replaced_pod":"node-a-pod","readiness":"restarting"}
     monkeypatch.setattr("studio.tasks.ClabernetesAdapter",Adapter)
-    monkeypatch.setattr("studio.tasks.reconcile_deployment.apply_async",lambda **_: None)
+    scheduled=[]
+    monkeypatch.setattr("studio.tasks.reconcile_deployment.apply_async",lambda **kwargs: scheduled.append(kwargs["countdown"]))
     execute_operation.run(str(job.id))
     job.refresh_from_db(); device.refresh_from_db(); deployment.refresh_from_db()
     assert job.state=="succeeded" and job.result_payload["readiness"]=="restarting"
     assert device.observed_readiness=="restarting"
     assert deployment.observed_state=="running"
+    assert scheduled==[3,10,30]
 
 @pytest.mark.django_db
 def test_reconciliation_drops_manual_lifecycle_after_launcher_replacement(monkeypatch):
