@@ -136,33 +136,34 @@ def test_device_worker_updates_node_without_failing_running_lab(monkeypatch):
     node=LabNode.objects.create(revision=revision,name="node-a",template_version=DeviceTemplateVersion.objects.filter(containerlab_kind="linux").first())
     deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-worker-test",runtime_version="0.8.0",observed_state="running")
     device=DeviceInstance.objects.create(deployment=deployment,lab_node=node,observed_readiness="ready",runtime_resources={"pod":"node-a-pod"})
-    job=OperationJob.objects.create(deployment=deployment,owner=owner,operation_type="stop_device",target_id=device.id,idempotency_key="worker-stop",state="scheduled")
+    job=OperationJob.objects.create(deployment=deployment,owner=owner,operation_type="restart_device",target_id=device.id,idempotency_key="worker-restart",state="scheduled")
     class Adapter:
-        def stop_device(self,received_deployment,received_device):
+        def restart_device(self,received_deployment,received_device):
             assert received_deployment.id==deployment.id and received_device.id==device.id
-            return {"device":"node-a","operation":"stop","output":"node-a","readiness":"stopped"}
+            return {"device":"node-a","operation":"restart","replaced_pod":"node-a-pod","readiness":"restarting"}
     monkeypatch.setattr("studio.tasks.ClabernetesAdapter",Adapter)
+    monkeypatch.setattr("studio.tasks.reconcile_deployment.apply_async",lambda **_: None)
     execute_operation.run(str(job.id))
     job.refresh_from_db(); device.refresh_from_db(); deployment.refresh_from_db()
-    assert job.state=="succeeded" and job.result_payload["readiness"]=="stopped"
-    assert device.observed_readiness=="stopped"
+    assert job.state=="succeeded" and job.result_payload["readiness"]=="restarting"
+    assert device.observed_readiness=="restarting"
     assert deployment.observed_state=="running"
 
 @pytest.mark.django_db
-def test_reconciliation_preserves_manual_stop_for_same_launcher(monkeypatch):
+def test_reconciliation_drops_manual_lifecycle_after_launcher_replacement(monkeypatch):
     owner=User.objects.create_user("reconcile-stop",password="long-enough-password")
     project=Project.objects.create(owner=owner,name="reconcile-stop-project")
     lab=Lab.objects.create(project=project,name="reconcile-stop-lab")
     revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="4"*64,immutable=True)
     node=LabNode.objects.create(revision=revision,name="node-a",template_version=DeviceTemplateVersion.objects.filter(containerlab_kind="linux").first())
     deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-reconcile-stop",runtime_version="0.8.0",observed_state="running")
-    device=DeviceInstance.objects.create(deployment=deployment,lab_node=node,observed_readiness="stopped",
-        runtime_resources={"pod":"node-a-pod","pod_uid":"stable-pod","manual_lifecycle":"stop_device"})
+    device=DeviceInstance.objects.create(deployment=deployment,lab_node=node,observed_readiness="restarting",
+        runtime_resources={"pod":"node-a-pod","pod_uid":"old-pod","manual_lifecycle":"restart_device"})
     class Adapter:
         def get_observed_state(self,_): return {"topologyReady":True}
         def observe_devices(self,_): return [{"name":"node-a","node_uid":"node-uid","readiness":"ready","pod":"node-a-pod",
-            "pod_uid":"stable-pod","worker":"worker","pod_phase":"Running"}]
+            "pod_uid":"new-pod","worker":"worker","pod_phase":"Running"}]
     monkeypatch.setattr("studio.tasks.ClabernetesAdapter",Adapter)
     reconcile_deployment.run(str(deployment.id))
     device.refresh_from_db()
-    assert device.observed_readiness=="stopped" and device.runtime_resources["manual_lifecycle"]=="stop_device"
+    assert device.observed_readiness=="ready" and "manual_lifecycle" not in device.runtime_resources

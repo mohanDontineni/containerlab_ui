@@ -11,7 +11,7 @@ class CapabilityError(RuntimeError): pass
 class Plan: namespace:str; topology_name:str; manifest:dict
 
 class ClabernetesAdapter:
-    capabilities={"deploy_lab":"supported","get_observed_state":"supported","delete_runtime":"supported","restart_device":"experimental",
+    capabilities={"deploy_lab":"supported","get_observed_state":"supported","delete_runtime":"supported","restart_device":"supported",
         "resolve_console_target":"supported","start_capture":"experimental","stop_lab":"delete_and_redeploy","set_link_condition":"unsupported","collect_configuration":"template_dependent"}
     def __init__(self, custom_api=None, core_api=None):
         if custom_api is None:
@@ -80,19 +80,13 @@ class ClabernetesAdapter:
     def resolve_console_target(self,device):
         if not device.runtime_resources.get("pod"): raise CapabilityError("Device pod is not ready")
         return {"namespace":device.deployment.namespace,"pod":device.runtime_resources["pod"],"method":device.lab_node.template_version.console_method}
-    def operate_device(self,deployment,device,operation):
-        if operation not in ("start","stop","restart"): raise CapabilityError("Unsupported device lifecycle operation")
+    def restart_device(self,deployment,device):
         if device.deployment_id != deployment.id: raise CapabilityError("Device does not belong to this deployment")
         pod=device.runtime_resources.get("pod")
         if not pod: raise CapabilityError("The device launcher pod is not ready")
         name=device.lab_node.name
-        command=["docker",operation,"--timeout","15",name] if operation in ("stop","restart") else ["docker","start",name]
-        output=stream(self.core.connect_get_namespaced_pod_exec,pod,deployment.namespace,command=command,
-            stderr=True,stdin=False,stdout=True,tty=False,_request_timeout=30)
-        return {"device":name,"operation":operation,"output":str(output)[-4000:],"readiness":"stopped" if operation=="stop" else "ready"}
-    def start_device(self,deployment,device): return self.operate_device(deployment,device,"start")
-    def stop_device(self,deployment,device): return self.operate_device(deployment,device,"stop")
-    def restart_device(self,deployment,device): return self.operate_device(deployment,device,"restart")
+        self.core.delete_namespaced_pod(pod,deployment.namespace,body=client.V1DeleteOptions(grace_period_seconds=0,propagation_policy="Background"))
+        return {"device":name,"operation":"restart","replaced_pod":pod,"readiness":"restarting"}
     def collect_configuration(self,*_): raise CapabilityError("Template does not provide a verified collector")
     def start_capture(self,*_): raise CapabilityError("Capture requires verified runtime interface mapping")
     def set_link_condition(self,*_): raise CapabilityError("Clabernetes v0.8.0 does not expose a supported live impairment API")

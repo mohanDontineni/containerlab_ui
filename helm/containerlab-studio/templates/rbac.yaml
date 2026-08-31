@@ -21,6 +21,9 @@ rules:
   resources: ["pods","pods/log","events","services"]
   verbs: ["get","list","watch"]
 - apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["delete"]
+- apiGroups: [""]
   resources: ["pods/exec"]
   verbs: ["get","create"]
 ---

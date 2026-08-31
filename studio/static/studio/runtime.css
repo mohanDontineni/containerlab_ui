@@ -2,6 +2,5 @@
 .device-actions { display: flex; justify-content: flex-end; gap: 5px; }
 .device-actions button { width: 28px; height: 28px; padding: 0; border: 1px solid #243c51; border-radius: 6px; background: #0a1826; color: #7890a4; cursor: pointer; }
 .device-actions button:hover:not(:disabled) { border-color: #2e91a6; color: #d9f8fc; }
-.device-actions button[data-operation="stop_device"] { color: #e58391; }
 .device-actions button:disabled { opacity: .35; cursor: not-allowed; }
 @media(max-width: 850px) { .device-runtime-list article { grid-template-columns: 38px minmax(130px,1fr) 90px auto; } .worker-chip { display:none; } }

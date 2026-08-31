@@ -30,15 +30,13 @@ def test_observe_devices_resolves_only_topology_owned_pods():
     observed=adapter.observe_devices(SimpleNamespace(namespace="lab-one"))
     assert observed==[{"name":"r1","node_uid":"node-uid","readiness":"ready","pod":"r1-pod","pod_uid":"pod-uid","worker":"worker-1","pod_phase":"Running"}]
 
-def test_device_lifecycle_targets_only_nested_container(monkeypatch):
+def test_device_restart_replaces_only_selected_clabernetes_pod():
     calls=[]
-    monkeypatch.setattr("studio.runtime.stream",lambda method,pod,namespace,**kwargs: calls.append((method,pod,namespace,kwargs)) or "r1\n")
-    core=SimpleNamespace(connect_get_namespaced_pod_exec=object())
+    core=SimpleNamespace(delete_namespaced_pod=lambda pod,namespace,body: calls.append((pod,namespace,body)))
     adapter=ClabernetesAdapter(custom_api=SimpleNamespace(),core_api=core)
     deployment=SimpleNamespace(id="deployment-id",namespace="lab-one")
     device=SimpleNamespace(deployment_id="deployment-id",runtime_resources={"pod":"r1-launcher"},lab_node=SimpleNamespace(name="r1"))
     result=adapter.restart_device(deployment,device)
-    assert result["readiness"]=="ready"
-    assert calls[0][1:3]==("r1-launcher","lab-one")
-    assert calls[0][3]["command"]==["docker","restart","--timeout","15","r1"]
-    assert calls[0][3]["_request_timeout"]==30
+    assert result=={"device":"r1","operation":"restart","replaced_pod":"r1-launcher","readiness":"restarting"}
+    assert calls[0][0:2]==("r1-launcher","lab-one")
+    assert calls[0][2].grace_period_seconds==0

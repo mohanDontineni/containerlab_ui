@@ -13,7 +13,7 @@ def execute_operation(self,job_id):
         if job.state=="succeeded": return str(job.id)
         job.state="started"; job.attempts+=1; job.heartbeat=timezone.now(); job.progress=10; job.save()
     adapter=ClabernetesAdapter()
-    device_operations=("start_device","stop_device","restart_device")
+    device_operations=("restart_device",)
     try:
         if job.operation_type=="ping":
             node=LabNode.objects.get(pk=job.request_payload["node_id"],revision=job.deployment.revision)
@@ -44,6 +44,7 @@ def execute_operation(self,job_id):
                 error_details={"type":type(exc).__name__,"message":str(exc)[:2000]},last_reconciliation=timezone.now())
         job.state="failed"; job.error_details={"type":type(exc).__name__,"message":str(exc)[:2000]}; raise
     finally: job.heartbeat=timezone.now(); job.save()
+    if job.operation_type=="restart_device": reconcile_deployment.apply_async(args=[str(job.deployment_id)],countdown=3)
     return result
 
 @shared_task(bind=True,autoretry_for=(ConnectionError,),retry_backoff=True,max_retries=5)
@@ -67,9 +68,8 @@ def reconcile_deployment(self,deployment_id):
                 resources={"node_uid":observed_device["node_uid"],"pod":observed_device["pod"],"pod_uid":observed_device["pod_uid"],"pod_phase":observed_device["pod_phase"]}
                 same_launcher=current and current.runtime_resources.get("pod_uid")==observed_device["pod_uid"]
                 if same_launcher: resources={**current.runtime_resources,**resources}
-                manually_stopped=same_launcher and current.runtime_resources.get("manual_lifecycle")=="stop_device"
                 DeviceInstance.objects.update_or_create(deployment=deployment,lab_node=node,defaults={
-                    "runtime_resources":resources,"observed_readiness":"stopped" if manually_stopped else observed_device["readiness"],
+                    "runtime_resources":resources,"observed_readiness":observed_device["readiness"],
                     "worker_placement":observed_device["worker"] or ""})
         deployment.save(update_fields=["observed_state","last_reconciliation","error_details","resource_identities","updated_at"])
         return observed

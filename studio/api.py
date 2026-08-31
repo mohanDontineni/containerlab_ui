@@ -150,8 +150,8 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
     def device_operations(self,request,pk=None):
         deployment=self.get_object(); self._require_operator(deployment)
         operation=str(request.data.get("operation",""))
-        if operation not in ("start_device","stop_device","restart_device"):
-            return Response({"error":{"code":"unsupported_operation"}},status=422)
+        if operation!="restart_device":
+            return Response({"error":{"code":"unsupported_operation","details":"Clabernetes v0.8 supports reliable per-device restart, but not durable start/stop state."}},status=422)
         try: device_id=uuid.UUID(str(request.data.get("device_id")))
         except (ValueError,TypeError,AttributeError): return Response({"error":{"code":"invalid_device"}},status=422)
         key=request.headers.get("Idempotency-Key")
