@@ -18,6 +18,8 @@
 - Licensed Docker/OCI archive publication into single-node containerd with a checksum-derived immutable tag, isolated Kubernetes Job, project-scoped idempotent API, audit trail, build status, and image-library action.
 - In-product project collaboration management with administrator/editor/viewer roles, delegated administrator controls, owner protection, cross-project isolation, exact-user lookup, and audited add/change/remove lifecycle.
 - Enforced project quotas for labs, nodes per topology, active deployments, image storage/reservations, and members, with row-locked accounting, usage reporting, administrator controls, audit events, and a consistent conflict contract.
+- Encrypted, versioned startup configuration delivery for supported appliance templates using deployment-scoped ConfigMaps and Clabernetes launcher mounts, plus content-free topology/configuration audit events.
+- Production BGP reference lab using a resumably uploaded and locally published FRR 10.4.1 image, two configured routers, explicit eth1 link endpoints, established eBGP, learned loopback routes, and bidirectional routed reachability.
 
 ## Acceptance results
 
@@ -34,7 +36,7 @@
 | 9 | Duplicate deploy idempotency | PASS | DB constraints and unit test cover idempotency; cluster replay test not run. |
 | 10 | Device vs pod readiness | PASS | Separate observed readiness fields; Clabernetes node/topology readiness inspected. |
 | 11 | Browser console reaches device | PASS | Session-bound, expiring, project-scoped WebSocket console was exercised against live Alpine devices; viewers are read-only. |
-| 12 | Reference-lab traffic | PARTIAL | Smoke traffic passed 3/3; BGP and firewall reference acceptance not run. |
+| 12 | Reference-lab traffic | PARTIAL | Two-AS BGP reference acceptance passes with learned routes and bidirectional loopback traffic; firewall reference acceptance remains. |
 | 13 | PCAP download | PASS | Live eth1 capture downloaded through the authenticated API; checksum matched and tcpdump decoded 14 genuine ICMP/ARP packets with internal stop frames removed. |
 | 14 | Stop preserves saved lab/config | PASS | Runtime stop/redeploy preserves immutable revision data, saved topology, and encrypted startup configuration records. |
 | 15 | Redeploy pinned revisions/images | PASS | Adapter accepts registry digests or checksum-derived node-local publications; a fresh saved lab deployed the published Alpine 3.22.5 image and reached ready. |
@@ -45,8 +47,10 @@
 | 20 | Backup/restore | NOT RUN | Commands supplied; destructive restore exercise not performed on live instance. |
 | 21 | Project collaboration lifecycle | PASS | Live owner assigned admin/editor/viewer roles; editor mutation returned 403; delegated admin add/change/remove returned 201/200/204; owner and viewer pages rendered the correct controls. |
 | 22 | Project resource governance | PASS | Live one-unit limits allowed the first lab and rejected excess labs, members, image reservations, and topology nodes with typed 409 conflicts; usage/UI/audit checks passed. |
+| 23 | Versioned startup configuration | PASS | FRR configs remained encrypted in PostgreSQL, materialized into deployment-scoped ConfigMaps, mounted into launchers, and applied to both ready devices. |
+| 24 | BGP reference lab | PASS | FRR neighbor reached Established with one received prefix; 10.2.2.2/32 installed via BGP/eth1; both sourced loopback pings passed 3/3 with 0% loss. |
 
-Automated tests: **65 passed**. Django checks and migration drift checks: **pass**. React TypeScript/Vite production build: **pass in the clean multi-stage image build**. Helm lint/render: **pass**. Native runtime ping: **3 transmitted, 3 received, 0% loss, 0.445 ms average RTT**. Bidirectional 120 ms link condition: **240.563 ms average RTT**. Disabled link: **100% loss**. Restored qdiscs: **native `noqueue` on both endpoints**.
+Automated tests: **68 passed**. Django checks and migration drift checks: **pass**. React TypeScript/Vite production build: **pass in the clean multi-stage image build**. Helm lint/render: **pass**. Native runtime ping: **3 transmitted, 3 received, 0% loss, 0.445 ms average RTT**. Bidirectional 120 ms link condition: **240.563 ms average RTT**. Disabled link: **100% loss**. Restored qdiscs: **native `noqueue` on both endpoints**.
 
 ## Known limitations
 

@@ -76,6 +76,18 @@ def test_device_restart_replaces_only_selected_clabernetes_pod():
     assert calls[0][0:2]==("r1-launcher","lab-one")
     assert calls[0][2].grace_period_seconds==0
 
+def test_stop_removes_plaintext_runtime_configuration_maps():
+    deleted=[]
+    custom=SimpleNamespace(delete_namespaced_custom_object=lambda *_args,**_kwargs:{"status":"Success"})
+    config_maps=SimpleNamespace(items=[SimpleNamespace(metadata=SimpleNamespace(name="studio-startup-r1")),SimpleNamespace(metadata=SimpleNamespace(name="studio-startup-r2"))])
+    core=SimpleNamespace(
+        list_namespaced_config_map=lambda namespace,label_selector: config_maps,
+        delete_namespaced_config_map=lambda name,namespace,body: deleted.append((name,namespace,body.propagation_policy)))
+    adapter=ClabernetesAdapter(custom_api=custom,core_api=core)
+    result=adapter.stop_lab(SimpleNamespace(id="deployment-id",namespace="lab-one"))
+    assert deleted==[("studio-startup-r1","lab-one","Background"),("studio-startup-r2","lab-one","Background")]
+    assert result["configMapsDeleted"]==2
+
 def test_bounded_capture_uses_verified_host_interface_and_returns_pcap(monkeypatch):
     pcap=b"\xd4\xc3\xb2\xa1"+b"\x00"*20
     calls=[]

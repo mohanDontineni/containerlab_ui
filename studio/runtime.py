@@ -187,11 +187,22 @@ class ClabernetesAdapter:
         except (binascii.Error,ValueError) as exc: raise CapabilityError("Launcher returned an invalid capture stream") from exc
         return strip_capture_stop_packets(payload)
     def delete_runtime(self,deployment):
-        try: return self.custom.delete_namespaced_custom_object(API_GROUP,API_VERSION,deployment.namespace,"topologies","topology",
+        try: result=self.custom.delete_namespaced_custom_object(API_GROUP,API_VERSION,deployment.namespace,"topologies","topology",
             body=client.V1DeleteOptions(propagation_policy="Foreground"))
         except ApiException as exc:
-            if exc.status==404: return {"status":"already_stopped"}
-            raise
+            if exc.status!=404: raise
+            result={"status":"already_stopped"}
+        selector=f"studio.containerlab.io/deployment={deployment.id}"
+        deleted=0
+        for config_map in self.core.list_namespaced_config_map(deployment.namespace,label_selector=selector).items:
+            try:
+                self.core.delete_namespaced_config_map(config_map.metadata.name,deployment.namespace,
+                    body=client.V1DeleteOptions(propagation_policy="Background"))
+                deleted+=1
+            except ApiException as exc:
+                if exc.status!=404: raise
+        if isinstance(result,dict): result["configMapsDeleted"]=deleted
+        return result
     def stop_lab(self,deployment): return self.delete_runtime(deployment)
     def resolve_console_target(self,device):
         if not device.runtime_resources.get("pod"): raise CapabilityError("Device pod is not ready")

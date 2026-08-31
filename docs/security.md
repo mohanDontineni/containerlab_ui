@@ -9,3 +9,9 @@ The current home-lab certificate is self-signed. Kubernetes Secrets are not desc
 The single-node installation publishes validated Docker/OCI archives through a short-lived Kubernetes Job. A non-root init container reads the artifact PVC and stages only the selected archive into an `emptyDir`; the publisher then runs as UID 0 with all Linux capabilities dropped and can access the host containerd socket. The worker ServiceAccount can create and observe Jobs, while the web ServiceAccount has no Kubernetes token.
 
 Writing to the containerd socket is equivalent to node-runtime administration. Publication remains limited to administrator/editor roles and retains checksum re-verification, license acknowledgement, idempotency, and audit events. This mode is not an image distribution mechanism for multi-node clusters; use a trusted registry there.
+
+## Runtime startup configurations
+
+Startup configurations are encrypted and versioned in PostgreSQL. At deployment time the worker decrypts only the selected versions and writes deployment-labeled ConfigMaps in the isolated lab namespace; Clabernetes mounts those files into the appropriate launcher and Containerlab binds them into supported appliances. The Topology definition contains only mount paths, not configuration content. Topology audit events contain checksums and counts rather than plaintext.
+
+Kubernetes ConfigMaps are not secret stores: runtime configuration is plaintext in the lab namespace while the deployment exists. Stopping a deployment removes its labeled runtime ConfigMaps while retaining the encrypted database versions. Limit Kubernetes API access to the reconciler role, enable Kubernetes encryption at rest, and use a dedicated secret-delivery integration before placing privileged credentials in startup configurations.
