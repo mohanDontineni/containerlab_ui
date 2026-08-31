@@ -196,7 +196,9 @@ def images(request):
     artifacts = ImageArtifact.objects.filter(project__in=visible_projects(request.user)).select_related("project").prefetch_related("published_images").order_by("-created_at")
     for artifact in artifacts:
         artifact.ready_publication=next((image for image in artifact.published_images.all() if image.lifecycle_status=="ready"),None)
-        artifact.can_publish=project_role(request.user,artifact.project) in (ProjectMembership.Role.ADMIN,ProjectMembership.Role.EDITOR) and artifact.validation_status==ImageArtifact.Validation.VALIDATED and artifact.detected_format in ("docker-archive","oci-archive") and artifact.license_acknowledged and not artifact.ready_publication
+        can_operate=project_role(request.user,artifact.project) in (ProjectMembership.Role.ADMIN,ProjectMembership.Role.EDITOR)
+        artifact.can_publish=can_operate and artifact.validation_status==ImageArtifact.Validation.VALIDATED and artifact.detected_format in ("docker-archive","oci-archive") and artifact.license_acknowledged and not artifact.ready_publication
+        artifact.can_republish=can_operate and bool(artifact.ready_publication) and artifact.source_type==ImageArtifact.Source.UPLOAD
     published = PublishedImage.objects.filter(artifact__project__in=visible_projects(request.user)).count()
     return render(request, "studio/catalog.html", {"section": "images", "title": "Image library", "eyebrow": "DEVICE SOFTWARE", "items": artifacts,
         "description": "Track quarantined uploads, inspection results, builds, and immutable publications.", "secondary_stat": f"{published} published",

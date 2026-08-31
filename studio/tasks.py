@@ -74,7 +74,9 @@ def execute_operation(self,job_id):
         job.state="succeeded"; job.progress=100; job.error_details={}
         if job.operation_type in ("publish_image","ping","capture_packets","set_link_condition") or job.operation_type in device_operations: job.result_payload=result
     except Exception as exc:
-        if job.operation_type=="publish_image": ImageBuild.objects.filter(pk=job.request_payload.get("build_id")).update(status="failed",finished_at=timezone.now(),failure_details={"type":type(exc).__name__,"message":str(exc)[:2000]})
+        if job.operation_type=="publish_image":
+            ImageBuild.objects.filter(pk=job.request_payload.get("build_id")).update(status="failed",finished_at=timezone.now(),failure_details={"type":type(exc).__name__,"message":str(exc)[:2000]})
+            if job.request_payload.get("force"): PublishedImage.objects.filter(artifact_id=job.target_id,lifecycle_status="reconciling").update(lifecycle_status="failed")
         if job.operation_type=="capture_packets": CaptureSession.objects.filter(pk=job.target_id).update(status="failed")
         if job.deployment_id and job.operation_type not in ("ping","capture_packets","set_link_condition",*device_operations):
             LabDeployment.objects.filter(pk=job.deployment_id).update(observed_state=LabDeployment.State.FAILED,

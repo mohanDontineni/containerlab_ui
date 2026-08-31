@@ -230,11 +230,14 @@ class ImageArtifactViewSet(viewsets.ReadOnlyModelViewSet):
             if existing.state in ("accepted","scheduled"): execute_operation.delay(str(existing.id))
             return Response(serializers.OperationSerializer(existing).data,status=202)
         published=artifact.published_images.filter(lifecycle_status="ready").first()
-        if published: return Response(serializers.PublishedImageSerializer(published).data,status=200)
+        force=request.data.get("force") is True
+        if published and not force: return Response(serializers.PublishedImageSerializer(published).data,status=200)
         with transaction.atomic():
+            if published:
+                published.lifecycle_status="reconciling";published.save(update_fields=["lifecycle_status","updated_at"])
             build_id=uuid.uuid4(); build=models.ImageBuild.objects.create(id=build_id,artifact=artifact,recipe_version="node-containerd-v1",job_identity=f"studio-publish-{build_id.hex[:20]}")
-            job=models.OperationJob.objects.create(owner=request.user,operation_type="publish_image",target_id=artifact.id,idempotency_key=key,state="scheduled",request_payload={"build_id":str(build.id)})
-            models.AuditEvent.objects.create(actor=request.user,project=artifact.project,action="image.publication_scheduled",target_type="ImageArtifact",target_id=artifact.id,correlation_id=getattr(request,"correlation_id",""),metadata={"build":str(build.id),"operation":str(job.id)})
+            job=models.OperationJob.objects.create(owner=request.user,operation_type="publish_image",target_id=artifact.id,idempotency_key=key,state="scheduled",request_payload={"build_id":str(build.id),"force":force})
+            models.AuditEvent.objects.create(actor=request.user,project=artifact.project,action="image.republication_scheduled" if force else "image.publication_scheduled",target_type="ImageArtifact",target_id=artifact.id,correlation_id=getattr(request,"correlation_id",""),metadata={"build":str(build.id),"operation":str(job.id),"force":force})
             transaction.on_commit(lambda: execute_operation.delay(str(job.id)))
         return Response(serializers.OperationSerializer(job).data,status=202)
 
