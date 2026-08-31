@@ -42,7 +42,10 @@ class LabViewSet(viewsets.ModelViewSet):
         key=request.headers.get("Idempotency-Key")
         if not key: return Response({"error":{"code":"idempotency_key_required"}},status=400)
         existing=models.OperationJob.objects.filter(owner=request.user,idempotency_key=key).select_related("deployment").first()
-        if existing: return Response({"deployment":serializers.DeploymentSerializer(existing.deployment).data,"operation":serializers.OperationSerializer(existing).data},status=202)
+        if existing:
+            if existing.state in ("accepted","scheduled"):
+                execute_operation.delay(str(existing.id))
+            return Response({"deployment":serializers.DeploymentSerializer(existing.deployment).data,"operation":serializers.OperationSerializer(existing).data},status=202)
         with transaction.atomic():
             # Lock only the lab row. PostgreSQL rejects FOR UPDATE across the nullable
             # current_draft outer join, while SQLite silently permits it.

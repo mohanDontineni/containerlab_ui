@@ -7,7 +7,9 @@ from .runtime import ClabernetesAdapter
 @shared_task(bind=True,autoretry_for=(ConnectionError,),retry_backoff=True,max_retries=5)
 def execute_operation(self,job_id):
     with transaction.atomic():
-        job=OperationJob.objects.select_for_update().select_related("deployment__revision").get(pk=job_id)
+        # OperationJob.deployment is nullable, so locking across select_related
+        # becomes an unsupported outer-join lock on PostgreSQL.
+        job=OperationJob.objects.select_for_update().get(pk=job_id)
         if job.state=="succeeded": return str(job.id)
         job.state="started"; job.attempts+=1; job.heartbeat=timezone.now(); job.progress=10; job.save()
     adapter=ClabernetesAdapter()
