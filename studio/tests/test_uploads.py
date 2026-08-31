@@ -1,4 +1,4 @@
-import hashlib,io,tarfile
+import hashlib,io,json,tarfile
 from pathlib import Path
 import pytest
 from django.utils import timezone
@@ -38,3 +38,25 @@ def test_traversal_tar_rejected(tmp_path):
     with tarfile.open(path,"w") as tf:
         info=tarfile.TarInfo("../../escape"); info.size=1; tf.addfile(info,io.BytesIO(b"x"))
     kind,result=inspect_file(path); assert kind=="unsafe-archive" and not result["deployable"]
+
+def _docker_archive(path, config_member_name):
+    configuration=json.dumps({"architecture":"amd64"},separators=(",",":")).encode()
+    digest=hashlib.sha256(configuration).hexdigest()
+    config_name=config_member_name.format(digest=digest)
+    manifest=json.dumps([{"Config":config_name,"RepoTags":["example/firewall:1"],"Layers":[]}]).encode()
+    with tarfile.open(path,"w") as tf:
+        for name,payload in ((config_name,configuration),("manifest.json",manifest)):
+            info=tarfile.TarInfo(name);info.size=len(payload);tf.addfile(info,io.BytesIO(payload))
+    return digest
+
+@pytest.mark.parametrize("config_name",["{digest}.json","sha256:{digest}"])
+def test_docker_archive_accepts_verified_standard_and_kaniko_config_names(tmp_path,config_name):
+    path=tmp_path/"image.tar";digest=_docker_archive(path,config_name)
+    kind,result=inspect_file(path)
+    assert kind=="docker-archive" and result=={"deployable":True,"architecture":"amd64","import_source":f"sha256:{digest}","image_count":1}
+
+def test_docker_archive_rejects_configuration_digest_mismatch(tmp_path):
+    path=tmp_path/"image.tar";_docker_archive(path,"0"*64+".json")
+    kind,result=inspect_file(path)
+    assert kind=="docker-archive" and result["deployable"] is False
+    assert result["reason"]=="Image configuration digest mismatch"

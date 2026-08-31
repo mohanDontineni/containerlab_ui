@@ -48,8 +48,12 @@ def inspect_file(path):
                     if len(manifest)!=1: raise ValueError("Archive must contain exactly one image")
                     config_name=manifest[0]["Config"];config_member=tf.getmember(config_name)
                     if config_member.size>1024*1024: raise ValueError("Image configuration exceeds the inspection limit")
-                    configuration=json.load(tf.extractfile(config_member));config_digest=Path(config_name).name
+                    config_payload=tf.extractfile(config_member).read()
+                    configuration=json.loads(config_payload);config_digest=Path(config_name).name
+                    if config_digest.startswith("sha256:"): config_digest=config_digest.removeprefix("sha256:")
+                    if config_digest.endswith(".json"): config_digest=config_digest.removesuffix(".json")
                     if len(config_digest)!=64 or any(c not in "0123456789abcdef" for c in config_digest.lower()): raise ValueError("Invalid image configuration digest")
+                    if hashlib.sha256(config_payload).hexdigest()!=config_digest.lower(): raise ValueError("Image configuration digest mismatch")
                     architecture=configuration.get("architecture","")
                     if architecture not in ("amd64","arm64"): raise ValueError(f"Unsupported architecture: {architecture or 'unknown'}")
                     return "docker-archive", {"deployable":True,"architecture":architecture,"import_source":f"sha256:{config_digest}","image_count":1}
