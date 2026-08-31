@@ -37,7 +37,8 @@ def project_create(request):
 @login_required
 def project_detail(request, project_id):
     project = get_object_or_404(visible_projects(request.user), id=project_id)
-    return render(request, "studio/project_detail.html", {"project": project, "labs": project.labs.order_by("name"), "members": project.memberships.exclude(user=project.owner).select_related("user")})
+    return render(request, "studio/project_detail.html", {"project": project, "labs": project.labs.order_by("name"),
+        "members": project.memberships.select_related("user").order_by("user__username"),"can_manage_access":project_role(request.user,project)==ProjectMembership.Role.ADMIN})
 
 @login_required
 def labs(request):

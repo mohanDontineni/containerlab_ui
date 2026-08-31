@@ -27,6 +27,44 @@ def test_viewer_cannot_modify_project():
     assert c.patch(f"/api/v1/projects/{project.id}/",{"name":"changed"},format="json").status_code==403
 
 @pytest.mark.django_db
+def test_project_member_lifecycle_is_admin_only_and_audited():
+    owner=User.objects.create_user("access-owner",password="long-enough-password")
+    admin=User.objects.create_user("access-admin",password="long-enough-password")
+    editor=User.objects.create_user("access-editor",password="long-enough-password")
+    candidate=User.objects.create_user("access-candidate",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="access-project")
+    ProjectMembership.objects.create(project=project,user=admin,role="administrator")
+    ProjectMembership.objects.create(project=project,user=editor,role="editor")
+    client=APIClient();client.force_authenticate(editor)
+    endpoint=f"/api/v1/projects/{project.id}/members/"
+    assert client.post(endpoint,{"username":candidate.username,"role":"viewer"},format="json").status_code==403
+    client.force_authenticate(admin)
+    added=client.post(endpoint,{"username":candidate.username,"role":"viewer"},format="json")
+    assert added.status_code==201 and added.data["username"]==candidate.username
+    membership=ProjectMembership.objects.get(project=project,user=candidate)
+    changed=client.patch(f"/api/v1/memberships/{membership.id}/",{"role":"editor"},format="json")
+    assert changed.status_code==200 and changed.data["role"]=="editor"
+    assert client.delete(f"/api/v1/memberships/{membership.id}/").status_code==204
+    assert not ProjectMembership.objects.filter(id=membership.id).exists()
+    assert list(AuditEvent.objects.filter(project=project,action__startswith="project.member").values_list("action",flat=True))==[
+        "project.member_added","project.member_role_changed","project.member_removed"]
+
+@pytest.mark.django_db
+def test_project_membership_prevents_owner_duplication_and_cross_project_mutation():
+    owner=User.objects.create_user("protected-owner",password="long-enough-password")
+    other_owner=User.objects.create_user("other-owner",password="long-enough-password")
+    member=User.objects.create_user("protected-member",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="protected-project")
+    other=Project.objects.create(owner=other_owner,name="other-project")
+    membership=ProjectMembership.objects.create(project=project,user=member,role="viewer")
+    client=APIClient();client.force_authenticate(owner)
+    duplicate=client.post(f"/api/v1/projects/{project.id}/members/",{"username":owner.username,"role":"viewer"},format="json")
+    assert duplicate.status_code==409
+    client.force_authenticate(other_owner)
+    assert client.patch(f"/api/v1/memberships/{membership.id}/",{"role":"administrator"},format="json").status_code==404
+    assert client.get(f"/api/v1/projects/{other.id}/members/").status_code==200
+
+@pytest.mark.django_db
 def test_upload_creation_is_project_scoped_and_checksum_optional():
     owner=User.objects.create_user("upload-owner",password="long-enough-password");viewer=User.objects.create_user("upload-viewer",password="long-enough-password")
     project=Project.objects.create(owner=owner,name="uploads");ProjectMembership.objects.create(project=project,user=viewer,role="viewer")

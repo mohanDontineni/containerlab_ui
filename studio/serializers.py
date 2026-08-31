@@ -4,7 +4,10 @@ from . import models
 class ProjectSerializer(serializers.ModelSerializer):
     class Meta: model=models.Project; fields="__all__"; read_only_fields=("owner",)
 class MembershipSerializer(serializers.ModelSerializer):
-    class Meta: model=models.ProjectMembership; fields="__all__"
+    username=serializers.CharField(source="user.username",read_only=True)
+    display_name=serializers.SerializerMethodField()
+    def get_display_name(self,obj): return obj.user.get_full_name() or obj.user.username
+    class Meta: model=models.ProjectMembership; fields=("id","project","user","username","display_name","role","created_at","updated_at"); read_only_fields=("project","user")
 class LabSerializer(serializers.ModelSerializer):
     class Meta: model=models.Lab; fields="__all__"
 class LabRevisionSerializer(serializers.ModelSerializer):

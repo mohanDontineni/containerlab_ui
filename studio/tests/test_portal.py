@@ -63,6 +63,17 @@ def test_viewer_cannot_change_topology(client):
     assert response.status_code == 403
 
 @pytest.mark.django_db
+def test_project_access_ui_is_available_only_to_administrators(client):
+    owner=User.objects.create_user("ui-owner",password="long-enough-password")
+    viewer=User.objects.create_user("ui-viewer",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="Shared UI")
+    ProjectMembership.objects.create(project=project,user=viewer,role="viewer")
+    client.force_login(owner); owner_page=client.get(f"/projects/{project.id}/")
+    assert owner_page.status_code==200 and b"Add member" in owner_page.content and b"member-role" in owner_page.content
+    client.force_login(viewer); viewer_page=client.get(f"/projects/{project.id}/")
+    assert viewer_page.status_code==200 and b"Add member" not in viewer_page.content and b"member-role" not in viewer_page.content
+
+@pytest.mark.django_db
 def test_register_digest_pinned_registry_image(client):
     owner = User.objects.create_user("image-owner", password="long-enough-password")
     project = Project.objects.create(owner=owner, name="Images")

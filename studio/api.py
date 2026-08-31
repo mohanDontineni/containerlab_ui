@@ -37,6 +37,47 @@ class ProjectViewSet(viewsets.ModelViewSet):
     serializer_class=serializers.ProjectSerializer; permission_classes=[ProjectAccess]
     def get_queryset(self): return visible_projects(self.request.user)
     def perform_create(self,serializer): serializer.save(owner=self.request.user)
+    @action(detail=True,methods=["get","post"])
+    def members(self,request,pk=None):
+        project=self.get_object()
+        if request.method=="GET":
+            rows=project.memberships.select_related("user").order_by("user__username")
+            return Response({"owner":{"id":str(project.owner_id),"username":project.owner.username,"role":"administrator"},"members":serializers.MembershipSerializer(rows,many=True).data})
+        if project_role(request.user,project)!=models.ProjectMembership.Role.ADMIN:
+            from rest_framework.exceptions import PermissionDenied; raise PermissionDenied()
+        username=str(request.data.get("username","")).strip()
+        role=str(request.data.get("role",models.ProjectMembership.Role.VIEWER))
+        if role not in models.ProjectMembership.Role.values: return Response({"error":{"code":"invalid_project_role"}},status=422)
+        user=models.User.objects.filter(username__iexact=username,is_active=True).first()
+        if not user: return Response({"error":{"code":"user_not_found","details":"No active account has that username."}},status=404)
+        if user.id==project.owner_id: return Response({"error":{"code":"owner_membership_immutable"}},status=409)
+        membership,created=models.ProjectMembership.objects.update_or_create(project=project,user=user,defaults={"role":role})
+        models.AuditEvent.objects.create(actor=request.user,project=project,action="project.member_added" if created else "project.member_role_changed",
+            target_type="ProjectMembership",target_id=membership.id,correlation_id=getattr(request,"correlation_id",""),metadata={"username":user.username,"role":role})
+        return Response(serializers.MembershipSerializer(membership).data,status=201 if created else 200)
+
+class MembershipViewSet(viewsets.ModelViewSet):
+    serializer_class=serializers.MembershipSerializer
+    http_method_names=["get","patch","delete","head","options"]
+    def get_queryset(self): return models.ProjectMembership.objects.filter(project__in=visible_projects(self.request.user)).select_related("project","user")
+    def _require_admin(self,membership):
+        if project_role(self.request.user,membership.project)!=models.ProjectMembership.Role.ADMIN:
+            from rest_framework.exceptions import PermissionDenied; raise PermissionDenied()
+    def partial_update(self,request,*args,**kwargs):
+        membership=self.get_object(); self._require_admin(membership)
+        role=str(request.data.get("role",""))
+        if role not in models.ProjectMembership.Role.values: return Response({"error":{"code":"invalid_project_role"}},status=422)
+        previous=membership.role; membership.role=role; membership.save(update_fields=["role","updated_at"])
+        models.AuditEvent.objects.create(actor=request.user,project=membership.project,action="project.member_role_changed",target_type="ProjectMembership",
+            target_id=membership.id,correlation_id=getattr(request,"correlation_id",""),metadata={"username":membership.user.username,"previous_role":previous,"role":role})
+        return Response(self.get_serializer(membership).data)
+    def destroy(self,request,*args,**kwargs):
+        membership=self.get_object(); self._require_admin(membership)
+        metadata={"username":membership.user.username,"role":membership.role}; project=membership.project; target_id=membership.id
+        membership.delete()
+        models.AuditEvent.objects.create(actor=request.user,project=project,action="project.member_removed",target_type="ProjectMembership",
+            target_id=target_id,correlation_id=getattr(request,"correlation_id",""),metadata=metadata)
+        return Response(status=204)
 
 class LabViewSet(viewsets.ModelViewSet):
     serializer_class=serializers.LabSerializer; permission_classes=[ProjectAccess]
