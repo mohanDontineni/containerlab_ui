@@ -10,3 +10,17 @@
 .capture-list p { display:flex; flex-direction:column; margin:0; }
 .capture-list strong { font-size:10px; }
 .capture-list small { color:#587187; font-size:8px; margin-top:4px; }
+.link-control-panel { grid-column: 1 / -1; }
+.link-control-list { padding: 4px 16px 16px; display:grid; gap:10px; }
+.link-control-list article { display:grid; grid-template-columns:minmax(220px,1.25fr) minmax(420px,2fr) auto; align-items:end; gap:14px; padding:14px; border:1px solid #193247; border-radius:9px; background:#091725; transition:opacity .2s,border-color .2s; }
+.link-control-list article.busy { opacity:.55; pointer-events:none; border-color:#2e91a6; }
+.link-identity { align-self:center; display:flex; flex-direction:column; gap:5px; }
+.link-identity strong { color:#d9e8f2; font-size:10px; }
+.link-identity small { color:#658096; font-size:8px; }
+.link-fields { display:grid; grid-template-columns:repeat(4,minmax(78px,1fr)); gap:8px; }
+.link-fields label { color:#6e879a; font-size:8px; text-transform:uppercase; letter-spacing:.06em; }
+.link-fields input { box-sizing:border-box; width:100%; margin-top:5px; padding:8px; border:1px solid #203b50; border-radius:6px; color:#d9e8f2; background:#06121e; font:9px ui-monospace,SFMono-Regular,Menlo,monospace; }
+.link-actions { display:flex; gap:6px; align-items:center; }
+.secondary-button.danger { color:#ff9b9b; border-color:#58343c; }
+@media(max-width:1050px) { .link-control-list article { grid-template-columns:1fr; } .link-actions { justify-content:flex-end; } }
+@media(max-width:620px) { .link-fields { grid-template-columns:1fr 1fr; } }

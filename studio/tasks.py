@@ -5,7 +5,7 @@ from pathlib import Path
 from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
-from .models import CaptureSession, DeviceInstance, LabArtifact, LabDeployment, LabNode, OperationJob
+from .models import CaptureSession, DeviceInstance, LabArtifact, LabDeployment, LabLink, LabNode, OperationJob
 from .runtime import ClabernetesAdapter
 
 @shared_task(bind=True,autoretry_for=(ConnectionError,),retry_backoff=True,max_retries=5)
@@ -35,6 +35,16 @@ def execute_operation(self,job_id):
             capture.status="complete"; capture.artifact_reference=str(destination); capture.save(update_fields=["status","artifact_reference","updated_at"])
             result={"capture_id":str(capture.id),"artifact_id":str(artifact.id),"byte_size":len(payload),"checksum":checksum,
                 "download":f"/api/v1/deployments/{job.deployment_id}/captures/{capture.id}/download/"}
+        elif job.operation_type=="set_link_condition":
+            link=LabLink.objects.select_related("endpoint_a__node","endpoint_b__node").get(pk=job.target_id,revision=job.deployment.revision)
+            condition=job.request_payload["condition"]
+            result=adapter.set_link_condition(job.deployment,link,condition)
+            deployment=job.deployment
+            conditions=dict(deployment.resource_identities.get("link_conditions",{}))
+            if condition.get("active"): conditions[str(link.id)]=condition
+            else: conditions.pop(str(link.id),None)
+            deployment.resource_identities={**deployment.resource_identities,"link_conditions":conditions}
+            deployment.save(update_fields=["resource_identities","updated_at"])
         elif job.operation_type in device_operations:
             device=DeviceInstance.objects.select_related("lab_node").get(pk=job.target_id,deployment=job.deployment)
             result=getattr(adapter,job.operation_type)(job.deployment,device)
@@ -49,15 +59,15 @@ def execute_operation(self,job_id):
             deployment.resource_identities={"topology":{"name":"topology","namespace":deployment.namespace}}
         elif job.operation_type in ("stop_lab","delete_runtime"):
             deployment.observed_state=LabDeployment.State.STOPPED
-        if job.operation_type not in ("ping","capture_packets",*device_operations):
+        if job.operation_type not in ("ping","capture_packets","set_link_condition",*device_operations):
             deployment.last_reconciliation=timezone.now()
             deployment.error_details={}
             deployment.save(update_fields=["observed_state","resource_identities","last_reconciliation","error_details","updated_at"])
         job.state="succeeded"; job.progress=100; job.error_details={}
-        if job.operation_type in ("ping","capture_packets") or job.operation_type in device_operations: job.result_payload=result
+        if job.operation_type in ("ping","capture_packets","set_link_condition") or job.operation_type in device_operations: job.result_payload=result
     except Exception as exc:
         if job.operation_type=="capture_packets": CaptureSession.objects.filter(pk=job.target_id).update(status="failed")
-        if job.deployment_id and job.operation_type not in ("ping","capture_packets",*device_operations):
+        if job.deployment_id and job.operation_type not in ("ping","capture_packets","set_link_condition",*device_operations):
             LabDeployment.objects.filter(pk=job.deployment_id).update(observed_state=LabDeployment.State.FAILED,
                 error_details={"type":type(exc).__name__,"message":str(exc)[:2000]},last_reconciliation=timezone.now())
         job.state="failed"; job.error_details={"type":type(exc).__name__,"message":str(exc)[:2000]}; raise

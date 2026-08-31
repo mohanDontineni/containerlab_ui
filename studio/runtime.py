@@ -35,7 +35,7 @@ class Plan: namespace:str; topology_name:str; manifest:dict
 
 class ClabernetesAdapter:
     capabilities={"deploy_lab":"supported","get_observed_state":"supported","delete_runtime":"supported","restart_device":"supported",
-        "resolve_console_target":"supported","start_capture":"experimental","stop_lab":"delete_and_redeploy","set_link_condition":"unsupported","collect_configuration":"template_dependent"}
+        "resolve_console_target":"supported","start_capture":"experimental","stop_lab":"delete_and_redeploy","set_link_condition":"supported","collect_configuration":"template_dependent"}
     def __init__(self, custom_api=None, core_api=None):
         if custom_api is None:
             try: config.load_incluster_config()
@@ -140,6 +140,29 @@ class ClabernetesAdapter:
         name=device.lab_node.name
         self.core.delete_namespaced_pod(pod,deployment.namespace,body=client.V1DeleteOptions(grace_period_seconds=0,propagation_policy="Background"))
         return {"device":name,"operation":"restart","replaced_pod":pod,"readiness":"restarting"}
+    def set_link_condition(self,deployment,link,condition):
+        if link.revision_id!=deployment.revision_id: raise CapabilityError("Link does not belong to this deployment")
+        endpoints=(link.endpoint_a,link.endpoint_b)
+        applied=[]
+        for interface in endpoints:
+            node=interface.node
+            device=deployment.devices.get(lab_node=node)
+            pod=device.runtime_resources.get("pod")
+            if device.observed_readiness!="ready" or not pod: raise CapabilityError(f"{node.name} launcher is not ready")
+            host_interface=f"{node.name}-{interface.name}"
+            if condition.get("active"):
+                command=["tc","qdisc","replace","dev",host_interface,"root","netem"]
+                latency=condition.get("latency_ms",0); jitter=condition.get("jitter_ms",0)
+                if latency: command.extend(["delay",f"{latency}ms",f"{jitter}ms"] if jitter else ["delay",f"{latency}ms"])
+                loss=100 if condition.get("disabled") else condition.get("loss_percent",0)
+                if loss: command.extend(["loss",f"{loss:g}%"])
+                rate=condition.get("rate_kbps",0)
+                if rate: command.extend(["rate",f"{rate}kbit"])
+            else:
+                command=["sh","-c",f"tc qdisc del dev {shlex.quote(host_interface)} root 2>/dev/null || true"]
+            output=stream(self.core.connect_get_namespaced_pod_exec,pod,deployment.namespace,command=command,
+                stderr=True,stdin=False,stdout=True,tty=False,_request_timeout=10)
+            applied.append({"node":node.name,"interface":interface.name,"launcher_interface":host_interface,"output":output[-2000:]})
+        return {"link_id":str(link.id),"condition":condition,"endpoints":applied}
     def collect_configuration(self,*_): raise CapabilityError("Template does not provide a verified collector")
     def start_capture(self,*_): raise CapabilityError("Use the bounded capture_packets operation")
-    def set_link_condition(self,*_): raise CapabilityError("Clabernetes v0.8.0 does not expose a supported live impairment API")

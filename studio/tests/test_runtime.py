@@ -6,8 +6,8 @@ from studio.runtime import ClabernetesAdapter,API_GROUP,API_VERSION,RUNTIME_VERS
 def test_adapter_is_pinned(): assert (API_GROUP,API_VERSION,RUNTIME_VERSION)==("c9s.run","v1alpha1","0.8.0")
 def test_unsupported_capability_is_explicit():
     adapter=object.__new__(ClabernetesAdapter)
-    try: adapter.set_link_condition(None)
-    except CapabilityError as e: assert "does not expose" in str(e)
+    try: adapter.collect_configuration(None)
+    except CapabilityError as e: assert "verified collector" in str(e)
     else: raise AssertionError("must fail explicitly")
 
 def test_plan_uses_clabernetes_080_string_definition():
@@ -65,3 +65,19 @@ def test_capture_stop_frames_are_removed_from_pcap():
     record=lambda body: struct.pack("<IIII",1,2,len(body),len(body))+body
     cleaned=strip_capture_stop_packets(header+record(real)+record(stop)+record(destination_stop))
     assert cleaned==header+record(real)
+
+def test_link_condition_applies_bounded_netem_to_both_endpoints(monkeypatch):
+    calls=[]
+    monkeypatch.setattr("studio.runtime.stream",lambda method,pod,namespace,**kwargs: calls.append((pod,namespace,kwargs)) or "")
+    adapter=ClabernetesAdapter(custom_api=SimpleNamespace(),core_api=SimpleNamespace(connect_get_namespaced_pod_exec=object()))
+    node_a=SimpleNamespace(name="r1");node_b=SimpleNamespace(name="r2")
+    endpoint_a=SimpleNamespace(name="eth1",node=node_a);endpoint_b=SimpleNamespace(name="eth2",node=node_b)
+    link=SimpleNamespace(id="link-one",revision_id="revision-one",endpoint_a=endpoint_a,endpoint_b=endpoint_b)
+    devices={"r1":SimpleNamespace(observed_readiness="ready",runtime_resources={"pod":"r1-pod"}),
+        "r2":SimpleNamespace(observed_readiness="ready",runtime_resources={"pod":"r2-pod"})}
+    deployment=SimpleNamespace(revision_id="revision-one",namespace="lab-one",devices=SimpleNamespace(get=lambda lab_node:devices[lab_node.name]))
+    condition={"active":True,"disabled":False,"latency_ms":120,"jitter_ms":10,"loss_percent":2.5,"rate_kbps":1000}
+    result=adapter.set_link_condition(deployment,link,condition)
+    assert [call[0] for call in calls]==["r1-pod","r2-pod"]
+    assert calls[0][2]["command"]==["tc","qdisc","replace","dev","r1-eth1","root","netem","delay","120ms","10ms","loss","2.5%","rate","1000kbit"]
+    assert result["condition"]==condition and len(result["endpoints"])==2

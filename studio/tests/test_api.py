@@ -4,7 +4,7 @@ from django.conf import settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 from studio.models import (AuditEvent, CaptureSession, ConsoleSession, DeviceInstance, DeviceTemplateVersion, ImageArtifact, Lab, LabDeployment,
-    LabArtifact, LabInterface, LabNode, LabRevision, OperationJob, Project, ProjectMembership, PublishedImage, User)
+    LabArtifact, LabInterface, LabLink, LabNode, LabRevision, OperationJob, Project, ProjectMembership, PublishedImage, User)
 from studio.tasks import execute_operation, reconcile_deployment
 
 def test_web_process_uses_configured_celery_broker():
@@ -233,3 +233,43 @@ def test_capture_worker_persists_auditable_artifact_without_changing_lab_state(m
     assert job.state=="succeeded" and job.result_payload["byte_size"]==len(pcap)
     assert capture.status=="complete" and Path(capture.artifact_reference).read_bytes()==pcap
     assert artifact.checksum==job.result_payload["checksum"] and deployment.observed_state=="running"
+
+@pytest.mark.django_db
+def test_link_condition_api_is_bounded_idempotent_audited_and_operator_only(monkeypatch):
+    monkeypatch.setattr("studio.api.execute_operation.delay",lambda *_:None)
+    owner=User.objects.create_user("link-owner",password="long-enough-password");viewer=User.objects.create_user("link-viewer",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="link-project");ProjectMembership.objects.create(project=project,user=viewer,role="viewer")
+    lab=Lab.objects.create(project=project,name="link-lab");revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="8"*64,immutable=True)
+    template=DeviceTemplateVersion.objects.filter(containerlab_kind="linux").first()
+    a=LabNode.objects.create(revision=revision,name="a",template_version=template);b=LabNode.objects.create(revision=revision,name="b",template_version=template)
+    ia=LabInterface.objects.create(node=a,name="eth1");ib=LabInterface.objects.create(node=b,name="eth1");link=LabLink.objects.create(revision=revision,endpoint_a=ia,endpoint_b=ib)
+    deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-link-test",runtime_version="0.8.0",observed_state="running")
+    DeviceInstance.objects.create(deployment=deployment,lab_node=a,observed_readiness="ready",runtime_resources={"pod":"a-pod"})
+    DeviceInstance.objects.create(deployment=deployment,lab_node=b,observed_readiness="ready",runtime_resources={"pod":"b-pod"})
+    payload={"link_id":str(link.id),"latency_ms":100,"jitter_ms":10,"loss_percent":2.5,"rate_kbps":1000,"disabled":False}
+    client=APIClient();client.force_authenticate(viewer)
+    assert client.post(f"/api/v1/deployments/{deployment.id}/link-conditions/",payload,format="json",HTTP_IDEMPOTENCY_KEY="viewer-link").status_code==403
+    client.force_authenticate(owner)
+    assert client.post(f"/api/v1/deployments/{deployment.id}/link-conditions/",{**payload,"latency_ms":2001},format="json",HTTP_IDEMPOTENCY_KEY="bad-link").status_code==422
+    first=client.post(f"/api/v1/deployments/{deployment.id}/link-conditions/",payload,format="json",HTTP_IDEMPOTENCY_KEY="link-one")
+    second=client.post(f"/api/v1/deployments/{deployment.id}/link-conditions/",payload,format="json",HTTP_IDEMPOTENCY_KEY="link-one")
+    assert first.status_code==second.status_code==202 and first.data["id"]==second.data["id"]
+    assert AuditEvent.objects.filter(action="link.condition_changed",target_id=link.id).count()==1
+
+@pytest.mark.django_db
+def test_link_condition_worker_persists_runtime_state_without_failing_lab(monkeypatch):
+    owner=User.objects.create_user("link-worker",password="long-enough-password");project=Project.objects.create(owner=owner,name="link-worker-project")
+    lab=Lab.objects.create(project=project,name="link-worker-lab");revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="9"*64,immutable=True)
+    template=DeviceTemplateVersion.objects.filter(containerlab_kind="linux").first();a=LabNode.objects.create(revision=revision,name="a",template_version=template);b=LabNode.objects.create(revision=revision,name="b",template_version=template)
+    ia=LabInterface.objects.create(node=a,name="eth1");ib=LabInterface.objects.create(node=b,name="eth1");link=LabLink.objects.create(revision=revision,endpoint_a=ia,endpoint_b=ib)
+    deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-link-worker",runtime_version="0.8.0",observed_state="running")
+    condition={"active":True,"disabled":False,"latency_ms":50,"jitter_ms":0,"loss_percent":0.0,"rate_kbps":0}
+    job=OperationJob.objects.create(deployment=deployment,owner=owner,operation_type="set_link_condition",target_id=link.id,idempotency_key="worker-link",state="scheduled",request_payload={"condition":condition})
+    class Adapter:
+        def set_link_condition(self,received_deployment,received_link,received_condition):
+            assert received_deployment==deployment and received_link==link and received_condition==condition
+            return {"link_id":str(link.id),"condition":condition,"endpoints":[]}
+    monkeypatch.setattr("studio.tasks.ClabernetesAdapter",Adapter)
+    execute_operation.run(str(job.id));job.refresh_from_db();deployment.refresh_from_db()
+    assert job.state=="succeeded" and job.result_payload["condition"]==condition
+    assert deployment.resource_identities["link_conditions"][str(link.id)]==condition and deployment.observed_state=="running"

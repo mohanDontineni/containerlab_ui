@@ -124,8 +124,13 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=True,methods=["get"])
     def runtime(self,request,pk=None):
         deployment=self.get_object()
+        conditions=deployment.resource_identities.get("link_conditions",{})
+        links=deployment.revision.links.select_related("endpoint_a__node","endpoint_b__node")
         return Response({"deployment":serializers.DeploymentSerializer(deployment).data,
             "devices":serializers.DeviceInstanceSerializer(deployment.devices.select_related("lab_node__template_version").prefetch_related("lab_node__interfaces"),many=True).data,
+            "links":[{"id":str(link.id),"label":link.label,"endpoint_a":{"node":link.endpoint_a.node.name,"interface":link.endpoint_a.name},
+                "endpoint_b":{"node":link.endpoint_b.node.name,"interface":link.endpoint_b.name},"condition":conditions.get(str(link.id),{"active":False,
+                    "disabled":False,"latency_ms":0,"jitter_ms":0,"loss_percent":0,"rate_kbps":0})} for link in links],
             "operations":serializers.OperationSerializer(deployment.operations.order_by("-created_at")[:20],many=True).data})
     @action(detail=True,methods=["post"])
     def refresh(self,request,pk=None):
@@ -193,6 +198,53 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
             except IntegrityError:
                 return Response({"error":{"code":"diagnostic_in_progress","details":"Wait for the active diagnostic to finish."}},status=409)
         if job.state in ("accepted","scheduled"): execute_operation.delay(str(job.id))
+        return Response(serializers.OperationSerializer(job).data,status=202)
+    @action(detail=True,methods=["get","post"],url_path="link-conditions")
+    def link_conditions(self,request,pk=None):
+        deployment=self.get_object()
+        if request.method=="GET":
+            conditions=deployment.resource_identities.get("link_conditions",{})
+            links=deployment.revision.links.select_related("endpoint_a__node","endpoint_b__node")
+            return Response([{"id":str(link.id),"label":link.label,"endpoint_a":{"node":link.endpoint_a.node.name,"interface":link.endpoint_a.name},
+                "endpoint_b":{"node":link.endpoint_b.node.name,"interface":link.endpoint_b.name},"condition":conditions.get(str(link.id),{"active":False,
+                    "disabled":False,"latency_ms":0,"jitter_ms":0,"loss_percent":0,"rate_kbps":0})} for link in links])
+        self._require_operator(deployment)
+        try: link_id=uuid.UUID(str(request.data.get("link_id")))
+        except (ValueError,TypeError,AttributeError): return Response({"error":{"code":"invalid_link"}},status=422)
+        link=deployment.revision.links.filter(id=link_id).first()
+        if not link: return Response({"error":{"code":"invalid_link"}},status=422)
+        disabled=request.data.get("disabled",False)
+        if not isinstance(disabled,bool): return Response({"error":{"code":"invalid_link_condition"}},status=422)
+        values={}
+        for field,maximum in (("latency_ms",2000),("jitter_ms",1000),("rate_kbps",10_000_000)):
+            value=request.data.get(field,0)
+            if isinstance(value,bool) or not isinstance(value,int) or value<0 or value>maximum:
+                return Response({"error":{"code":"invalid_link_condition","details":f"{field} is outside its supported range."}},status=422)
+            values[field]=value
+        loss=request.data.get("loss_percent",0)
+        if isinstance(loss,bool) or not isinstance(loss,(int,float)) or loss<0 or loss>100:
+            return Response({"error":{"code":"invalid_link_condition","details":"loss_percent must be between 0 and 100."}},status=422)
+        if values["jitter_ms"] and not values["latency_ms"]:
+            return Response({"error":{"code":"invalid_link_condition","details":"Jitter requires non-zero latency."}},status=422)
+        if values["rate_kbps"] and values["rate_kbps"]<64:
+            return Response({"error":{"code":"invalid_link_condition","details":"Rate must be zero or at least 64 Kbit/s."}},status=422)
+        condition={"active":disabled or bool(values["latency_ms"] or loss or values["rate_kbps"]),"disabled":disabled,
+            "latency_ms":values["latency_ms"],"jitter_ms":values["jitter_ms"],"loss_percent":float(loss),"rate_kbps":values["rate_kbps"]}
+        key=request.headers.get("Idempotency-Key")
+        if not key: return Response({"error":{"code":"idempotency_key_required"}},status=400)
+        existing=models.OperationJob.objects.filter(owner=request.user,idempotency_key=key).first()
+        if existing:
+            if existing.operation_type!="set_link_condition" or existing.deployment_id!=deployment.id or existing.target_id!=link.id or existing.request_payload.get("condition")!=condition:
+                return Response({"error":{"code":"idempotency_conflict"}},status=409)
+            if existing.state in ("accepted","scheduled"): execute_operation.delay(str(existing.id))
+            return Response(serializers.OperationSerializer(existing).data,status=202)
+        if models.OperationJob.objects.filter(target_id=link.id,state__in=("accepted","scheduled","started")).exists():
+            return Response({"error":{"code":"link_operation_in_progress"}},status=409)
+        job=models.OperationJob.objects.create(deployment=deployment,owner=request.user,operation_type="set_link_condition",target_id=link.id,
+            idempotency_key=key,state="scheduled",request_payload={"condition":condition})
+        models.AuditEvent.objects.create(actor=request.user,project=deployment.revision.lab.project,action="link.condition_changed",target_type="LabLink",
+            target_id=link.id,correlation_id=getattr(request,"correlation_id",""),metadata={"operation_job":str(job.id),"condition":condition})
+        transaction.on_commit(lambda: execute_operation.delay(str(job.id)))
         return Response(serializers.OperationSerializer(job).data,status=202)
     @action(detail=True,methods=["get","post"],url_path="captures")
     def captures(self,request,pk=None):
