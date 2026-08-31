@@ -12,7 +12,7 @@ from django.utils.text import slugify
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.parsers import JSONParser
+from rest_framework.parsers import BaseParser,JSONParser
 from rest_framework.views import exception_handler as drf_exception_handler
 from . import models, serializers
 from .permissions import ProjectAccess, project_role
@@ -20,6 +20,10 @@ from .runtime import ClabernetesAdapter
 from .tasks import execute_operation, reconcile_deployment
 from .uploads import UploadError, append_chunk, finalize
 from .bundles import BundleError, LabBundleParser, export_lab_bundle, import_lab_bundle
+
+class OctetStreamParser(BaseParser):
+    media_type="application/octet-stream"
+    def parse(self,stream,media_type=None,parser_context=None): return stream
 
 def exception_handler(exc,context):
     response=drf_exception_handler(exc,context)
@@ -105,12 +109,13 @@ class UploadViewSet(viewsets.ModelViewSet):
         session=serializer.save(id=uid,owner=self.request.user,artifact_destination=str(destination),expires_at=timezone.now()+timezone.timedelta(hours=24))
         models.AuditEvent.objects.create(actor=self.request.user,project=project,action="image.upload_created",target_type="UploadSession",target_id=session.id,
             correlation_id=getattr(self.request,"correlation_id",""),metadata={"filename":session.original_filename,"expected_size":size})
-    @action(detail=True,methods=["put"],url_path="chunks")
+    @action(detail=True,methods=["put"],url_path="chunks",parser_classes=[OctetStreamParser])
     def chunk(self,request,pk=None):
         session=self.get_object()
-        try: written=append_chunk(session,request.user,int(request.headers.get("Upload-Offset","-1")),request.stream)
+        try: written=append_chunk(session,request.user,int(request.headers.get("Upload-Offset","-1")),request.data)
         except UploadError as e: return Response({"error":{"code":"upload_conflict","details":str(e)}},status=status.HTTP_409_CONFLICT)
-        return Response({"received":written,"offset":session.received_bytes},status=204,headers={"Upload-Offset":str(session.received_bytes)})
+        next_offset=int(request.headers.get("Upload-Offset","0"))+written
+        return Response(status=204,headers={"Upload-Offset":str(next_offset)})
     @action(detail=True,methods=["post"])
     def complete(self,request,pk=None):
         try: artifact=finalize(self.get_object(),request.user)

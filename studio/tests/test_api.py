@@ -39,6 +39,17 @@ def test_upload_creation_is_project_scoped_and_checksum_optional():
     assert session.owner==owner and AuditEvent.objects.filter(action="image.upload_created",target_id=session.id).exists()
 
 @pytest.mark.django_db
+def test_octet_stream_chunk_endpoint_advances_exact_offset(settings,tmp_path):
+    settings.MEDIA_ROOT=tmp_path
+    owner=User.objects.create_user("chunk-owner",password="long-enough-password");project=Project.objects.create(owner=owner,name="chunks")
+    client=APIClient();client.force_authenticate(owner)
+    created=client.post("/api/v1/uploads/",{"project":str(project.id),"original_filename":"image.tar","expected_size":6,"expected_checksum":""},format="json")
+    response=client.put(f"/api/v1/uploads/{created.data['id']}/chunks/",b"abc",content_type="application/octet-stream",HTTP_UPLOAD_OFFSET="0")
+    assert response.status_code==204 and response["Upload-Offset"]=="3"
+    session=UploadSession.objects.get(id=created.data["id"])
+    assert session.received_bytes==3 and Path(session.artifact_destination).read_bytes()==b"abc"
+
+@pytest.mark.django_db
 def test_owner_can_publish_and_schedule_deployable_lab(django_capture_on_commit_callbacks):
     owner=User.objects.create_user("deployer",password="long-enough-password")
     project=Project.objects.create(owner=owner,name="runtime")
