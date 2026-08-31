@@ -6,7 +6,7 @@ from pathlib import Path
 from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.db.models import Q
-from django.http import HttpResponse
+from django.http import FileResponse, HttpResponse
 from django.utils import timezone
 from django.utils.text import slugify
 from rest_framework import status, viewsets
@@ -125,7 +125,7 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
     def runtime(self,request,pk=None):
         deployment=self.get_object()
         return Response({"deployment":serializers.DeploymentSerializer(deployment).data,
-            "devices":serializers.DeviceInstanceSerializer(deployment.devices.select_related("lab_node__template_version"),many=True).data,
+            "devices":serializers.DeviceInstanceSerializer(deployment.devices.select_related("lab_node__template_version").prefetch_related("lab_node__interfaces"),many=True).data,
             "operations":serializers.OperationSerializer(deployment.operations.order_by("-created_at")[:20],many=True).data})
     @action(detail=True,methods=["post"])
     def refresh(self,request,pk=None):
@@ -194,6 +194,58 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
                 return Response({"error":{"code":"diagnostic_in_progress","details":"Wait for the active diagnostic to finish."}},status=409)
         if job.state in ("accepted","scheduled"): execute_operation.delay(str(job.id))
         return Response(serializers.OperationSerializer(job).data,status=202)
+    @action(detail=True,methods=["get","post"],url_path="captures")
+    def captures(self,request,pk=None):
+        deployment=self.get_object()
+        if request.method=="GET":
+            rows=models.CaptureSession.objects.filter(deployment=deployment).select_related("interface__node","owner").order_by("-created_at")[:50]
+            return Response([{"id":str(row.id),"device":row.interface.node.name,"interface":row.interface.name,"status":row.status,
+                "created_at":row.created_at,"expires_at":row.expires_at,"download":f"/api/v1/deployments/{deployment.id}/captures/{row.id}/download/" if row.status=="complete" else None} for row in rows])
+        self._require_operator(deployment)
+        try: device_id=uuid.UUID(str(request.data.get("device_id"))); interface_id=uuid.UUID(str(request.data.get("interface_id")))
+        except (ValueError,TypeError,AttributeError): return Response({"error":{"code":"invalid_capture_target"}},status=422)
+        device=deployment.devices.select_related("lab_node").filter(id=device_id).first()
+        interface=models.LabInterface.objects.filter(id=interface_id,node__revision=deployment.revision).select_related("node").first()
+        if not device or not interface or interface.node_id!=device.lab_node_id: return Response({"error":{"code":"invalid_capture_target"}},status=422)
+        if device.observed_readiness!="ready" or not device.runtime_resources.get("pod"): return Response({"error":{"code":"device_not_ready"}},status=409)
+        duration=request.data.get("duration",10); packet_limit=request.data.get("packet_limit",500)
+        if not isinstance(duration,int) or not 1<=duration<=30 or not isinstance(packet_limit,int) or not 1<=packet_limit<=5000:
+            return Response({"error":{"code":"invalid_capture_bounds","details":"Duration must be 1-30 seconds and packet limit 1-5000."}},status=422)
+        key=request.headers.get("Idempotency-Key")
+        if not key: return Response({"error":{"code":"idempotency_key_required"}},status=400)
+        existing=models.OperationJob.objects.filter(owner=request.user,idempotency_key=key).first()
+        if existing:
+            expected={"duration":duration,"packet_limit":packet_limit,"device_id":str(device.id),"interface_id":str(interface.id)}
+            if existing.operation_type!="capture_packets" or existing.deployment_id!=deployment.id or any(existing.request_payload.get(k)!=v for k,v in expected.items()):
+                return Response({"error":{"code":"idempotency_conflict"}},status=409)
+            if existing.state in ("accepted","scheduled"): execute_operation.delay(str(existing.id))
+            return Response(serializers.OperationSerializer(existing).data,status=202)
+        try:
+            with transaction.atomic():
+                capture=models.CaptureSession.objects.create(deployment=deployment,interface=interface,owner=request.user,status="scheduled",
+                    expires_at=timezone.now()+timezone.timedelta(hours=24))
+                job=models.OperationJob.objects.create(deployment=deployment,owner=request.user,operation_type="capture_packets",target_id=capture.id,
+                    idempotency_key=key,state="scheduled",request_payload={"duration":duration,"packet_limit":packet_limit,"capture_id":str(capture.id),
+                        "device_id":str(device.id),"interface_id":str(interface.id)})
+                models.AuditEvent.objects.create(actor=request.user,project=deployment.revision.lab.project,action="capture.started",target_type="CaptureSession",
+                    target_id=capture.id,correlation_id=getattr(request,"correlation_id",""),metadata={"node":device.lab_node.name,"interface":interface.name,"duration":duration,"packet_limit":packet_limit})
+                transaction.on_commit(lambda: execute_operation.delay(str(job.id)))
+        except IntegrityError:
+            return Response({"error":{"code":"capture_in_progress","details":"This interface already has an active capture."}},status=409)
+        return Response(serializers.OperationSerializer(job).data,status=202)
+    @action(detail=True,methods=["get"],url_path=r"captures/(?P<capture_id>[^/.]+)/download")
+    def capture_download(self,request,pk=None,capture_id=None):
+        deployment=self.get_object()
+        try: capture_uuid=uuid.UUID(str(capture_id))
+        except (ValueError,TypeError,AttributeError): return Response({"error":{"code":"invalid_capture"}},status=404)
+        capture=models.CaptureSession.objects.select_related("interface__node").filter(id=capture_uuid,deployment=deployment,status="complete").first()
+        if not capture: return Response({"error":{"code":"capture_not_ready"}},status=404)
+        root=Path(settings.MEDIA_ROOT).resolve(); path=Path(capture.artifact_reference).resolve()
+        if root not in path.parents or not path.is_file(): return Response({"error":{"code":"artifact_unavailable"}},status=410)
+        response=FileResponse(path.open("rb"),content_type="application/vnd.tcpdump.pcap",as_attachment=True,
+            filename=f"{capture.interface.node.name}-{capture.interface.name}-{capture.id}.pcap")
+        response["X-Content-Type-Options"]="nosniff"
+        return response
     @action(detail=True,methods=["post"])
     def consoles(self,request,pk=None):
         deployment=self.get_object()

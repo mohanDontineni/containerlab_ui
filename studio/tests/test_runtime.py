@@ -1,4 +1,5 @@
 import yaml
+import base64
 from types import SimpleNamespace
 from studio.runtime import ClabernetesAdapter,API_GROUP,API_VERSION,RUNTIME_VERSION,CapabilityError
 def test_adapter_is_pinned(): assert (API_GROUP,API_VERSION,RUNTIME_VERSION)==("c9s.run","v1alpha1","0.8.0")
@@ -40,3 +41,17 @@ def test_device_restart_replaces_only_selected_clabernetes_pod():
     assert result=={"device":"r1","operation":"restart","replaced_pod":"r1-launcher","readiness":"restarting"}
     assert calls[0][0:2]==("r1-launcher","lab-one")
     assert calls[0][2].grace_period_seconds==0
+
+def test_bounded_capture_uses_verified_host_interface_and_returns_pcap(monkeypatch):
+    pcap=b"\xd4\xc3\xb2\xa1"+b"\x00"*20
+    calls=[]
+    monkeypatch.setattr("studio.runtime.stream",lambda method,pod,namespace,**kwargs: calls.append((pod,namespace,kwargs)) or base64.b64encode(pcap).decode())
+    core=SimpleNamespace(connect_get_namespaced_pod_exec=object())
+    adapter=ClabernetesAdapter(custom_api=SimpleNamespace(),core_api=core)
+    node=SimpleNamespace(name="r1"); interface=SimpleNamespace(name="eth2")
+    device=SimpleNamespace(runtime_resources={"pod":"r1-launcher"})
+    deployment=SimpleNamespace(namespace="lab-one",devices=SimpleNamespace(get=lambda **_:device))
+    assert adapter.capture_packets(deployment,node,interface,7,250)==pcap
+    command=calls[0][2]["command"]
+    assert command[:2]==["sh","-c"] and "r1-eth2" in command[2] and "-s 256" in command[2] and "-c 250" in command[2]
+    assert calls[0][2]["_request_timeout"]==22

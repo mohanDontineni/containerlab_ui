@@ -1,4 +1,7 @@
 from dataclasses import dataclass
+import base64
+import binascii
+import shlex
 import yaml
 from kubernetes import client, config
 from kubernetes.client.exceptions import ApiException
@@ -7,6 +10,7 @@ from kubernetes.stream import stream
 API_GROUP="c9s.run"; API_VERSION="v1alpha1"; RUNTIME_VERSION="0.8.0"
 
 class CapabilityError(RuntimeError): pass
+PCAP_MAGICS=(b"\xd4\xc3\xb2\xa1",b"\xa1\xb2\xc3\xd4",b"\x4d\x3c\xb2\xa1",b"\xa1\xb2\x3c\x4d")
 @dataclass(frozen=True)
 class Plan: namespace:str; topology_name:str; manifest:dict
 
@@ -70,6 +74,20 @@ class ClabernetesAdapter:
         command=["docker","exec",node.name,"ping","-c",str(count),"-W",str(timeout),target]
         output=stream(self.core.connect_get_namespaced_pod_exec,pod,deployment.namespace,command=command,stderr=True,stdin=False,stdout=True,tty=False)
         return {"node":node.name,"target":target,"command":"ping","output":output[-12000:]}
+    def capture_packets(self,deployment,node,interface,duration=10,packet_limit=500):
+        if not 1<=duration<=30 or not 1<=packet_limit<=5000: raise CapabilityError("Capture bounds are invalid")
+        device=deployment.devices.get(lab_node=node)
+        pod=device.runtime_resources.get("pod")
+        if not pod: raise CapabilityError("The device launcher pod is not ready")
+        host_interface=f"{node.name}-{interface.name}"
+        command=f"timeout -s INT {duration} tcpdump -n -s 256 -i {shlex.quote(host_interface)} -c {packet_limit} -U -w - 2>/dev/null | base64 -w 0"
+        encoded=stream(self.core.connect_get_namespaced_pod_exec,pod,deployment.namespace,command=["sh","-c",command],
+            stderr=True,stdin=False,stdout=True,tty=False,_request_timeout=duration+15)
+        if len(encoded)>4*1024*1024: raise CapabilityError("Capture exceeded the encoded transfer limit")
+        try: payload=base64.b64decode(encoded,validate=True)
+        except (binascii.Error,ValueError) as exc: raise CapabilityError("Launcher returned an invalid capture stream") from exc
+        if len(payload)<24 or payload[:4] not in PCAP_MAGICS: raise CapabilityError("Launcher did not return a valid PCAP file")
+        return payload
     def delete_runtime(self,deployment):
         try: return self.custom.delete_namespaced_custom_object(API_GROUP,API_VERSION,deployment.namespace,"topologies","topology",
             body=client.V1DeleteOptions(propagation_policy="Foreground"))
@@ -88,5 +106,5 @@ class ClabernetesAdapter:
         self.core.delete_namespaced_pod(pod,deployment.namespace,body=client.V1DeleteOptions(grace_period_seconds=0,propagation_policy="Background"))
         return {"device":name,"operation":"restart","replaced_pod":pod,"readiness":"restarting"}
     def collect_configuration(self,*_): raise CapabilityError("Template does not provide a verified collector")
-    def start_capture(self,*_): raise CapabilityError("Capture requires verified runtime interface mapping")
+    def start_capture(self,*_): raise CapabilityError("Use the bounded capture_packets operation")
     def set_link_condition(self,*_): raise CapabilityError("Clabernetes v0.8.0 does not expose a supported live impairment API")

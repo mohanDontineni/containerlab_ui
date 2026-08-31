@@ -1,8 +1,10 @@
 import pytest
+from pathlib import Path
 from django.conf import settings
+from django.utils import timezone
 from rest_framework.test import APIClient
-from studio.models import (AuditEvent, ConsoleSession, DeviceInstance, DeviceTemplateVersion, ImageArtifact, Lab, LabDeployment, LabNode, LabRevision,
-    OperationJob, Project, ProjectMembership, PublishedImage, User)
+from studio.models import (AuditEvent, CaptureSession, ConsoleSession, DeviceInstance, DeviceTemplateVersion, ImageArtifact, Lab, LabDeployment,
+    LabArtifact, LabInterface, LabNode, LabRevision, OperationJob, Project, ProjectMembership, PublishedImage, User)
 from studio.tasks import execute_operation, reconcile_deployment
 
 def test_web_process_uses_configured_celery_broker():
@@ -169,3 +171,65 @@ def test_reconciliation_drops_manual_lifecycle_after_launcher_replacement(monkey
     reconcile_deployment.run(str(deployment.id))
     device.refresh_from_db()
     assert device.observed_readiness=="ready" and "manual_lifecycle" not in device.runtime_resources
+
+@pytest.mark.django_db
+def test_capture_api_is_bounded_idempotent_and_operator_only(monkeypatch):
+    monkeypatch.setattr("studio.api.execute_operation.delay",lambda *_:None)
+    owner=User.objects.create_user("capture-owner",password="long-enough-password")
+    viewer=User.objects.create_user("capture-viewer",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="capture-project");ProjectMembership.objects.create(project=project,user=viewer,role="viewer")
+    lab=Lab.objects.create(project=project,name="capture-lab");revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="5"*64,immutable=True)
+    node=LabNode.objects.create(revision=revision,name="r1",template_version=DeviceTemplateVersion.objects.filter(containerlab_kind="linux").first())
+    interface=LabInterface.objects.create(node=node,name="eth1")
+    deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-capture-test",runtime_version="0.8.0",observed_state="running")
+    device=DeviceInstance.objects.create(deployment=deployment,lab_node=node,observed_readiness="ready",runtime_resources={"pod":"r1-pod"})
+    payload={"device_id":str(device.id),"interface_id":str(interface.id),"duration":10,"packet_limit":500}
+    client=APIClient();client.force_authenticate(viewer)
+    assert client.post(f"/api/v1/deployments/{deployment.id}/captures/",payload,format="json",HTTP_IDEMPOTENCY_KEY="viewer-capture").status_code==403
+    client.force_authenticate(owner)
+    invalid={**payload,"duration":31}
+    assert client.post(f"/api/v1/deployments/{deployment.id}/captures/",invalid,format="json",HTTP_IDEMPOTENCY_KEY="bad-capture").status_code==422
+    first=client.post(f"/api/v1/deployments/{deployment.id}/captures/",payload,format="json",HTTP_IDEMPOTENCY_KEY="capture-one")
+    second=client.post(f"/api/v1/deployments/{deployment.id}/captures/",payload,format="json",HTTP_IDEMPOTENCY_KEY="capture-one")
+    assert first.status_code==second.status_code==202 and first.data["id"]==second.data["id"]
+    assert CaptureSession.objects.filter(deployment=deployment,status="scheduled").count()==1
+    assert AuditEvent.objects.filter(action="capture.started",project=project).count()==1
+
+@pytest.mark.django_db
+def test_capture_download_is_scoped_and_streams_pcap(settings,tmp_path):
+    settings.MEDIA_ROOT=tmp_path
+    owner=User.objects.create_user("capture-download",password="long-enough-password")
+    stranger=User.objects.create_user("capture-stranger",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="capture-download-project");lab=Lab.objects.create(project=project,name="capture-download-lab")
+    revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="6"*64,immutable=True)
+    node=LabNode.objects.create(revision=revision,name="r1",template_version=DeviceTemplateVersion.objects.filter(containerlab_kind="linux").first())
+    interface=LabInterface.objects.create(node=node,name="eth1");deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-download-test",runtime_version="0.8.0")
+    path=tmp_path/"captures"/"sample.pcap";path.parent.mkdir();pcap=b"\xd4\xc3\xb2\xa1"+b"\x00"*20;path.write_bytes(pcap)
+    capture=CaptureSession.objects.create(deployment=deployment,interface=interface,owner=owner,status="complete",expires_at=timezone.now()+timezone.timedelta(hours=1),artifact_reference=str(path))
+    client=APIClient();client.force_authenticate(owner)
+    response=client.get(f"/api/v1/deployments/{deployment.id}/captures/{capture.id}/download/")
+    assert response.status_code==200 and b"".join(response.streaming_content)==pcap
+    client.force_authenticate(stranger)
+    assert client.get(f"/api/v1/deployments/{deployment.id}/captures/{capture.id}/download/").status_code==404
+
+@pytest.mark.django_db
+def test_capture_worker_persists_auditable_artifact_without_changing_lab_state(monkeypatch,settings,tmp_path):
+    settings.MEDIA_ROOT=tmp_path
+    owner=User.objects.create_user("capture-worker",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="capture-worker-project");lab=Lab.objects.create(project=project,name="capture-worker-lab")
+    revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="7"*64,immutable=True)
+    node=LabNode.objects.create(revision=revision,name="r1",template_version=DeviceTemplateVersion.objects.filter(containerlab_kind="linux").first())
+    interface=LabInterface.objects.create(node=node,name="eth1");deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-capture-worker",runtime_version="0.8.0",observed_state="running")
+    DeviceInstance.objects.create(deployment=deployment,lab_node=node,observed_readiness="ready",runtime_resources={"pod":"r1-pod"})
+    capture=CaptureSession.objects.create(deployment=deployment,interface=interface,owner=owner,status="scheduled",expires_at=timezone.now()+timezone.timedelta(hours=1))
+    job=OperationJob.objects.create(deployment=deployment,owner=owner,operation_type="capture_packets",target_id=capture.id,idempotency_key="worker-capture",state="scheduled",request_payload={"duration":5,"packet_limit":50})
+    pcap=b"\xd4\xc3\xb2\xa1"+b"\x00"*20
+    class Adapter:
+        def capture_packets(self,*args): return pcap
+    monkeypatch.setattr("studio.tasks.ClabernetesAdapter",Adapter)
+    execute_operation.run(str(job.id))
+    job.refresh_from_db();capture.refresh_from_db();deployment.refresh_from_db()
+    artifact=LabArtifact.objects.get(deployment=deployment,artifact_type="packet_capture")
+    assert job.state=="succeeded" and job.result_payload["byte_size"]==len(pcap)
+    assert capture.status=="complete" and Path(capture.artifact_reference).read_bytes()==pcap
+    assert artifact.checksum==job.result_payload["checksum"] and deployment.observed_state=="running"

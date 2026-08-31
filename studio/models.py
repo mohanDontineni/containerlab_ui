@@ -210,6 +210,8 @@ class CaptureSession(UUIDModel):
     status = models.CharField(max_length=24, default="pending")
     expires_at = models.DateTimeField()
     artifact_reference = models.CharField(max_length=512, blank=True)
+    class Meta:
+        constraints=[models.UniqueConstraint(fields=["deployment","interface"],condition=Q(status__in=["scheduled","capturing"]),name="one_active_interface_capture")]
 
 class ConfigurationVersion(UUIDModel):
     project = models.ForeignKey(Project, on_delete=models.PROTECT)

@@ -39,4 +39,7 @@ class DeviceInstanceSerializer(serializers.ModelSerializer):
     name=serializers.CharField(source="lab_node.name",read_only=True)
     kind=serializers.CharField(source="lab_node.template_version.containerlab_kind",read_only=True)
     node_id=serializers.UUIDField(source="lab_node_id",read_only=True)
-    class Meta: model=models.DeviceInstance; fields=("id","node_id","name","kind","observed_readiness","worker_placement","runtime_resources","console_endpoints")
+    interfaces=serializers.SerializerMethodField()
+    def get_interfaces(self,obj):
+        return [{"id":str(interface.id),"name":interface.name} for interface in obj.lab_node.interfaces.all() if not interface.reserved_management]
+    class Meta: model=models.DeviceInstance; fields=("id","node_id","name","kind","interfaces","observed_readiness","worker_placement","runtime_resources","console_endpoints")

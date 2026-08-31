@@ -1,7 +1,11 @@
 from celery import shared_task
+import hashlib
+import os
+from pathlib import Path
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
-from .models import DeviceInstance, LabDeployment, LabNode, OperationJob
+from .models import CaptureSession, DeviceInstance, LabArtifact, LabDeployment, LabNode, OperationJob
 from .runtime import ClabernetesAdapter
 
 @shared_task(bind=True,autoretry_for=(ConnectionError,),retry_backoff=True,max_retries=5)
@@ -18,6 +22,19 @@ def execute_operation(self,job_id):
         if job.operation_type=="ping":
             node=LabNode.objects.get(pk=job.request_payload["node_id"],revision=job.deployment.revision)
             result=adapter.ping(job.deployment,node,job.request_payload["target"],job.request_payload["count"],job.request_payload["timeout"])
+        elif job.operation_type=="capture_packets":
+            capture=CaptureSession.objects.select_related("interface__node").get(pk=job.target_id,deployment=job.deployment)
+            capture.status="capturing"; capture.save(update_fields=["status","updated_at"])
+            payload=adapter.capture_packets(job.deployment,capture.interface.node,capture.interface,
+                job.request_payload["duration"],job.request_payload["packet_limit"])
+            checksum=hashlib.sha256(payload).hexdigest(); directory=Path(settings.MEDIA_ROOT)/"captures"/str(job.deployment_id)
+            directory.mkdir(parents=True,exist_ok=True); destination=directory/f"{capture.id}.pcap"; temporary=destination.with_suffix(".tmp")
+            temporary.write_bytes(payload); os.replace(temporary,destination)
+            artifact=LabArtifact.objects.create(deployment=job.deployment,artifact_type="packet_capture",storage_reference=str(destination),
+                checksum=checksum,retention_until=capture.expires_at)
+            capture.status="complete"; capture.artifact_reference=str(destination); capture.save(update_fields=["status","artifact_reference","updated_at"])
+            result={"capture_id":str(capture.id),"artifact_id":str(artifact.id),"byte_size":len(payload),"checksum":checksum,
+                "download":f"/api/v1/deployments/{job.deployment_id}/captures/{capture.id}/download/"}
         elif job.operation_type in device_operations:
             device=DeviceInstance.objects.select_related("lab_node").get(pk=job.target_id,deployment=job.deployment)
             result=getattr(adapter,job.operation_type)(job.deployment,device)
@@ -32,14 +49,15 @@ def execute_operation(self,job_id):
             deployment.resource_identities={"topology":{"name":"topology","namespace":deployment.namespace}}
         elif job.operation_type in ("stop_lab","delete_runtime"):
             deployment.observed_state=LabDeployment.State.STOPPED
-        if job.operation_type not in ("ping",*device_operations):
+        if job.operation_type not in ("ping","capture_packets",*device_operations):
             deployment.last_reconciliation=timezone.now()
             deployment.error_details={}
             deployment.save(update_fields=["observed_state","resource_identities","last_reconciliation","error_details","updated_at"])
         job.state="succeeded"; job.progress=100; job.error_details={}
-        if job.operation_type=="ping" or job.operation_type in device_operations: job.result_payload=result
+        if job.operation_type in ("ping","capture_packets") or job.operation_type in device_operations: job.result_payload=result
     except Exception as exc:
-        if job.deployment_id and job.operation_type not in ("ping",*device_operations):
+        if job.operation_type=="capture_packets": CaptureSession.objects.filter(pk=job.target_id).update(status="failed")
+        if job.deployment_id and job.operation_type not in ("ping","capture_packets",*device_operations):
             LabDeployment.objects.filter(pk=job.deployment_id).update(observed_state=LabDeployment.State.FAILED,
                 error_details={"type":type(exc).__name__,"message":str(exc)[:2000]},last_reconciliation=timezone.now())
         job.state="failed"; job.error_details={"type":type(exc).__name__,"message":str(exc)[:2000]}; raise
