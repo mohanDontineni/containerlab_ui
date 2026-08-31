@@ -2,7 +2,7 @@ import yaml
 import base64
 import struct
 from types import SimpleNamespace
-from studio.runtime import ClabernetesAdapter,API_GROUP,API_VERSION,RUNTIME_VERSION,CapabilityError,CAPTURE_STOP_MARKER,strip_capture_stop_packets
+from studio.runtime import ClabernetesAdapter,API_GROUP,API_VERSION,RUNTIME_VERSION,CapabilityError,CAPTURE_STOP_MARKER,CAPTURE_STOP_DESTINATION,strip_capture_stop_packets
 def test_adapter_is_pinned(): assert (API_GROUP,API_VERSION,RUNTIME_VERSION)==("c9s.run","v1alpha1","0.8.0")
 def test_unsupported_capability_is_explicit():
     adapter=object.__new__(ClabernetesAdapter)
@@ -61,7 +61,7 @@ def test_bounded_capture_uses_verified_host_interface_and_returns_pcap(monkeypat
 
 def test_capture_stop_frames_are_removed_from_pcap():
     header=b"\xd4\xc3\xb2\xa1"+b"\x00"*20
-    real=b"real-packet"; stop=b"prefix"+CAPTURE_STOP_MARKER+b"suffix"
+    real=b"real-packet"; stop=b"prefix"+CAPTURE_STOP_MARKER+b"suffix"; destination_stop=b"ethernet-ipv6"+CAPTURE_STOP_DESTINATION+b"payload"
     record=lambda body: struct.pack("<IIII",1,2,len(body),len(body))+body
-    cleaned=strip_capture_stop_packets(header+record(real)+record(stop))
+    cleaned=strip_capture_stop_packets(header+record(real)+record(stop)+record(destination_stop))
     assert cleaned==header+record(real)

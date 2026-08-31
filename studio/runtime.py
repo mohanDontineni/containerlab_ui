@@ -13,6 +13,7 @@ API_GROUP="c9s.run"; API_VERSION="v1alpha1"; RUNTIME_VERSION="0.8.0"
 class CapabilityError(RuntimeError): pass
 PCAP_MAGICS=(b"\xd4\xc3\xb2\xa1",b"\xa1\xb2\xc3\xd4",b"\x4d\x3c\xb2\xa1",b"\xa1\xb2\x3c\x4d")
 CAPTURE_STOP_MARKER=b"CLABSTUDIOPCAPSTOP"
+CAPTURE_STOP_DESTINATION=bytes.fromhex("ff020000000000000000000000000114")
 
 def strip_capture_stop_packets(payload):
     """Remove locally generated stop frames from a classic PCAP stream."""
@@ -25,7 +26,8 @@ def strip_capture_stop_packets(payload):
         record_end=offset+16+captured_length
         if record_end>len(payload): raise CapabilityError("Launcher returned a truncated PCAP record")
         record=payload[offset:record_end]
-        if CAPTURE_STOP_MARKER not in record[16:]: cleaned.extend(record)
+        frame=record[16:]
+        if CAPTURE_STOP_MARKER not in frame and CAPTURE_STOP_DESTINATION not in frame: cleaned.extend(record)
         offset=record_end
     return bytes(cleaned)
 @dataclass(frozen=True)
