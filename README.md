@@ -34,5 +34,4 @@ The production image uses Python 3.13, Gunicorn with Uvicorn workers, a multi-st
 
 ## Important limitations
 
-This is not yet production-ready. Browser console transport, full image publication to a worker-trusted private registry, reference-lab BGP/firewall/PCAP acceptance, ordinary account login UI, and several CRUD surfaces remain incomplete. VM-backed devices are blocked on this node because `/dev/kvm` is absent.
-
+Advanced acceptance remains in progress. Multi-node image distribution, reference-lab BGP/firewall validation, self-service account administration, quota enforcement, and several advanced CRUD surfaces remain incomplete. VM-backed devices are blocked on this node because `/dev/kvm` is absent. Browser consoles, packet capture, node-local image publication, topology lifecycle, and project role management are implemented and live-tested on the single-node deployment.
