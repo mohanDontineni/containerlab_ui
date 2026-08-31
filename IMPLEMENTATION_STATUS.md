@@ -15,6 +15,7 @@
 - Session-bound browser consoles, reliable per-device restart, bounded ping diagnostics, authenticated PCAP capture/download, and bidirectional live link controls.
 - Live link latency, disable, and restore validation against the deployed two-node lab, with persisted conditions, idempotent operations, and audit events.
 - Resumable 4 MiB image archive onboarding with pause/resume/cancel UX, optional expected checksum, server-side SHA-256, quarantine inspection, per-project deduplication, and audit events.
+- Licensed Docker/OCI archive publication into single-node containerd with a checksum-derived immutable tag, isolated Kubernetes Job, project-scoped idempotent API, audit trail, build status, and image-library action.
 
 ## Acceptance results
 
@@ -24,7 +25,7 @@
 | 2 | Authentication/project authorization | PASS | Django admin login deployed; API guessed-UUID and viewer-write tests pass. |
 | 3 | Supported upload/preparation | PASS | A real 8,585,216-byte Alpine Docker archive was resumed across three chunks, checksum-matched, safely identified, validated, audited, and deduplicated; malformed input remained unsupported. |
 | 4 | Invalid formats stay undeployable | PASS | Unit tests verify malformed data and traversal archives are unsupported. |
-| 5 | Published images pull through runtime layers | BLOCKED | Clabernetes public pulls proved; private worker-trusted TLS registry prerequisite not completed. |
+| 5 | Published images pull through runtime layers | PASS | Uploaded Alpine archive published through the API; Clabernetes copied its immutable node-local tag into the launcher Docker daemon. |
 | 6 | Layout persists | PASS | Editor draft save/load persists node positions, annotations, interfaces, links, images, and encrypted startup configurations. |
 | 7 | Interface links validated | PASS | Parser and serializer reject duplicate point-to-point interfaces. |
 | 8 | Real Kubernetes lab workload | PASS | `studio-smoke` TopologyReady with two launcher/device containers and VXLAN link. |
@@ -34,19 +35,19 @@
 | 12 | Reference-lab traffic | PARTIAL | Smoke traffic passed 3/3; BGP and firewall reference acceptance not run. |
 | 13 | PCAP download | PASS | Live eth1 capture downloaded through the authenticated API; checksum matched and tcpdump decoded 14 genuine ICMP/ARP packets with internal stop frames removed. |
 | 14 | Stop preserves saved lab/config | PASS | Runtime stop/redeploy preserves immutable revision data, saved topology, and encrypted startup configuration records. |
-| 15 | Redeploy pinned revisions/images | BLOCKED | Model/adapter enforce digests; publication path incomplete. |
+| 15 | Redeploy pinned revisions/images | PASS | Adapter accepts registry digests or checksum-derived node-local publications; a fresh saved lab deployed the published Alpine 3.22.5 image and reached ready. |
 | 16 | Restart avoids duplicate labs | PASS | Live per-device restart replaced only the selected launcher pod; multi-stage reconciliation restored readiness without creating another topology. |
 | 17 | Cross-project isolation | PASS | Guessed UUID API test returns 404. |
 | 18 | Cleanup preserves unrelated resources | PASS | Only `containerlab` and owned PVs touched; `trading` namespace unchanged. |
 | 19 | Existing workloads unaffected | PASS | Trading workloads remained running during inspection/deployment. |
 | 20 | Backup/restore | NOT RUN | Commands supplied; destructive restore exercise not performed on live instance. |
 
-Automated tests: **56 passed**. Django checks and migration drift checks: **pass**. React TypeScript/Vite production build: **pass in the clean multi-stage image build**. Helm lint/render: **pass**. Native runtime ping: **3 transmitted, 3 received, 0% loss, 0.445 ms average RTT**. Bidirectional 120 ms link condition: **240.563 ms average RTT**. Disabled link: **100% loss**. Restored qdiscs: **native `noqueue` on both endpoints**.
+Automated tests: **58 passed**. Django checks and migration drift checks: **pass**. React TypeScript/Vite production build: **pass in the clean multi-stage image build**. Helm lint/render: **pass**. Native runtime ping: **3 transmitted, 3 received, 0% loss, 0.445 ms average RTT**. Bidirectional 120 ms link condition: **240.563 ms average RTT**. Disabled link: **100% loss**. Restored qdiscs: **native `noqueue` on both endpoints**.
 
 ## Known limitations
 
 - No `/dev/kvm`; all VM-backed vendor templates are unsupported on the current worker.
 - No dynamic StorageClass; this installation uses three application-owned static hostPath PVs on the single node and is not highly available.
-- The private OCI registry and object-storage service are not deployed. The application image was built by an in-cluster Kaniko job and imported into containerd without changing runtime configuration.
+- Node-local publication is intentionally a single-node mode. Multi-node and highly available installations still require a trusted OCI registry so every worker can resolve the same immutable image.
 - npm reported transitive frontend audit findings during the clean container build; these require dependency analysis before production use.
 - Clabernetes 0.8.0 emitted an auxiliary Alpine puller warning (`exit` executable missing), although launcher pulls, topology readiness, device creation, and traffic all succeeded.
