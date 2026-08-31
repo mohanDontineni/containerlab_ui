@@ -21,6 +21,7 @@ urlpatterns = [
     path("deployments/", portal_views.deployments, name="portal-deployments"),
     path("deployments/<uuid:deployment_id>/", portal_views.deployment_detail, name="portal-deployment-detail"),
     path("images/", portal_views.images, name="portal-images"),
+    path("images/upload/", portal_views.image_upload, name="portal-image-upload"),
     path("images/register/", portal_views.image_register, name="portal-image-register"),
     path("device-templates/", portal_views.templates, name="portal-templates"),
     path("operations/", portal_views.operations, name="portal-operations"),

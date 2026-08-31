@@ -179,7 +179,13 @@ def images(request):
     published = PublishedImage.objects.filter(artifact__project__in=visible_projects(request.user)).count()
     return render(request, "studio/catalog.html", {"section": "images", "title": "Image library", "eyebrow": "DEVICE SOFTWARE", "items": artifacts,
         "description": "Track quarantined uploads, inspection results, builds, and immutable publications.", "secondary_stat": f"{published} published",
-        "create_url": "/images/register/", "create_label": "Register image"})
+        "create_url": "/images/register/", "create_label": "Register image", "upload_url":"/images/upload/"})
+
+@login_required
+@ensure_csrf_cookie
+def image_upload(request):
+    editable=Project.objects.filter(Q(owner=request.user)|Q(memberships__user=request.user,memberships__role__in=(ProjectMembership.Role.ADMIN,ProjectMembership.Role.EDITOR))).distinct().order_by("name")
+    return render(request,"studio/image_upload.html",{"projects":editable})
 
 @login_required
 def image_register(request):

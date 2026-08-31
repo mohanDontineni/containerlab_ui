@@ -98,8 +98,13 @@ class UploadViewSet(viewsets.ModelViewSet):
     def perform_create(self,serializer):
         size=serializer.validated_data["expected_size"]
         if size>settings.MAX_UPLOAD_BYTES: from rest_framework.exceptions import ValidationError; raise ValidationError({"expected_size":"Exceeds configured limit"})
+        project=serializer.validated_data["project"]
+        if project_role(self.request.user,project) not in (models.ProjectMembership.Role.ADMIN,models.ProjectMembership.Role.EDITOR):
+            from rest_framework.exceptions import PermissionDenied; raise PermissionDenied()
         uid=uuid.uuid4(); destination=Path(settings.MEDIA_ROOT)/"quarantine"/str(uid)
-        serializer.save(id=uid,owner=self.request.user,artifact_destination=str(destination),expires_at=timezone.now()+timezone.timedelta(hours=24))
+        session=serializer.save(id=uid,owner=self.request.user,artifact_destination=str(destination),expires_at=timezone.now()+timezone.timedelta(hours=24))
+        models.AuditEvent.objects.create(actor=self.request.user,project=project,action="image.upload_created",target_type="UploadSession",target_id=session.id,
+            correlation_id=getattr(self.request,"correlation_id",""),metadata={"filename":session.original_filename,"expected_size":size})
     @action(detail=True,methods=["put"],url_path="chunks")
     def chunk(self,request,pk=None):
         session=self.get_object()
@@ -110,10 +115,16 @@ class UploadViewSet(viewsets.ModelViewSet):
     def complete(self,request,pk=None):
         try: artifact=finalize(self.get_object(),request.user)
         except UploadError as e: return Response({"error":{"code":"upload_invalid","details":str(e)}},status=422)
+        models.AuditEvent.objects.create(actor=request.user,project=artifact.project,action="image.inspected",target_type="ImageArtifact",target_id=artifact.id,
+            correlation_id=getattr(request,"correlation_id",""),metadata={"format":artifact.detected_format,"validation_status":artifact.validation_status,"checksum":artifact.checksum})
         return Response(serializers.ImageArtifactSerializer(artifact).data,status=201)
     @action(detail=True,methods=["post"])
     def cancel(self,request,pk=None):
-        session=self.get_object(); session.status=models.UploadSession.Status.CANCELLED; session.save(update_fields=["status","updated_at"]); return Response(status=204)
+        session=self.get_object(); Path(session.artifact_destination).unlink(missing_ok=True)
+        session.status=models.UploadSession.Status.CANCELLED; session.save(update_fields=["status","updated_at"])
+        models.AuditEvent.objects.create(actor=request.user,project=session.project,action="image.upload_cancelled",target_type="UploadSession",target_id=session.id,
+            correlation_id=getattr(request,"correlation_id",""),metadata={"received_bytes":session.received_bytes})
+        return Response(status=204)
 
 class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class=serializers.DeploymentSerializer

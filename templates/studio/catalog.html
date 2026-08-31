@@ -4,7 +4,7 @@
 {% block content %}
 <section class="page-heading">
   <div><p class="eyebrow">{{ eyebrow }}</p><h1>{{ title }}</h1><p>{{ description }}</p></div>
-  {% if create_url %}<a class="primary-button" href="{{ create_url }}"><span>＋</span> {{ create_label }}</a>{% endif %}
+  {% if create_url %}<div class="heading-actions">{% if upload_url %}<a class="secondary-button" href="{{ upload_url }}">⇧ Upload archive</a>{% endif %}<a class="primary-button" href="{{ create_url }}"><span>＋</span> {{ create_label }}</a></div>{% endif %}
 </section>
 <section class="catalog-toolbar">
   <div class="search-box"><span>⌕</span><input type="search" id="catalog-search" placeholder="Search {{ title|lower }}…" aria-label="Search {{ title|lower }}"></div>
@@ -31,7 +31,7 @@
       {% elif section == "deployments" %}
         <div class="entity-main"><span class="entity-icon violet">▶</span><p><strong>{{ item.revision.lab.name }}</strong><small>Revision {{ item.revision.revision_number }} · {{ item.namespace }}</small></p></div><span><em class="catalog-state state-{{ item.observed_state }}"><i></i>{{ item.observed_state|title }}</em></span><span class="mono-text">{{ item.runtime_version }}</span><span class="subtle">{{ item.last_reconciliation|timesince|default:"Not yet" }}</span><a class="row-action" href="/deployments/{{ item.id }}/">›</a>
       {% elif section == "images" %}
-        <div class="entity-main"><span class="entity-icon amber">◫</span><p><strong>{{ item.original_filename }}</strong><small>SHA256 {{ item.checksum|slice:":12" }}…</small></p></div><span class="project-chip">{{ item.project.name }}</span><span class="mono-text">{{ item.detected_format }}</span><span><em class="catalog-state state-{{ item.validation_status }}"><i></i>{{ item.validation_status|title }}</em></span><span class="mono-text">{{ item.byte_size|filesizeformat }}</span>
+        <div class="entity-main"><span class="entity-icon amber">◫</span><p><strong>{{ item.original_filename }}</strong><small>{% if item.inspection_result.reason %}{{ item.inspection_result.reason|truncatechars:68 }}{% else %}SHA256 {{ item.checksum|slice:":12" }}…{% endif %}</small></p></div><span class="project-chip">{{ item.project.name }}</span><span class="mono-text">{{ item.detected_format }}</span><span><em class="catalog-state state-{{ item.validation_status }}"><i></i>{{ item.validation_status|title }}</em></span><span class="mono-text">{{ item.byte_size|filesizeformat }}</span>
       {% elif section == "templates" %}
         <div class="entity-main"><span class="entity-icon violet">⬡</span><p><strong>{{ item.name }}</strong><small>{{ item.description|default:"Reusable device launch profile"|truncatechars:72 }}</small></p></div><span class="mono-text">{% if item.active_version %}v{{ item.active_version.version }} · {{ item.active_version.containerlab_kind }}{% else %}Unpublished{% endif %}</span><span>{% if item.privileged %}<em class="risk-badge">Elevated</em>{% else %}<em class="safe-badge">Standard</em>{% endif %}</span><span class="subtle">{{ item.updated_at|timesince }} ago</span><span class="row-action">›</span>
       {% else %}

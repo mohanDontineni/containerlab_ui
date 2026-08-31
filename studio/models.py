@@ -42,7 +42,7 @@ class UploadSession(UUIDModel):
     received_parts = models.PositiveIntegerField(default=0)
     expires_at = models.DateTimeField()
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.ACTIVE)
-    expected_checksum = models.CharField(max_length=64)
+    expected_checksum = models.CharField(max_length=64, blank=True)
     computed_checksum = models.CharField(max_length=64, blank=True)
     artifact_destination = models.CharField(max_length=512)
 
@@ -57,7 +57,7 @@ class ImageArtifact(UUIDModel):
     original_filename = models.CharField(max_length=255)
     detected_format = models.CharField(max_length=40)
     byte_size = models.BigIntegerField()
-    checksum = models.CharField(max_length=64, unique=True)
+    checksum = models.CharField(max_length=64)
     vendor = models.CharField(max_length=80, blank=True)
     category = models.CharField(max_length=80, blank=True)
     version = models.CharField(max_length=80, blank=True)
@@ -66,6 +66,7 @@ class ImageArtifact(UUIDModel):
     license_acknowledged = models.BooleanField(default=False)
     inspection_result = models.JSONField(default=dict)
     validation_status = models.CharField(max_length=20, choices=Validation.choices, default=Validation.QUARANTINED)
+    class Meta: constraints=[models.UniqueConstraint(fields=["project","checksum"],name="unique_image_checksum_per_project")]
 
 class ImageBuild(UUIDModel):
     artifact = models.ForeignKey(ImageArtifact, on_delete=models.PROTECT, related_name="builds")

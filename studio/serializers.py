@@ -23,7 +23,12 @@ class LabLinkSerializer(serializers.ModelSerializer):
             if not endpoint.shared_medium and (endpoint.links_as_a.exists() or endpoint.links_as_b.exists()): raise serializers.ValidationError({"interface": f"{endpoint.name} already has a peer"})
         return attrs
 class UploadSessionSerializer(serializers.ModelSerializer):
-    class Meta: model=models.UploadSession; fields="__all__"; read_only_fields=("owner","received_bytes","received_parts","status","computed_checksum","artifact_destination")
+    expected_checksum=serializers.CharField(required=False,allow_blank=True,max_length=64)
+    def validate_expected_checksum(self,value):
+        if value and (len(value)!=64 or any(character not in "0123456789abcdefABCDEF" for character in value)):
+            raise serializers.ValidationError("Expected checksum must be a 64-character SHA-256 hex digest.")
+        return value.lower()
+    class Meta: model=models.UploadSession; fields="__all__"; read_only_fields=("owner","received_bytes","received_parts","expires_at","status","computed_checksum","artifact_destination")
 class ImageArtifactSerializer(serializers.ModelSerializer):
     class Meta: model=models.ImageArtifact; fields="__all__"
 class PublishedImageSerializer(serializers.ModelSerializer):

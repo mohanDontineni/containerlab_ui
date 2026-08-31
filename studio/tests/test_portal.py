@@ -24,7 +24,7 @@ def test_project_create_is_native_and_scoped(client):
     assert Project.objects.filter(owner=user, name="Network Engineering").exists()
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("path", ["/projects/", "/labs/", "/deployments/", "/images/", "/device-templates/", "/operations/", "/settings/"])
+@pytest.mark.parametrize("path", ["/projects/", "/labs/", "/deployments/", "/images/", "/images/upload/", "/device-templates/", "/operations/", "/settings/"])
 def test_native_portal_pages_render(client, path):
     user = User.objects.create_user(f"user-{path.strip('/').replace('/', '-') or 'home'}", password="long-enough-password")
     client.force_login(user)
@@ -75,6 +75,14 @@ def test_register_digest_pinned_registry_image(client):
     assert artifact.source_type == ImageArtifact.Source.REGISTRY
     assert artifact.upload_session is None
     assert PublishedImage.objects.get(artifact=artifact).registry_digest == digest
+
+@pytest.mark.django_db
+def test_image_library_exposes_professional_resumable_upload(client):
+    owner=User.objects.create_user("upload-portal",password="long-enough-password");Project.objects.create(owner=owner,name="Images")
+    client.force_login(owner)
+    assert "Upload archive" in client.get("/images/").content.decode()
+    html=client.get("/images/upload/").content.decode()
+    assert "RESUMABLE UPLOAD" in html and "4 MiB chunks" in html and "/api/v1/uploads/" in html
 
 @pytest.mark.django_db
 def test_deployment_detail_is_native_and_scoped(client):

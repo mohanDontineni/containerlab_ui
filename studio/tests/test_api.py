@@ -4,7 +4,7 @@ from django.conf import settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 from studio.models import (AuditEvent, CaptureSession, ConsoleSession, DeviceInstance, DeviceTemplateVersion, ImageArtifact, Lab, LabDeployment,
-    LabArtifact, LabInterface, LabLink, LabNode, LabRevision, OperationJob, Project, ProjectMembership, PublishedImage, User)
+    LabArtifact, LabInterface, LabLink, LabNode, LabRevision, OperationJob, Project, ProjectMembership, PublishedImage, UploadSession, User)
 from studio.tasks import execute_operation, reconcile_deployment
 
 def test_web_process_uses_configured_celery_broker():
@@ -25,6 +25,18 @@ def test_viewer_cannot_modify_project():
     ProjectMembership.objects.create(project=project,user=viewer,role="viewer")
     c=APIClient(); c.force_authenticate(viewer)
     assert c.patch(f"/api/v1/projects/{project.id}/",{"name":"changed"},format="json").status_code==403
+
+@pytest.mark.django_db
+def test_upload_creation_is_project_scoped_and_checksum_optional():
+    owner=User.objects.create_user("upload-owner",password="long-enough-password");viewer=User.objects.create_user("upload-viewer",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="uploads");ProjectMembership.objects.create(project=project,user=viewer,role="viewer")
+    payload={"project":str(project.id),"original_filename":"router.tar","expected_size":1024,"expected_checksum":""}
+    client=APIClient();client.force_authenticate(viewer)
+    assert client.post("/api/v1/uploads/",payload,format="json").status_code==403
+    client.force_authenticate(owner);response=client.post("/api/v1/uploads/",payload,format="json")
+    assert response.status_code==201 and response.data["expected_checksum"]==""
+    session=UploadSession.objects.get(id=response.data["id"])
+    assert session.owner==owner and AuditEvent.objects.filter(action="image.upload_created",target_id=session.id).exists()
 
 @pytest.mark.django_db
 def test_owner_can_publish_and_schedule_deployable_lab(django_capture_on_commit_callbacks):
