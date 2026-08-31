@@ -10,6 +10,7 @@ import yaml
 from kubernetes import client, config
 from kubernetes.client.exceptions import ApiException
 from kubernetes.stream import stream
+from .configurations import decrypt_configuration
 
 API_GROUP="c9s.run"; API_VERSION="v1alpha1"; RUNTIME_VERSION="0.8.0"
 
@@ -34,7 +35,7 @@ def strip_capture_stop_packets(payload):
         offset=record_end
     return bytes(cleaned)
 @dataclass(frozen=True)
-class Plan: namespace:str; topology_name:str; manifest:dict
+class Plan: namespace:str; topology_name:str; manifest:dict; config_maps:tuple=()
 
 class ClabernetesAdapter:
     capabilities={"deploy_lab":"supported","get_observed_state":"supported","delete_runtime":"supported","restart_device":"supported",
@@ -54,6 +55,8 @@ class ClabernetesAdapter:
                 expected=f":sha256-{node.published_image.artifact.checksum}"
                 if publication.get("publication_mode")!="node-containerd" or not node.published_image.registry_digest.endswith(expected):
                     errors.append(f"{node.name}: image is not content-addressed")
+            if getattr(node,"startup_configuration_id",None) and not node.template_version.launch_profile.get("startup_config_target"):
+                errors.append(f"{node.name}: template does not support startup configuration")
         return errors
     def publish_local_image(self,artifact,build):
         path=Path(artifact.storage_reference)
@@ -90,13 +93,28 @@ class ClabernetesAdapter:
         return {"reference":reference,"repository":repository,"archive_checksum":digest,"logs":logs[-12000:],"publication_mode":"node-containerd"}
     def plan_deployment(self,deployment):
         revision=deployment.revision
-        nodes={n.name:{"kind":n.template_version.containerlab_kind,"image":n.published_image.registry_digest} for n in revision.nodes.select_related("template_version","published_image")}
+        nodes={};config_maps=[];files_from_config_map={}
+        for node in revision.nodes.select_related("template_version","published_image","startup_configuration"):
+            definition={"kind":node.template_version.containerlab_kind,"image":node.published_image.registry_digest}
+            profile=getattr(node.template_version,"launch_profile",{})
+            if getattr(node,"startup_configuration_id",None):
+                config_name=f"studio-startup-{node.id.hex[:20]}";launcher_path="/clabernetes/studio/startup.cfg"
+                data={"startup.cfg":decrypt_configuration(node.startup_configuration.encrypted_content)}
+                mounts=[{"configMapName":config_name,"configMapPath":"startup.cfg","filePath":launcher_path,"mode":"read"}]
+                binds=[f'{launcher_path}:{profile["startup_config_target"]}']
+                for auxiliary in profile.get("auxiliary_config_files",[]):
+                    key=auxiliary["key"];data[key]=auxiliary["content"];mounts.append({"configMapName":config_name,"configMapPath":key,"filePath":auxiliary["launcher_path"],"mode":"read"});binds.append(f'{auxiliary["launcher_path"]}:{auxiliary["target"]}')
+                definition["binds"]=binds;files_from_config_map[node.name]=mounts
+                config_maps.append(client.V1ConfigMap(metadata=client.V1ObjectMeta(name=config_name,namespace=deployment.namespace,
+                    labels={"app.kubernetes.io/managed-by":"containerlab-studio","studio.containerlab.io/deployment":str(deployment.id),"studio.containerlab.io/node":str(node.id)}),data=data))
+            nodes[node.name]=definition
         links=[{"endpoints":[f"{l.endpoint_a.node.name}:{l.endpoint_a.name}",f"{l.endpoint_b.node.name}:{l.endpoint_b.name}"]} for l in revision.links.select_related("endpoint_a__node","endpoint_b__node")]
         definition=yaml.safe_dump({"name":f"lab-{str(deployment.id)[:8]}","topology":{"nodes":nodes,"links":links}},sort_keys=False)
         body={"apiVersion":f"{API_GROUP}/{API_VERSION}","kind":"Topology","metadata":{"name":"topology","namespace":deployment.namespace,
             "labels":{"app.kubernetes.io/managed-by":"containerlab-studio","studio.containerlab.io/deployment":str(deployment.id)}},
             "spec":{"definition":{"containerlab":definition},"naming":"prefixed","expose":{"disableExpose":True,"exposeType":"LoadBalancer"}}}
-        return Plan(deployment.namespace,"topology",body)
+        if files_from_config_map: body["spec"]["deployment"]={"filesFromConfigMap":files_from_config_map}
+        return Plan(deployment.namespace,"topology",body,tuple(config_maps))
     def deploy_lab(self,deployment):
         errors=self.validate_topology(deployment.revision)
         if errors: raise ValueError(errors)
@@ -104,6 +122,11 @@ class ClabernetesAdapter:
         try: self.core.create_namespace(client.V1Namespace(metadata=client.V1ObjectMeta(name=plan.namespace,labels={"app.kubernetes.io/managed-by":"containerlab-studio"})))
         except ApiException as e:
             if e.status!=409: raise
+        for config_map in plan.config_maps:
+            try: self.core.create_namespaced_config_map(plan.namespace,config_map)
+            except ApiException as exc:
+                if exc.status!=409: raise
+                self.core.patch_namespaced_config_map(config_map.metadata.name,plan.namespace,config_map)
         try: return self.custom.create_namespaced_custom_object(API_GROUP,API_VERSION,plan.namespace,"topologies",plan.manifest)
         except ApiException as exc:
             if exc.status==409: return self.custom.get_namespaced_custom_object(API_GROUP,API_VERSION,plan.namespace,"topologies",plan.topology_name)

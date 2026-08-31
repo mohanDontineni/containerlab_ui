@@ -22,6 +22,29 @@ def test_plan_uses_clabernetes_080_string_definition():
     assert yaml.safe_load(definition)["topology"]["nodes"]["r1"]["image"].endswith("@sha256:abc")
     assert plan.manifest["spec"]["expose"]["disableExpose"] is True
 
+def test_plan_materializes_supported_startup_configuration_without_embedding_secret_in_topology(monkeypatch):
+    monkeypatch.setattr("studio.runtime.decrypt_configuration",lambda _:"router bgp 65001\n network 10.1.0.0/24\n")
+    profile={"startup_config_target":"/etc/frr/frr.conf","auxiliary_config_files":[{"key":"daemons","launcher_path":"/clabernetes/studio/daemons","target":"/etc/frr/daemons","content":"zebra=yes\nbgpd=yes\n"}]}
+    node=SimpleNamespace(id=SimpleNamespace(hex="a"*32),name="r1",template_version=SimpleNamespace(containerlab_kind="linux",launch_profile=profile),
+        published_image=SimpleNamespace(registry_digest="quay.io/frr@sha256:abc"),startup_configuration_id="config-id",startup_configuration=SimpleNamespace(encrypted_content=b"ciphertext"))
+    revision=SimpleNamespace(nodes=SimpleNamespace(select_related=lambda *_:[node]),links=SimpleNamespace(select_related=lambda *_:[]))
+    deployment=SimpleNamespace(id="12345678-0000-0000-0000-000000000000",namespace="lab-config",revision=revision)
+    plan=object.__new__(ClabernetesAdapter).plan_deployment(deployment)
+    definition=yaml.safe_load(plan.manifest["spec"]["definition"]["containerlab"])
+    assert definition["topology"]["nodes"]["r1"]["binds"]==[
+        "/clabernetes/studio/startup.cfg:/etc/frr/frr.conf","/clabernetes/studio/daemons:/etc/frr/daemons"]
+    assert "router bgp" not in plan.manifest["spec"]["definition"]["containerlab"]
+    mounts=plan.manifest["spec"]["deployment"]["filesFromConfigMap"]["r1"]
+    assert [mount["configMapPath"] for mount in mounts]==["startup.cfg","daemons"]
+    assert plan.config_maps[0].data["startup.cfg"].startswith("router bgp")
+
+def test_startup_configuration_is_rejected_when_template_has_no_runtime_target():
+    artifact=SimpleNamespace(checksum="a"*64)
+    image=SimpleNamespace(registry_digest="registry/image@sha256:"+"a"*64,artifact=artifact,compatibility_result={})
+    node=SimpleNamespace(name="host",published_image=image,startup_configuration_id="config-id",template_version=SimpleNamespace(launch_profile={}))
+    revision=SimpleNamespace(nodes=SimpleNamespace(select_related=lambda *_:[node]))
+    assert ClabernetesAdapter.validate_topology(revision)==["host: template does not support startup configuration"]
+
 def test_node_local_checksum_reference_is_accepted_as_immutable():
     checksum="a"*64
     artifact=SimpleNamespace(checksum=checksum)
