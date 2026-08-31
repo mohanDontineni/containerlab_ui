@@ -48,15 +48,21 @@ class ClabernetesAdapter:
     @staticmethod
     def validate_topology(revision):
         errors=[]
-        for node in revision.nodes.select_related("template_version","published_image"):
+        for node in revision.nodes.select_related("template_version","published_image").prefetch_related("interfaces"):
+            profile=node.template_version.launch_profile or {}
             if not node.published_image: errors.append(f"{node.name}: no immutable published image")
             elif "@sha256:" not in node.published_image.registry_digest:
                 publication=node.published_image.compatibility_result
                 expected=f":sha256-{node.published_image.artifact.checksum}"
                 if publication.get("publication_mode")!="node-containerd" or not node.published_image.registry_digest.endswith(expected):
                     errors.append(f"{node.name}: image is not content-addressed")
-            if getattr(node,"startup_configuration_id",None) and not node.template_version.launch_profile.get("startup_config_target"):
+            if getattr(node,"startup_configuration_id",None) and not profile.get("startup_config_target"):
                 errors.append(f"{node.name}: template does not support startup configuration")
+            if profile.get("startup_config_required") and not getattr(node,"startup_configuration_id",None):
+                errors.append(f"{node.name}: startup configuration is required")
+            required_interfaces=int(profile.get("required_interfaces",0))
+            if required_interfaces and node.interfaces.filter(reserved_management=False).count()<required_interfaces:
+                errors.append(f"{node.name}: requires at least {required_interfaces} data-plane interfaces")
         return errors
     def publish_local_image(self,artifact,build):
         path=Path(artifact.storage_reference)

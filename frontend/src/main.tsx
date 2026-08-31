@@ -42,6 +42,10 @@ type Template = {
   managementInterface: string;
   resources: Record<string, string>;
   capabilities: Record<string, boolean>;
+  configurationLanguage: string;
+  startupConfigSupported: boolean;
+  startupConfigRequired: boolean;
+  requiredInterfaces: number;
 };
 type DeviceData = {
   label: string;
@@ -52,6 +56,11 @@ type DeviceData = {
   status: string;
   imageId: string;
   startupConfig: string;
+  icon: string;
+  configurationLanguage: string;
+  startupConfigSupported: boolean;
+  startupConfigRequired: boolean;
+  requiredInterfaces: number;
   [key: string]: unknown;
 };
 type SavedNode = {
@@ -106,11 +115,7 @@ function DeviceNode({
         {data.status}
       </div>
       <div className="device-glyph">
-        {data.kind.includes("bridge")
-          ? "▦"
-          : data.kind.includes("linux")
-            ? "↔"
-            : "⬡"}
+        {iconFor(data.icon)}
       </div>
       <strong>{data.label}</strong>
       <small>{data.kind}</small>
@@ -197,6 +202,11 @@ function Workspace() {
                 status: "stopped",
                 imageId: n.publishedImageId || "",
                 startupConfig: n.startupConfiguration || "",
+                icon: t?.icon || "device",
+                configurationLanguage: t?.configurationLanguage || "text",
+                startupConfigSupported: t?.startupConfigSupported || false,
+                startupConfigRequired: t?.startupConfigRequired || false,
+                requiredInterfaces: t?.requiredInterfaces || 0,
               },
             };
           }),
@@ -333,6 +343,11 @@ function Workspace() {
           status: "stopped",
           imageId: "",
           startupConfig: "",
+          icon: template.icon,
+          configurationLanguage: template.configurationLanguage,
+          startupConfigSupported: template.startupConfigSupported,
+          startupConfigRequired: template.startupConfigRequired,
+          requiredInterfaces: template.requiredInterfaces,
         },
       };
       setNodes((n) => [...n, node]);
@@ -488,10 +503,15 @@ function Workspace() {
       if (!n.data.verified)
         issues.push(`${n.data.label}: template is unverified`);
       if (!n.data.imageId) issues.push(`${n.data.label}: select a published image`);
+      if (n.data.startupConfigRequired && !String(n.data.startupConfig || "").trim())
+        issues.push(`${n.data.label}: startup configuration is required`);
+      const linkedInterfaces = n.data.interfaces.filter((iface) => used.has(`${n.id}:${iface}`)).length;
+      if (n.data.requiredInterfaces > linkedInterfaces)
+        issues.push(`${n.data.label}: connect at least ${n.data.requiredInterfaces} interfaces`);
     });
     if (!nodes.length) issues.push("Add at least one device");
     return issues;
-  }, [nodes]);
+  }, [nodes, used]);
   return (
     <div className="workspace-shell">
       <header className="workspace-top">
@@ -646,10 +666,15 @@ function Workspace() {
                 </select>
               </label>
               <label>
-                Startup configuration
+                Startup configuration {selectedNode.data.startupConfigRequired ? "· Required" : "· Optional"}
                 <textarea value={String(selectedNode.data.startupConfig || "")} placeholder="Optional device startup configuration"
+                  disabled={!selectedNode.data.startupConfigSupported}
                   onChange={(e)=>{setNodes((ns)=>ns.map((n)=>n.id===selectedNode.id?{...n,data:{...n.data,startupConfig:e.target.value}}:n));setDirty(true);}} />
-                <small className="field-help">Encrypted at rest · Maximum 1 MiB</small>
+                <small className="field-help">
+                  {selectedNode.data.startupConfigSupported
+                    ? `${selectedNode.data.configurationLanguage} · Encrypted at rest · Maximum 1 MiB`
+                    : "This template does not support startup configuration"}
+                </small>
               </label>
               <div className="property-block">
                 <span>Runtime status</span>

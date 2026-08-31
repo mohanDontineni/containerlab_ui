@@ -42,15 +42,29 @@ def test_startup_configuration_is_rejected_when_template_has_no_runtime_target()
     artifact=SimpleNamespace(checksum="a"*64)
     image=SimpleNamespace(registry_digest="registry/image@sha256:"+"a"*64,artifact=artifact,compatibility_result={})
     node=SimpleNamespace(name="host",published_image=image,startup_configuration_id="config-id",template_version=SimpleNamespace(launch_profile={}))
-    revision=SimpleNamespace(nodes=SimpleNamespace(select_related=lambda *_:[node]))
+    node.interfaces=SimpleNamespace(filter=lambda **_:SimpleNamespace(count=lambda:0))
+    revision=SimpleNamespace(nodes=SimpleNamespace(select_related=lambda *_:SimpleNamespace(prefetch_related=lambda *_:[node])))
     assert ClabernetesAdapter.validate_topology(revision)==["host: template does not support startup configuration"]
+
+def test_firewall_requires_policy_and_two_data_plane_interfaces():
+    artifact=SimpleNamespace(checksum="a"*64)
+    image=SimpleNamespace(registry_digest="registry/firewall@sha256:"+"a"*64,artifact=artifact,compatibility_result={})
+    interfaces=SimpleNamespace(filter=lambda **_:SimpleNamespace(count=lambda:1))
+    profile={"startup_config_target":"/etc/studio/firewall.sh","startup_config_required":True,"required_interfaces":2}
+    node=SimpleNamespace(name="fw1",published_image=image,startup_configuration_id=None,
+        template_version=SimpleNamespace(launch_profile=profile),interfaces=interfaces)
+    nodes=SimpleNamespace(select_related=lambda *_:SimpleNamespace(prefetch_related=lambda *_:[node]))
+    revision=SimpleNamespace(nodes=nodes)
+    assert ClabernetesAdapter.validate_topology(revision)==[
+        "fw1: startup configuration is required","fw1: requires at least 2 data-plane interfaces"]
 
 def test_node_local_checksum_reference_is_accepted_as_immutable():
     checksum="a"*64
     artifact=SimpleNamespace(checksum=checksum)
     image=SimpleNamespace(registry_digest=f"containerlab.local/studio/p/a:sha256-{checksum}",artifact=artifact,compatibility_result={"publication_mode":"node-containerd"})
-    node=SimpleNamespace(name="r1",published_image=image)
-    revision=SimpleNamespace(nodes=SimpleNamespace(select_related=lambda *_:[node]))
+    node=SimpleNamespace(name="r1",published_image=image,template_version=SimpleNamespace(launch_profile={}))
+    node.interfaces=SimpleNamespace(filter=lambda **_:SimpleNamespace(count=lambda:0))
+    revision=SimpleNamespace(nodes=SimpleNamespace(select_related=lambda *_:SimpleNamespace(prefetch_related=lambda *_:[node])))
     assert ClabernetesAdapter.validate_topology(revision)==[]
     image.registry_digest="containerlab.local/studio/p/a:latest"
     assert ClabernetesAdapter.validate_topology(revision)==["r1: image is not content-addressed"]

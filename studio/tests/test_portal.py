@@ -54,6 +54,18 @@ def test_topology_workspace_persists_device_interfaces_and_links(client):
     assert audit.metadata["node_count"]==2 and audit.metadata["link_count"]==1 and "startupConfiguration" not in audit.metadata
 
 @pytest.mark.django_db
+def test_firewall_catalog_exposes_policy_and_interface_requirements(client):
+    user=User.objects.create_user("firewall-catalog",password="long-enough-password")
+    client.force_login(user)
+    templates=client.get("/api/v1/topology/templates/").json()["templates"]
+    firewall=next(row for row in templates if row["name"]=="Linux Firewall")
+    assert firewall["icon"]=="firewall"
+    assert firewall["startupConfigSupported"] is True
+    assert firewall["startupConfigRequired"] is True
+    assert firewall["configurationLanguage"]=="shell"
+    assert firewall["requiredInterfaces"]==2
+
+@pytest.mark.django_db
 def test_viewer_cannot_change_topology(client):
     owner = User.objects.create_user("owner", password="long-enough-password")
     viewer = User.objects.create_user("viewer", password="long-enough-password")

@@ -79,6 +79,10 @@ def topology_catalog(request):
         "category": row.launch_profile.get("category", "Other"), "icon": row.launch_profile.get("icon", "device"),
         "verified": bool(row.capabilities.get("verified")), "privileged": row.template.privileged,
         "interfaces": _interfaces(row.interface_rules), "managementInterface": row.interface_rules.get("management", "eth0"),
+        "configurationLanguage": row.launch_profile.get("configuration_language", "text"),
+        "startupConfigSupported": bool(row.launch_profile.get("startup_config_target")),
+        "startupConfigRequired": bool(row.launch_profile.get("startup_config_required")),
+        "requiredInterfaces": int(row.launch_profile.get("required_interfaces", 0)),
         "resources": row.resource_requirements, "capabilities": row.capabilities} for row in rows]})
 
 @login_required
