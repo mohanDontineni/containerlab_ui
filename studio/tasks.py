@@ -63,9 +63,14 @@ def reconcile_deployment(self,deployment_id):
         for observed_device in ClabernetesAdapter().observe_devices(deployment):
             node=deployment.revision.nodes.filter(name=observed_device["name"]).first()
             if node:
+                current=DeviceInstance.objects.filter(deployment=deployment,lab_node=node).first()
+                resources={"node_uid":observed_device["node_uid"],"pod":observed_device["pod"],"pod_uid":observed_device["pod_uid"],"pod_phase":observed_device["pod_phase"]}
+                same_launcher=current and current.runtime_resources.get("pod_uid")==observed_device["pod_uid"]
+                if same_launcher: resources={**current.runtime_resources,**resources}
+                manually_stopped=same_launcher and current.runtime_resources.get("manual_lifecycle")=="stop_device"
                 DeviceInstance.objects.update_or_create(deployment=deployment,lab_node=node,defaults={
-                    "runtime_resources":{"node_uid":observed_device["node_uid"],"pod":observed_device["pod"],"pod_uid":observed_device["pod_uid"],"pod_phase":observed_device["pod_phase"]},
-                    "observed_readiness":observed_device["readiness"],"worker_placement":observed_device["worker"] or ""})
+                    "runtime_resources":resources,"observed_readiness":"stopped" if manually_stopped else observed_device["readiness"],
+                    "worker_placement":observed_device["worker"] or ""})
         deployment.save(update_fields=["observed_state","last_reconciliation","error_details","resource_identities","updated_at"])
         return observed
     except Exception as exc:

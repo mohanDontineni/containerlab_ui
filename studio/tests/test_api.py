@@ -3,7 +3,7 @@ from django.conf import settings
 from rest_framework.test import APIClient
 from studio.models import (AuditEvent, ConsoleSession, DeviceInstance, DeviceTemplateVersion, ImageArtifact, Lab, LabDeployment, LabNode, LabRevision,
     OperationJob, Project, ProjectMembership, PublishedImage, User)
-from studio.tasks import execute_operation
+from studio.tasks import execute_operation, reconcile_deployment
 
 def test_web_process_uses_configured_celery_broker():
     assert execute_operation.app.conf.broker_url == settings.CELERY_BROKER_URL
@@ -147,3 +147,22 @@ def test_device_worker_updates_node_without_failing_running_lab(monkeypatch):
     assert job.state=="succeeded" and job.result_payload["readiness"]=="stopped"
     assert device.observed_readiness=="stopped"
     assert deployment.observed_state=="running"
+
+@pytest.mark.django_db
+def test_reconciliation_preserves_manual_stop_for_same_launcher(monkeypatch):
+    owner=User.objects.create_user("reconcile-stop",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="reconcile-stop-project")
+    lab=Lab.objects.create(project=project,name="reconcile-stop-lab")
+    revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="4"*64,immutable=True)
+    node=LabNode.objects.create(revision=revision,name="node-a",template_version=DeviceTemplateVersion.objects.filter(containerlab_kind="linux").first())
+    deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-reconcile-stop",runtime_version="0.8.0",observed_state="running")
+    device=DeviceInstance.objects.create(deployment=deployment,lab_node=node,observed_readiness="stopped",
+        runtime_resources={"pod":"node-a-pod","pod_uid":"stable-pod","manual_lifecycle":"stop_device"})
+    class Adapter:
+        def get_observed_state(self,_): return {"topologyReady":True}
+        def observe_devices(self,_): return [{"name":"node-a","node_uid":"node-uid","readiness":"ready","pod":"node-a-pod",
+            "pod_uid":"stable-pod","worker":"worker","pod_phase":"Running"}]
+    monkeypatch.setattr("studio.tasks.ClabernetesAdapter",Adapter)
+    reconcile_deployment.run(str(deployment.id))
+    device.refresh_from_db()
+    assert device.observed_readiness=="stopped" and device.runtime_resources["manual_lifecycle"]=="stop_device"
