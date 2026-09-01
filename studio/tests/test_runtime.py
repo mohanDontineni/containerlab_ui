@@ -288,3 +288,20 @@ def test_device_logs_are_bounded_and_select_the_verified_runtime_source(monkeypa
     try: adapter.get_device_logs(deployment,device,"appliance",10)
     except CapabilityError as exc: assert "20 and 1000" in str(exc)
     else: raise AssertionError("unbounded device logs must be rejected")
+
+def test_device_events_are_scoped_to_launcher_uid_bounded_and_normalized():
+    from datetime import datetime,timezone
+    calls=[]
+    events=[SimpleNamespace(type="Warning",reason="Unhealthy",message="Readiness probe failed",count=3,event_time=None,
+        last_timestamp=datetime(2026,9,1,12,0,tzinfo=timezone.utc),first_timestamp=None,
+        metadata=SimpleNamespace(creation_timestamp=None),source=SimpleNamespace(component="kubelet"))]
+    core=SimpleNamespace(list_namespaced_event=lambda namespace,**kwargs:calls.append((namespace,kwargs)) or SimpleNamespace(items=events))
+    adapter=ClabernetesAdapter(custom_api=SimpleNamespace(),core_api=core)
+    deployment=SimpleNamespace(id="deployment",namespace="lab-one")
+    device=SimpleNamespace(id="device",deployment_id="deployment",lab_node=SimpleNamespace(name="r1"),
+        runtime_resources={"pod":"r1-pod","pod_uid":"launcher-uid"})
+    result=adapter.get_device_logs(deployment,device,"events",500)
+    assert calls==[("lab-one",{"field_selector":"involvedObject.uid=launcher-uid","limit":200,"_request_timeout":15})]
+    assert result["events"]==[{"type":"Warning","reason":"Unhealthy","message":"Readiness probe failed","count":3,
+        "occurred_at":"2026-09-01T12:00:00+00:00","component":"kubelet"}]
+    assert "Unhealthy ×3" in result["output"] and result["tail"]==500

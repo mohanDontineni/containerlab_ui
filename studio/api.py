@@ -1024,8 +1024,8 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
             operation_payload["expected_updated_at"]=expected
         if operation=="get_device_logs":
             source=str(request.data.get("source","appliance"));tail=request.data.get("tail",200)
-            if source not in ("appliance","launcher") or not isinstance(tail,int) or isinstance(tail,bool) or not 20<=tail<=1000:
-                return Response({"error":{"code":"invalid_log_request","details":"Choose appliance or launcher and request 20-1000 lines."}},status=422)
+            if source not in ("appliance","launcher","events") or not isinstance(tail,int) or isinstance(tail,bool) or not 20<=tail<=1000:
+                return Response({"error":{"code":"invalid_log_request","details":"Choose appliance logs, launcher logs, or Kubernetes events and request 20-1000 records."}},status=422)
             operation_payload.update({"source":source,"tail":tail})
         key=request.headers.get("Idempotency-Key")
         if not key: return Response({"error":{"code":"idempotency_key_required"}},status=400)

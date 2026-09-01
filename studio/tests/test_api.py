@@ -751,6 +751,11 @@ def test_device_logs_are_operator_only_bounded_async_no_store_and_audited(monkey
             return {"device_id":str(device.id),"device":"r1","source":source,"tail":tail,"output":"launcher ready\n","truncated":False}
     monkeypatch.setattr("studio.tasks.ClabernetesAdapter",Adapter);execute_operation.run(str(job.id));job.refresh_from_db()
     assert job.state=="succeeded" and job.result_payload["output"]=="launcher ready\n"
+    event_response=client.post(url,{**payload,"source":"events","tail":200},format="json",HTTP_IDEMPOTENCY_KEY="owner-events")
+    assert event_response.status_code==202
+    event_job=OperationJob.objects.get(id=event_response.data["id"])
+    assert event_job.request_payload["source"]=="events"
+    assert AuditEvent.objects.filter(action="device.logs_requested",target_id=device.id,metadata__source="events").count()==1
     runtime=client.get(f"/api/v1/deployments/{deployment.id}/runtime/")
     assert runtime["Cache-Control"]=="no-store" and runtime["X-Content-Type-Options"]=="nosniff"
     expected=node.template_version.resource_requirements

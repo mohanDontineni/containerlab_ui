@@ -13,6 +13,9 @@
 .capture-list p { display:flex; flex-direction:column; margin:0; }
 .capture-list strong { font-size:10px; }
 .capture-list small { color:#587187; font-size:8px; margin-top:4px; }
+.device-event-output{height:420px;overflow:auto;margin:12px 0;padding:10px;border:1px solid #193247;border-radius:10px;background:#050c14}
+.device-event-output article{padding:12px 14px;border:1px solid #183146;border-radius:8px;background:#081522;margin-bottom:8px}
+.device-event-output article:last-child{margin-bottom:0}.device-event-output header{display:flex;align-items:center;gap:8px}.device-event-output header strong{font-size:11px}.device-event-output header em{padding:3px 6px;border-radius:10px;background:#123149;color:#65c7d1;font:500 8px "JetBrains Mono";font-style:normal}.device-event-output article.event-warning header em{background:#3a2028;color:#f28394}.device-event-output header span{margin-left:auto;color:#6c8498;font:500 9px "JetBrains Mono"}.device-event-output p{margin:8px 0;color:#afc3d1;font-size:10px;line-height:1.55}.device-event-output footer{color:#557086;font:500 8px "JetBrains Mono"}
 .capture-actions { display:flex; gap:6px; justify-content:flex-end; }
 .packet-analysis-dialog { width:min(1180px,calc(100vw - 32px)); }
 .packet-analysis-summary { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin:18px 0; }

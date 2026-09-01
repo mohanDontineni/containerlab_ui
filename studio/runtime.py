@@ -61,7 +61,7 @@ class Plan: namespace:str; topology_name:str; manifest:dict; config_maps:tuple=(
 class ClabernetesAdapter:
     capabilities={"deploy_lab":"supported","get_observed_state":"supported","delete_runtime":"supported","restart_device":"supported","reset_device":"supported",
         "stop_device":"supported","start_device":"supported","resolve_console_target":"supported","start_capture":"experimental",
-        "stop_lab":"delete_and_redeploy","set_link_condition":"supported","collect_configuration":"template_dependent","get_device_logs":"supported",
+        "stop_lab":"delete_and_redeploy","set_link_condition":"supported","collect_configuration":"template_dependent","get_device_logs":"supported","get_device_events":"supported",
         "ping":"supported","traceroute":"supported"}
     def __init__(self, custom_api=None, core_api=None, batch_api=None, apps_api=None):
         if custom_api is None:
@@ -351,10 +351,24 @@ class ClabernetesAdapter:
         return {"namespace":device.deployment.namespace,"pod":device.runtime_resources["pod"],"method":device.lab_node.template_version.console_method}
     def get_device_logs(self,deployment,device,source="appliance",tail=200):
         if device.deployment_id!=deployment.id: raise CapabilityError("Device does not belong to this deployment")
-        if source not in ("appliance","launcher"): raise CapabilityError("Log source is not supported")
+        if source not in ("appliance","launcher","events"): raise CapabilityError("Diagnostic source is not supported")
         if not isinstance(tail,int) or isinstance(tail,bool) or not 20<=tail<=1000: raise CapabilityError("Log tail must be between 20 and 1000 lines")
         pod=device.runtime_resources.get("pod")
         if not pod: raise CapabilityError("Device launcher pod is not available")
+        if source=="events":
+            pod_uid=str(device.runtime_resources.get("pod_uid") or "")
+            if not pod_uid: raise CapabilityError("Device launcher identity is not available")
+            rows=self.core.list_namespaced_event(deployment.namespace,field_selector=f"involvedObject.uid={pod_uid}",limit=min(tail,200),
+                _request_timeout=15).items
+            def normalize(event):
+                occurred=event.event_time or event.last_timestamp or event.first_timestamp or event.metadata.creation_timestamp
+                return {"type":str(event.type or "Normal")[:24],"reason":str(event.reason or "Unknown")[:96],
+                    "message":str(event.message or "")[:2000],"count":max(1,int(event.count or 1)),
+                    "occurred_at":occurred.isoformat() if occurred else None,"component":str(getattr(event.source,"component","") or "")[:96]}
+            events=sorted((normalize(event) for event in rows),key=lambda event:event["occurred_at"] or "",reverse=True)[:min(tail,200)]
+            output="\n".join(f'{event["occurred_at"] or "unknown"} {event["type"]} {event["reason"]} ×{event["count"]}: {event["message"]}' for event in events)
+            return {"device_id":str(device.id),"device":device.lab_node.name,"source":source,"tail":tail,"events":events,
+                "output":output,"truncated":len(rows)>len(events)}
         if source=="launcher":
             output=self.core.read_namespaced_pod_log(pod,deployment.namespace,container=device.lab_node.name,tail_lines=tail,
                 timestamps=True,_request_timeout=15)
