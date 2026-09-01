@@ -342,6 +342,13 @@ def test_revision_history_restore_creates_new_draft_is_concurrency_safe_and_idem
     history=client.get(f"/api/v1/labs/{lab.id}/revisions/")
     assert history.status_code==200 and history.data["current_draft"]==str(draft.id) and len(history.data["revisions"])==2
     assert history.data["revisions"][1]["deployment_count"]==1
+    comparison=client.get(f"/api/v1/labs/{lab.id}/revisions/compare/?left={published.id}&right={draft.id}")
+    assert comparison.status_code==200 and comparison.data["nodes"]["added"]==["temporary"] and comparison.data["nodes"]["removed"]==["r1"]
+    assert comparison.data["summary"]["nodes_added"]==comparison.data["summary"]["nodes_removed"]==1
+    assert "hostname restored" not in str(comparison.data) and comparison["Cache-Control"]=="no-store"
+    assert AuditEvent.objects.filter(project=project,action="lab.revisions_compared",metadata__left_revision=1,metadata__right_revision=2).exists()
+    duplicate=client.get(f"/api/v1/labs/{lab.id}/revisions/compare/?left={published.id}&right={published.id}")
+    assert duplicate.status_code==422 and duplicate.data["error"]["code"]=="duplicate_revision_selection"
     endpoint=f"/api/v1/labs/{lab.id}/revisions/{published.id}/restore/"
     assert client.post(endpoint,{"expected_current_draft":str(draft.id)},format="json",HTTP_IDEMPOTENCY_KEY="viewer-restore").status_code==403
     client.force_authenticate(owner)

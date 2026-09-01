@@ -94,6 +94,10 @@ type Snapshot = { nodes: Node<DeviceData>[]; edges: Edge[]; annotations:Topology
 type PublishedImage = { id: string; name: string; digest: string; architecture: string; status: string };
 type RevisionSummary = { id:string; revision_number:number; edit_version:number; immutable:boolean; topology_checksum:string;
   node_count:number; link_count:number; deployment_count:number; created_at:string; is_current_draft:boolean };
+type RevisionComparison = {left:{id:string;revision_number:number;checksum:string};right:{id:string;revision_number:number;checksum:string};
+  summary:{nodes_added:number;nodes_removed:number;nodes_modified:number;links_added:number;links_removed:number;links_modified:number;annotations_changed:number;canvas_changed:boolean};
+  nodes:{added:string[];removed:string[];modified:{name:string;fields:{field:string;before:unknown;after:unknown}[]}[]};
+  links:{added:string[];removed:string[];modified:{link:string;fields:string[]}[]};annotations:{added:number;removed:number;modified:number}};
 type BundlePreview = { checksum:string; source_lab:string; destination_lab:string; node_count:number; link_count:number;
   configured_node_count:number; template_count:number; image_count:number; templates:string[]; will_replace_draft:boolean;
   preserved_published_revisions:number; running_deployments_unchanged:number; expected_current_draft:string|null;
@@ -184,6 +188,9 @@ function Workspace() {
   const [bundleRestore, setBundleRestore] = useState<{file:File;preview:BundlePreview}|null>(null);
   const [bundleRestoring, setBundleRestoring] = useState(false);
   const [revisions, setRevisions] = useState<RevisionSummary[]>([]);
+  const [selectedRevisionIds,setSelectedRevisionIds]=useState<string[]>([]);
+  const [revisionComparison,setRevisionComparison]=useState<RevisionComparison|null>(null);
+  const [comparingRevisions,setComparingRevisions]=useState(false);
   const [currentDraftId, setCurrentDraftId] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [workspaceReady,setWorkspaceReady]=useState(false);
@@ -503,13 +510,21 @@ function Workspace() {
   };
   const openHistory = async () => {
     if (dirty) { setNotice("Save the draft before opening revision history"); return; }
-    setHistoryOpen(true);setHistoryLoading(true);
+    setHistoryOpen(true);setHistoryLoading(true);setSelectedRevisionIds([]);setRevisionComparison(null);
     try {
       const response=await fetch(`/api/v1/labs/${labId}/revisions/`,{credentials:"same-origin"});const data=await response.json();
       if (!response.ok) throw new Error(data.error?.details||"Unable to load revision history");
       setRevisions(data.revisions);setCurrentDraftId(data.current_draft);
     } catch (error) { setNotice(error instanceof Error?error.message:"Unable to load revision history");setHistoryOpen(false); }
     finally { setHistoryLoading(false); }
+  };
+  const compareSelectedRevisions=async()=>{
+    if(selectedRevisionIds.length!==2)return;
+    const selected=revisions.filter(revision=>selectedRevisionIds.includes(revision.id)).sort((a,b)=>a.revision_number-b.revision_number);
+    setComparingRevisions(true);setNotice(`Comparing revisions ${selected[0].revision_number} and ${selected[1].revision_number}…`);
+    try{const response=await fetch(`/api/v1/labs/${labId}/revisions/compare/?left=${selected[0].id}&right=${selected[1].id}`,{credentials:"same-origin",cache:"no-store"}),data=await response.json();
+      if(!response.ok)throw new Error(data.error?.details||data.error?.code||"Comparison unavailable");setRevisionComparison(data);setNotice(`Compared revision ${data.left.revision_number} → ${data.right.revision_number}`)
+    }catch(error){setNotice(error instanceof Error?error.message:"Comparison unavailable")}finally{setComparingRevisions(false)}
   };
   const restoreRevision = async (revision:RevisionSummary) => {
     if (!confirm(`Restore revision ${revision.revision_number} as a new editable draft? Your current saved draft will be replaced.`)) return;
@@ -732,13 +747,13 @@ function Workspace() {
       </div>}
       {historyOpen && <div className="modal-backdrop" role="presentation" onMouseDown={()=>!restoring&&setHistoryOpen(false)}>
         <section className="history-dialog" role="dialog" aria-modal="true" aria-labelledby="history-title" onMouseDown={(event)=>event.stopPropagation()}>
-          <header><div><p className="dialog-eyebrow">VERSION CONTROL</p><h2 id="history-title">Topology revision history</h2><p>Published versions remain immutable. Restore creates a new editable draft.</p></div><button aria-label="Close revision history" onClick={()=>setHistoryOpen(false)} disabled={!!restoring}>×</button></header>
-          <div className="revision-list">{historyLoading?<p className="history-empty">Loading revision history…</p>:revisions.length===0?<p className="history-empty">No saved revisions yet.</p>:revisions.map((revision)=><article key={revision.id} className={revision.is_current_draft?"current":""}>
-            <span className="revision-mark">{revision.revision_number}</span><div className="revision-copy"><strong>Revision {revision.revision_number} {revision.is_current_draft&&<em>Current draft</em>}</strong><small>{new Date(revision.created_at).toLocaleString()} · {revision.node_count} devices · {revision.link_count} links</small><code>{revision.topology_checksum.slice(0,12)}</code></div>
+          <header><div><p className="dialog-eyebrow">VERSION CONTROL</p><h2 id="history-title">{revisionComparison?`Revision ${revisionComparison.left.revision_number} → ${revisionComparison.right.revision_number}`:"Topology revision history"}</h2><p>{revisionComparison?"Structured topology changes; startup configuration content remains encrypted.":"Select two versions to compare. Restore creates a new editable draft."}</p></div><button aria-label="Close revision history" onClick={()=>setHistoryOpen(false)} disabled={!!restoring}>×</button></header>
+          {revisionComparison?<div className="revision-comparison"><div className="comparison-facts"><article><span>Devices</span><strong>+{revisionComparison.summary.nodes_added} / −{revisionComparison.summary.nodes_removed} / ~{revisionComparison.summary.nodes_modified}</strong></article><article><span>Links</span><strong>+{revisionComparison.summary.links_added} / −{revisionComparison.summary.links_removed} / ~{revisionComparison.summary.links_modified}</strong></article><article><span>Canvas</span><strong>{revisionComparison.summary.canvas_changed?"Changed":"Unchanged"}</strong></article><article><span>Objects</span><strong>{revisionComparison.summary.annotations_changed} changed</strong></article></div><section><h3>Device changes</h3>{!revisionComparison.nodes.added.length&&!revisionComparison.nodes.removed.length&&!revisionComparison.nodes.modified.length?<p>No device changes.</p>:<ul>{revisionComparison.nodes.added.map(name=><li key={`a-${name}`}><b>Added</b> {name}</li>)}{revisionComparison.nodes.removed.map(name=><li key={`r-${name}`}><b>Removed</b> {name}</li>)}{revisionComparison.nodes.modified.map(node=><li key={`m-${node.name}`}><b>Modified</b> {node.name}<small>{node.fields.map(field=>field.field).join(" · ")}</small></li>)}</ul>}</section><section><h3>Link changes</h3>{!revisionComparison.links.added.length&&!revisionComparison.links.removed.length&&!revisionComparison.links.modified.length?<p>No link changes.</p>:<ul>{revisionComparison.links.added.map(link=><li key={`a-${link}`}><b>Added</b> {link}</li>)}{revisionComparison.links.removed.map(link=><li key={`r-${link}`}><b>Removed</b> {link}</li>)}{revisionComparison.links.modified.map(link=><li key={`m-${link.link}`}><b>Modified</b> {link.link}<small>{link.fields.join(" · ")}</small></li>)}</ul>}</section></div>:<div className="revision-list">{historyLoading?<p className="history-empty">Loading revision history…</p>:revisions.length===0?<p className="history-empty">No saved revisions yet.</p>:revisions.map((revision)=><article key={revision.id} className={revision.is_current_draft?"current":""}>
+            <input type="checkbox" aria-label={`Select revision ${revision.revision_number} for comparison`} checked={selectedRevisionIds.includes(revision.id)} onChange={()=>setSelectedRevisionIds(current=>current.includes(revision.id)?current.filter(id=>id!==revision.id):[...current.slice(-1),revision.id])}/><span className="revision-mark">{revision.revision_number}</span><div className="revision-copy"><strong>Revision {revision.revision_number} {revision.is_current_draft&&<em>Current draft</em>}</strong><small>{new Date(revision.created_at).toLocaleString()} · {revision.node_count} devices · {revision.link_count} links</small><code>{revision.topology_checksum.slice(0,12)}</code></div>
             <span className={`revision-state ${revision.immutable?"published":"draft"}`}>{revision.immutable?`Published · ${revision.deployment_count} deploy${revision.deployment_count===1?"":"s"}`:"Editable"}</span>
             <button onClick={()=>restoreRevision(revision)} disabled={revision.is_current_draft||!!restoring}>{restoring===revision.id?"Restoring…":"Restore"}</button>
-          </article>)}</div>
-          <footer><span>Restoring never changes an existing deployment.</span><button onClick={()=>setHistoryOpen(false)} disabled={!!restoring}>Close</button></footer>
+          </article>)}</div>}
+          <footer><span>{revisionComparison?"Comparison is read-only and does not change the draft or runtime.":`${selectedRevisionIds.length} of 2 revisions selected`}</span><div>{revisionComparison?<button onClick={()=>setRevisionComparison(null)}>Back</button>:<button onClick={compareSelectedRevisions} disabled={selectedRevisionIds.length!==2||comparingRevisions}>{comparingRevisions?"Comparing…":"Compare"}</button>}<button onClick={()=>setHistoryOpen(false)} disabled={!!restoring}>Close</button></div></footer>
         </section>
       </div>}
       <div className="workspace-body">

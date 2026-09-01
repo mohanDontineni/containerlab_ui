@@ -397,6 +397,68 @@ class LabViewSet(viewsets.ModelViewSet):
             "topology_checksum":row.topology_checksum,"node_count":row.node_count,"link_count":row.link_count,
             "deployment_count":row.deployment_count,"created_at":row.created_at,"is_current_draft":row.id==lab.current_draft_id,
         } for row in rows]})
+    @staticmethod
+    def _revision_node_map(revision):
+        rows=revision.nodes.select_related("template_version__template","published_image","startup_configuration").prefetch_related("interfaces")
+        return {node.name:{"template":f"{node.template_version.template.name} v{node.template_version.version}",
+            "template_version_id":str(node.template_version_id),"image":node.published_image.registry_digest if node.published_image else None,
+            "image_id":str(node.published_image_id) if node.published_image_id else None,
+            "configuration_checksum":node.startup_configuration.checksum if node.startup_configuration_id else None,
+            "interfaces":sorted(interface.name for interface in node.interfaces.all()),"position":node.position,
+            "properties_changed_token":hashlib.sha256(json.dumps(node.properties,sort_keys=True,separators=(",",":"),default=str).encode()).hexdigest()}
+            for node in rows}
+    @staticmethod
+    def _revision_link_map(revision):
+        links={}
+        for link in revision.links.select_related("endpoint_a__node","endpoint_b__node"):
+            endpoints=sorted([f"{link.endpoint_a.node.name}:{link.endpoint_a.name}",f"{link.endpoint_b.node.name}:{link.endpoint_b.name}"])
+            key=" ↔ ".join(endpoints);links[key]={"label":link.label,
+                "properties_changed_token":hashlib.sha256(json.dumps(link.properties,sort_keys=True,separators=(",",":"),default=str).encode()).hexdigest()}
+        return links
+    @action(detail=True,methods=["get"],url_path="revisions/compare")
+    def compare_revisions(self,request,pk=None):
+        lab=self.get_object()
+        try:left_id=uuid.UUID(str(request.query_params.get("left")));right_id=uuid.UUID(str(request.query_params.get("right")))
+        except (ValueError,TypeError,AttributeError):return Response({"error":{"code":"invalid_revision_selection","details":"Choose two revisions from this lab."}},status=422)
+        if left_id==right_id:return Response({"error":{"code":"duplicate_revision_selection","details":"Choose two different revisions."}},status=422)
+        selected={row.id:row for row in lab.revisions.filter(id__in=(left_id,right_id))}
+        if len(selected)!=2:return Response({"error":{"code":"revision_not_found"}},status=404)
+        left,right=selected[left_id],selected[right_id];left_nodes=self._revision_node_map(left);right_nodes=self._revision_node_map(right)
+        added_nodes=sorted(set(right_nodes)-set(left_nodes));removed_nodes=sorted(set(left_nodes)-set(right_nodes));modified_nodes=[]
+        labels={"template_version_id":"Template","image_id":"Image","configuration_checksum":"Startup configuration",
+            "interfaces":"Interfaces","position":"Canvas position","properties_changed_token":"Properties"}
+        def display_value(row,field):
+            if field=="template_version_id":return row.get("template")
+            if field=="image_id":return row.get("image")
+            if field=="properties_changed_token":return "Changed"
+            return row[field]
+        for name in sorted(set(left_nodes)&set(right_nodes)):
+            fields=[]
+            for field,label in labels.items():
+                if left_nodes[name][field]!=right_nodes[name][field]:
+                    fields.append({"field":label,"before":display_value(left_nodes[name],field),"after":display_value(right_nodes[name],field)})
+            if fields:modified_nodes.append({"name":name,"fields":fields})
+        left_links=self._revision_link_map(left);right_links=self._revision_link_map(right)
+        added_links=sorted(set(right_links)-set(left_links));removed_links=sorted(set(left_links)-set(right_links));modified_links=[]
+        for key in sorted(set(left_links)&set(right_links)):
+            fields=[]
+            if left_links[key]["label"]!=right_links[key]["label"]:fields.append("Label")
+            if left_links[key]["properties_changed_token"]!=right_links[key]["properties_changed_token"]:fields.append("Properties")
+            if fields:modified_links.append({"link":key,"fields":fields})
+        left_annotations={str(item.get("id")):item for item in left.annotations if isinstance(item,dict) and item.get("id")}
+        right_annotations={str(item.get("id")):item for item in right.annotations if isinstance(item,dict) and item.get("id")}
+        annotation_changes={"added":len(set(right_annotations)-set(left_annotations)),"removed":len(set(left_annotations)-set(right_annotations)),
+            "modified":sum(left_annotations[key]!=right_annotations[key] for key in set(left_annotations)&set(right_annotations))}
+        summary={"nodes_added":len(added_nodes),"nodes_removed":len(removed_nodes),"nodes_modified":len(modified_nodes),
+            "links_added":len(added_links),"links_removed":len(removed_links),"links_modified":len(modified_links),
+            "annotations_changed":sum(annotation_changes.values()),"canvas_changed":left.canvas_layout!=right.canvas_layout}
+        models.AuditEvent.objects.create(actor=request.user,project=lab.project,action="lab.revisions_compared",target_type="Lab",target_id=lab.id,
+            correlation_id=getattr(request,"correlation_id",""),metadata={"left_revision":left.revision_number,"right_revision":right.revision_number,**summary})
+        response=Response({"left":{"id":str(left.id),"revision_number":left.revision_number,"checksum":left.topology_checksum},
+            "right":{"id":str(right.id),"revision_number":right.revision_number,"checksum":right.topology_checksum},"summary":summary,
+            "nodes":{"added":added_nodes,"removed":removed_nodes,"modified":modified_nodes},
+            "links":{"added":added_links,"removed":removed_links,"modified":modified_links},"annotations":annotation_changes})
+        response["Cache-Control"]="no-store";return response
     @action(detail=True,methods=["post"],url_path=r"revisions/(?P<revision_id>[^/.]+)/restore")
     def restore_revision(self,request,pk=None,revision_id=None):
         lab=self.get_object()
