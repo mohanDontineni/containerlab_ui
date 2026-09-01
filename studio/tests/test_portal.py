@@ -204,5 +204,6 @@ def test_deployment_detail_is_native_and_scoped(client):
     response = client.get(f"/deployments/{deployment.id}/")
     assert response.status_code == 200
     assert "Bounded ping" in response.content.decode()
+    assert "Remove…" in response.content.decode() and "runtime-removal-dialog" in response.content.decode()
     client.force_login(stranger)
     assert client.get(f"/deployments/{deployment.id}/").status_code == 404

@@ -715,17 +715,70 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
             "impact":["Recreate runtime resources from the pinned immutable revision",
                 "Preserve the project, lab, revision, startup configurations, and collected history",
                 "End active consoles and packet captures while device compute is replaced"]})
+    def _removal_preview(self,deployment):
+        active=deployment.operations.filter(state__in=("accepted","scheduled","started")).order_by("created_at").first()
+        active_consoles=models.ConsoleSession.objects.filter(device__deployment=deployment,revoked_at__isnull=True,expires_at__gt=timezone.now()).count()
+        active_captures=models.CaptureSession.objects.filter(deployment=deployment,status__in=("pending","scheduled","capturing")).count()
+        return {"action":"delete_runtime","deployment_id":str(deployment.id),"lab":deployment.revision.lab.name,
+            "revision":deployment.revision.revision_number,"namespace":deployment.namespace,"observed_state":deployment.observed_state,
+            "updated_at":deployment.updated_at.isoformat(),"already_removed":bool(deployment.removed_at),
+            "can_remove":not active and not active_captures and not deployment.removed_at,
+            "blocked_by":{"job_id":str(active.id),"operation":active.operation_type} if active else None,
+            "references":{"devices":deployment.devices.count(),"active_consoles":active_consoles,"active_captures":active_captures,
+                "retained_artifacts":deployment.artifacts.count(),"operations":deployment.operations.count()},
+            "impact":["Delete the dedicated Kubernetes namespace and all Clabernetes runtime resources.",
+                "Revoke active browser consoles and release device compute.",
+                "Preserve the project, lab, immutable revision, configurations, captures, artifacts, operations, and audit history.",
+                "Mark this deployment record as permanently removed; deploy the saved lab again to create a new runtime."]}
+    @action(detail=True,methods=["get"],url_path="removal-preview")
+    def removal_preview(self,request,pk=None):
+        deployment=self.get_object();self._require_operator(deployment)
+        response=Response(self._removal_preview(deployment));response["Cache-Control"]="no-store";return response
+    @action(detail=True,methods=["post"],url_path="remove")
+    def remove_runtime(self,request,pk=None):
+        deployment=self.get_object();self._require_operator(deployment)
+        key=request.headers.get("Idempotency-Key")
+        if not key: return Response({"error":{"code":"idempotency_key_required"}},status=400)
+        existing=models.OperationJob.objects.filter(owner=request.user,idempotency_key=key).first()
+        if existing:
+            if existing.deployment_id!=deployment.id or existing.operation_type!="delete_runtime":
+                return Response({"error":{"code":"idempotency_conflict"}},status=409)
+            if existing.state in ("accepted","scheduled"): execute_operation.delay(str(existing.id))
+            return Response(serializers.OperationSerializer(existing).data,status=202)
+        expected=request.headers.get("X-Expected-Updated-At")
+        if not expected: return Response({"error":{"code":"expected_updated_at_required"}},status=400)
+        with transaction.atomic():
+            locked=models.LabDeployment.objects.select_for_update().get(pk=deployment.pk)
+            if locked.removed_at: return Response({"error":{"code":"runtime_already_removed"}},status=410)
+            if locked.updated_at.isoformat()!=expected:
+                return Response({"error":{"code":"deployment_changed","details":"The runtime changed after removal was previewed.",
+                    "updated_at":locked.updated_at.isoformat()}},status=409)
+            preview=self._removal_preview(locked)
+            if preview["blocked_by"] or preview["references"]["active_captures"]:
+                return Response({"error":{"code":"runtime_removal_blocked","details":preview["blocked_by"] or
+                    f'{preview["references"]["active_captures"]} packet capture(s) are active.',"references":preview["references"]}},status=409)
+            locked.observed_state=models.LabDeployment.State.DELETING;locked.requested_desired_state="removed"
+            locked.save(update_fields=["observed_state","requested_desired_state","updated_at"])
+            job=models.OperationJob.objects.create(deployment=locked,owner=request.user,operation_type="delete_runtime",target_id=locked.id,
+                idempotency_key=key,state="scheduled",request_payload={"expected_updated_at":expected,"namespace":locked.namespace})
+            models.AuditEvent.objects.create(actor=request.user,project=locked.revision.lab.project,action="deployment.removal_scheduled",
+                target_type="LabDeployment",target_id=locked.id,correlation_id=getattr(request,"correlation_id",""),
+                metadata={"revision":locked.revision.revision_number,"namespace":locked.namespace,"operation":str(job.id)})
+            transaction.on_commit(lambda:execute_operation.delay(str(job.id)))
+        return Response(serializers.OperationSerializer(job).data,status=202)
     @action(detail=True,methods=["post"])
     def refresh(self,request,pk=None):
         deployment=self.get_object()
         self._require_operator(deployment)
+        if deployment.removed_at: return Response({"error":{"code":"runtime_removed","details":"Removed deployments are retained as history and are not reconciled."}},status=409)
         reconcile_deployment.delay(str(deployment.id))
         return Response({"state":"scheduled"},status=202)
     @action(detail=True,methods=["post"])
     def operations(self,request,pk=None):
         deployment=self.get_object(); op=request.data.get("operation")
         self._require_operator(deployment)
-        if op not in ("deploy_lab","redeploy_lab","stop_lab","delete_runtime"): return Response({"error":{"code":"unsupported_operation"}},status=422)
+        if op not in ("deploy_lab","redeploy_lab","stop_lab"): return Response({"error":{"code":"unsupported_operation"}},status=422)
+        if deployment.removed_at: return Response({"error":{"code":"runtime_removed","details":"Deploy the saved lab to create a new runtime."}},status=409)
         key=request.headers.get("Idempotency-Key")
         if not key: return Response({"error":{"code":"idempotency_key_required"}},status=400)
         existing=models.OperationJob.objects.filter(owner=request.user,idempotency_key=key).first()

@@ -163,7 +163,7 @@ class LabLink(UUIDModel):
         constraints=[models.CheckConstraint(condition=~Q(endpoint_a=models.F("endpoint_b")), name="link_distinct_endpoints")]
 
 class LabDeployment(UUIDModel):
-    class State(models.TextChoices): PENDING="pending"; DEPLOYING="deploying"; RUNNING="running"; DEGRADED="degraded"; FAILED="failed"; STOPPED="stopped"; DELETING="deleting"
+    class State(models.TextChoices): PENDING="pending"; DEPLOYING="deploying"; RUNNING="running"; DEGRADED="degraded"; FAILED="failed"; STOPPED="stopped"; DELETING="deleting"; REMOVED="removed"
     revision = models.ForeignKey(LabRevision, on_delete=models.PROTECT, related_name="deployments")
     requested_desired_state = models.CharField(max_length=20, default="running")
     observed_state = models.CharField(max_length=20, choices=State.choices, default=State.PENDING)
@@ -173,6 +173,7 @@ class LabDeployment(UUIDModel):
     runtime_version = models.CharField(max_length=40)
     last_reconciliation = models.DateTimeField(null=True, blank=True)
     error_details = models.JSONField(default=dict)
+    removed_at = models.DateTimeField(null=True, blank=True)
 
 class DeviceInstance(UUIDModel):
     deployment = models.ForeignKey(LabDeployment, on_delete=models.CASCADE, related_name="devices")

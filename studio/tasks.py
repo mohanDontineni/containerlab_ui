@@ -7,7 +7,7 @@ from django.db import transaction
 from django.db.models import Max
 from django.utils import timezone
 from .configurations import encrypt_configuration
-from .models import AuditEvent, CaptureSession, ConfigurationVersion, DeviceInstance, ImageArtifact, ImageBuild, LabArtifact, LabDeployment, LabLink, LabNode, OperationJob, Project, PublishedImage
+from .models import AuditEvent, CaptureSession, ConfigurationVersion, ConsoleSession, DeviceInstance, ImageArtifact, ImageBuild, LabArtifact, LabDeployment, LabLink, LabNode, OperationJob, Project, PublishedImage
 from .runtime import ClabernetesAdapter
 
 @shared_task(bind=True,autoretry_for=(ConnectionError,),retry_backoff=True,max_retries=5)
@@ -93,14 +93,26 @@ def execute_operation(self,job_id):
             deployment.observed_state=LabDeployment.State.DEPLOYING
             deployment.resource_identities={"topology":{"name":"topology","namespace":deployment.namespace},
                 "last_redeploy_at":timezone.now().isoformat()} if job.operation_type=="redeploy_lab" else {"topology":{"name":"topology","namespace":deployment.namespace}}
-        elif job.operation_type in ("stop_lab","delete_runtime"):
+        elif job.operation_type=="stop_lab":
             deployment.observed_state=LabDeployment.State.STOPPED
+        elif job.operation_type=="delete_runtime":
+            removed_at=timezone.now();deployment.observed_state=LabDeployment.State.REMOVED;deployment.removed_at=removed_at;deployment.requested_desired_state="removed"
+            deployment.resource_identities={**deployment.resource_identities,"removal":result}
+            deployment.devices.update(observed_readiness="removed",worker_placement="")
+            for device in deployment.devices.all():
+                device.runtime_resources={**device.runtime_resources,"pod":None,"pod_uid":None,"pod_phase":"Removed",
+                    "appliance_running":False,"appliance_paused":False}
+                device.save(update_fields=["runtime_resources","updated_at"])
+            ConsoleSession.objects.filter(device__deployment=deployment,revoked_at__isnull=True).update(revoked_at=removed_at)
+            AuditEvent.objects.create(actor=job.owner,project=deployment.revision.lab.project,action="deployment.removed",
+                target_type="LabDeployment",target_id=deployment.id,correlation_id="",metadata={"operation":str(job.id),
+                    "namespace":deployment.namespace,"namespace_deleted":bool(result.get("namespaceDeleted")),"revision":deployment.revision.revision_number})
         if job.operation_type not in ("publish_image","ping","capture_packets","set_link_condition",*device_operations):
             deployment.last_reconciliation=timezone.now()
             deployment.error_details={}
-            deployment.save(update_fields=["observed_state","resource_identities","last_reconciliation","error_details","updated_at"])
+            deployment.save(update_fields=["observed_state","requested_desired_state","resource_identities","last_reconciliation","error_details","removed_at","updated_at"])
         job.state="succeeded"; job.progress=100; job.error_details={}
-        if job.operation_type in ("publish_image","ping","traceroute","capture_packets","set_link_condition") or job.operation_type in device_operations: job.result_payload=result
+        if job.operation_type in ("publish_image","ping","traceroute","capture_packets","set_link_condition","delete_runtime") or job.operation_type in device_operations: job.result_payload=result
     except Exception as exc:
         if job.operation_type=="publish_image":
             ImageBuild.objects.filter(pk=job.request_payload.get("build_id")).update(status="failed",finished_at=timezone.now(),failure_details={"type":type(exc).__name__,"message":str(exc)[:2000]})
@@ -118,6 +130,7 @@ def execute_operation(self,job_id):
 @shared_task(bind=True,autoretry_for=(ConnectionError,),retry_backoff=True,max_retries=5)
 def reconcile_deployment(self,deployment_id):
     deployment=LabDeployment.objects.get(pk=deployment_id)
+    if deployment.removed_at: return LabDeployment.State.REMOVED
     try:
         adapter=ClabernetesAdapter();status=adapter.get_observed_state(deployment)
         state=status.get("topologyState","").lower()

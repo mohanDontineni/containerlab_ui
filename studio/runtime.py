@@ -220,7 +220,7 @@ class ClabernetesAdapter:
         try: payload=base64.b64decode(encoded,validate=True)
         except (binascii.Error,ValueError) as exc: raise CapabilityError("Launcher returned an invalid capture stream") from exc
         return strip_capture_stop_packets(payload)
-    def delete_runtime(self,deployment):
+    def _delete_topology(self,deployment):
         try: result=self.custom.delete_namespaced_custom_object(API_GROUP,API_VERSION,deployment.namespace,"topologies","topology",
             body=client.V1DeleteOptions(propagation_policy="Foreground"))
         except ApiException as exc:
@@ -237,9 +237,27 @@ class ClabernetesAdapter:
                 if exc.status!=404: raise
         if isinstance(result,dict): result["configMapsDeleted"]=deleted
         return result
-    def stop_lab(self,deployment): return self.delete_runtime(deployment)
+    def stop_lab(self,deployment): return self._delete_topology(deployment)
+    def delete_runtime(self,deployment):
+        result=self._delete_topology(deployment)
+        namespace_requested=False
+        try:
+            self.core.delete_namespace(deployment.namespace,body=client.V1DeleteOptions(propagation_policy="Foreground"))
+            namespace_requested=True
+        except ApiException as exc:
+            if exc.status!=404: raise
+        deadline=time.monotonic()+90
+        while time.monotonic()<deadline:
+            try: self.core.read_namespace(deployment.namespace)
+            except ApiException as exc:
+                if exc.status==404: break
+                raise
+            time.sleep(1)
+        else: raise CapabilityError("The runtime namespace did not finish deleting within 90 seconds")
+        return {**(result if isinstance(result,dict) else {"topology":result}),"namespace":deployment.namespace,
+            "namespaceDeletionRequested":namespace_requested,"namespaceDeleted":True}
     def redeploy_lab(self,deployment):
-        self.delete_runtime(deployment)
+        self._delete_topology(deployment)
         deadline=time.monotonic()+45
         while time.monotonic()<deadline:
             try:

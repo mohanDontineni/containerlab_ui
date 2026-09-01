@@ -184,6 +184,17 @@ def test_stop_removes_plaintext_runtime_configuration_maps():
     assert deleted==[("studio-startup-r1","lab-one","Background"),("studio-startup-r2","lab-one","Background")]
     assert result["configMapsDeleted"]==2
 
+def test_remove_runtime_deletes_the_owned_namespace_after_topology_cleanup():
+    from kubernetes.client.exceptions import ApiException
+    calls=[]
+    custom=SimpleNamespace(delete_namespaced_custom_object=lambda *_args,**_kwargs:{"status":"Success"})
+    def missing_namespace(_): raise ApiException(status=404)
+    core=SimpleNamespace(list_namespaced_config_map=lambda *_args,**_kwargs:SimpleNamespace(items=[]),
+        delete_namespace=lambda name,body:calls.append((name,body.propagation_policy)),read_namespace=missing_namespace)
+    result=ClabernetesAdapter(custom_api=custom,core_api=core).delete_runtime(SimpleNamespace(id="deployment-id",namespace="clab-owned-runtime"))
+    assert calls==[("clab-owned-runtime","Foreground")]
+    assert result["namespace"]=="clab-owned-runtime" and result["namespaceDeleted"] is True and result["namespaceDeletionRequested"] is True
+
 def test_bounded_capture_uses_verified_host_interface_and_returns_pcap(monkeypatch):
     pcap=b"\xd4\xc3\xb2\xa1"+b"\x00"*20
     calls=[]

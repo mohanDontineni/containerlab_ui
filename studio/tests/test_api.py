@@ -552,6 +552,61 @@ def test_redeploy_worker_replaces_runtime_and_marks_deploying(monkeypatch):
     assert deployment.resource_identities["topology"]["name"]=="topology" and deployment.resource_identities["last_redeploy_at"]
 
 @pytest.mark.django_db
+def test_guarded_runtime_removal_is_operator_only_capture_safe_concurrent_and_idempotent(monkeypatch):
+    monkeypatch.setattr("studio.api.execute_operation.delay",lambda *_:None)
+    owner=User.objects.create_user("remove-runtime-owner",password="long-enough-password")
+    viewer=User.objects.create_user("remove-runtime-viewer",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="remove-runtime-project");ProjectMembership.objects.create(project=project,user=viewer,role="viewer")
+    lab=Lab.objects.create(project=project,name="remove-runtime-lab");revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="b"*64,immutable=True)
+    node=LabNode.objects.create(revision=revision,name="r1",template_version=DeviceTemplateVersion.objects.first());interface=LabInterface.objects.create(node=node,name="eth1")
+    deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-remove-runtime",runtime_version="0.8.0",observed_state="running")
+    DeviceInstance.objects.create(deployment=deployment,lab_node=node,observed_readiness="ready",runtime_resources={"pod":"r1-pod"})
+    capture=CaptureSession.objects.create(deployment=deployment,interface=interface,owner=owner,status="capturing",expires_at=timezone.now()+timezone.timedelta(minutes=5))
+    client=APIClient();client.force_authenticate(viewer)
+    assert client.get(f"/api/v1/deployments/{deployment.id}/removal-preview/").status_code==403
+    client.force_authenticate(owner);blocked=client.get(f"/api/v1/deployments/{deployment.id}/removal-preview/")
+    assert blocked.status_code==200 and not blocked.data["can_remove"] and blocked.data["references"]["active_captures"]==1
+    capture.status="complete";capture.save(update_fields=["status","updated_at"])
+    stale=client.get(f"/api/v1/deployments/{deployment.id}/removal-preview/");deployment.error_details={"changed":True};deployment.save(update_fields=["error_details","updated_at"])
+    rejected=client.post(f"/api/v1/deployments/{deployment.id}/remove/",{},format="json",HTTP_IDEMPOTENCY_KEY="stale-runtime-remove",
+        HTTP_X_EXPECTED_UPDATED_AT=stale.data["updated_at"])
+    assert rejected.status_code==409 and rejected.data["error"]["code"]=="deployment_changed"
+    preview=client.get(f"/api/v1/deployments/{deployment.id}/removal-preview/");key="remove-runtime-once"
+    first=client.post(f"/api/v1/deployments/{deployment.id}/remove/",{},format="json",HTTP_IDEMPOTENCY_KEY=key,
+        HTTP_X_EXPECTED_UPDATED_AT=preview.data["updated_at"])
+    replay=client.post(f"/api/v1/deployments/{deployment.id}/remove/",{},format="json",HTTP_IDEMPOTENCY_KEY=key,
+        HTTP_X_EXPECTED_UPDATED_AT=preview.data["updated_at"])
+    assert first.status_code==replay.status_code==202 and first.data["id"]==replay.data["id"]
+    deployment.refresh_from_db();assert deployment.observed_state=="deleting" and deployment.requested_desired_state=="removed"
+    generic=client.post(f"/api/v1/deployments/{deployment.id}/operations/",{"operation":"delete_runtime"},format="json",HTTP_IDEMPOTENCY_KEY="unsafe-remove")
+    assert generic.status_code==422 and AuditEvent.objects.filter(action="deployment.removal_scheduled",target_id=deployment.id).count()==1
+
+@pytest.mark.django_db
+def test_runtime_removal_worker_preserves_history_revokes_consoles_and_records_cleanup(monkeypatch):
+    owner=User.objects.create_user("remove-worker-owner",password="long-enough-password");project=Project.objects.create(owner=owner,name="remove-worker-project")
+    lab=Lab.objects.create(project=project,name="remove-worker-lab");revision=LabRevision.objects.create(lab=lab,revision_number=2,topology_checksum="c"*64,immutable=True)
+    node=LabNode.objects.create(revision=revision,name="r1",template_version=DeviceTemplateVersion.objects.first())
+    deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-remove-worker",runtime_version="0.8.0",observed_state="deleting")
+    device=DeviceInstance.objects.create(deployment=deployment,lab_node=node,observed_readiness="ready",worker_placement="worker-1",runtime_resources={"pod":"r1-pod","pod_uid":"uid"})
+    console=ConsoleSession.objects.create(device=device,user=owner,token_hash="a"*64,expires_at=timezone.now()+timezone.timedelta(minutes=10))
+    job=OperationJob.objects.create(deployment=deployment,owner=owner,operation_type="delete_runtime",target_id=deployment.id,idempotency_key="worker-remove",state="scheduled")
+    class Adapter:
+        def delete_runtime(self,received):
+            assert received.id==deployment.id
+            return {"namespace":received.namespace,"namespaceDeleted":True,"configMapsDeleted":2}
+    monkeypatch.setattr("studio.tasks.ClabernetesAdapter",Adapter);execute_operation.run(str(job.id))
+    deployment.refresh_from_db();device.refresh_from_db();console.refresh_from_db();job.refresh_from_db()
+    assert deployment.observed_state=="removed" and deployment.removed_at and deployment.requested_desired_state=="removed"
+    assert deployment.resource_identities["removal"]["namespaceDeleted"] is True and revision.deployments.filter(id=deployment.id).exists()
+    assert device.observed_readiness=="removed" and device.runtime_resources["pod"] is None and not device.worker_placement
+    assert console.revoked_at and job.state=="succeeded" and job.result_payload["namespaceDeleted"] is True
+    assert AuditEvent.objects.filter(action="deployment.removed",target_id=deployment.id,metadata__namespace_deleted=True).count()==1
+    client=APIClient();client.force_authenticate(owner)
+    assert client.post(f"/api/v1/deployments/{deployment.id}/operations/",{"operation":"deploy_lab"},format="json",HTTP_IDEMPOTENCY_KEY="cannot-restart-removed").status_code==409
+    assert client.post(f"/api/v1/deployments/{deployment.id}/refresh/",{},format="json").status_code==409
+    assert reconcile_deployment.run(str(deployment.id))=="removed"
+
+@pytest.mark.django_db
 def test_device_logs_are_operator_only_bounded_async_no_store_and_audited(monkeypatch):
     monkeypatch.setattr("studio.api.execute_operation.delay",lambda *_:None)
     owner=User.objects.create_user("logs-owner",password="long-enough-password");viewer=User.objects.create_user("logs-viewer",password="long-enough-password")
