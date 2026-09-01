@@ -349,3 +349,9 @@ The operator opens a completed interface capture directly in the runtime GUI ins
 ![Kubernetes device events](58-kubernetes-device-events.png)
 
 The operator selects Kubernetes events from the same native device-evidence dialog used for appliance and launcher logs. Studio resolves the recorded launcher UID internally, reads only that pod's events through the reconciler identity, caps the request at 200 events, normalizes occurrence time, type, reason, count, component, and bounded message text, and renders warning-aware cards. Firefox restarted production BGP router `r1` through the GUI, observed its launcher UID change, then displayed the replacement pod's real Scheduled, Pulled, Created, and Started events. A post-restart product diagnostic passed 3/3 routed packets with 0% loss.
+
+## 59 — Image supply-chain evidence
+
+![Image supply-chain evidence](59-image-supply-chain-evidence.png)
+
+The image library now combines free-text search with working validation, architecture, and size filters. Its project-authorized evidence dialog presents SHA-256 identity, safe archive inspection, license acknowledgement, immutable publication digest, node-containerd compatibility, build lineage, failure details, and the final 12,000 characters of retained build output without exposing private storage paths. Firefox filtered the validated amd64 FRR 10.4.1 archive, requested a real node-copy repair through the GUI, waited for the isolated publisher job, and displayed its 425-character retained output and ready immutable publication. Both production BGP routers remained ready after republication.
