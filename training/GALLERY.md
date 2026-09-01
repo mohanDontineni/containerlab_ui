@@ -465,3 +465,15 @@ Read-only workspaces now check lease status through a no-store read every 15 sec
 ![Safe topology editing handoff](88-topology-editing-handoff-complete.png)
 
 The handoff request remains transactional and conflict-aware. If another operator acquired the lease first, Studio retains read-only mode with the authoritative owner. On success, Studio reloads the latest server draft before enabling mutation controls, preventing the waiting operator's earlier in-memory view from overwriting the first editor's saved work. Firefox acquired the released lease, reloaded both routers, one link, and one annotation, and rendered `Draft loaded · editing session secured`. Exact release `21456f5` ran on all four Studio services while both production router pods remained Running/Ready.
+
+## 89 — Saved topology link shutdown
+
+![Saved topology link shutdown](89-saved-link-shutdown-design.png)
+
+The link inspector now treats administrative state as part of the saved visual topology. An editor selects an existing point-to-point edge and chooses `Enabled` or `Shut down on deployment`; disabled links render as red dashed edges, participate in revision checksums, survive backup/restore and Save As, and are rejected by server validation if a crafted request supplies an unsupported state. Firefox selected the real `r1:eth1 ↔ r2:eth1` BGP link, saved the shutdown, and published revision 4 without YAML or CLI input.
+
+## 90 — Applied saved link shutdown
+
+![Applied saved link shutdown](90-saved-link-shutdown-runtime.png)
+
+Deployment seeds the saved condition and applies it only after both Clabernetes launchers become ready. Reconciliation records the endpoint pod identities so normal polling is idempotent, then automatically replays the condition if either launcher is replaced. Firefox verified the new isolated `clab-c870a626963b4f638dc0` runtime reached Running with both routers ready, the operational map rendered the impaired red dashed edge, the link control reported `Link disabled`, and the native r1-to-`10.0.12.2` diagnostic returned 3 transmitted, 0 received, and 100% packet loss. Exact release `54bdad9` ran on web, worker, scheduler, and console; the pre-existing revision-3 production runtime remained unchanged.

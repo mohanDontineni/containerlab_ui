@@ -98,6 +98,8 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 | `86-protected-read-only-topology.png` | Concurrent editor protection | A second authorized operator sees who owns the renewable editing lease, its expiry, disabled mutation controls, and an intact live topology without being able to overwrite it. |
 | `87-topology-editing-handoff-available.png` | Editing handoff available | The waiting workspace detects that the first editor released the lease and offers a safe editing request without requiring a manual browser reload. |
 | `88-topology-editing-handoff-complete.png` | Editing handoff complete | The second operator obtains the lease only after Studio reloads the latest saved draft, restoring mutation controls on the complete two-router topology. |
+| `89-saved-link-shutdown-design.png` | Saved topology link shutdown | Selects a visual link, saves its deployment-time shutdown state, and sees the impaired link as a red dashed edge without authoring YAML. |
+| `90-saved-link-shutdown-runtime.png` | Applied saved link shutdown | Verifies the published runtime automatically applies the saved bidirectional shutdown and proves it with a bounded 100% packet-loss diagnostic. |
 
 ## No-YAML operating model
 
@@ -157,6 +159,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 53. Export the latest durable topology traffic and reachability observations as one network-health ZIP; Studio includes normalized CSV files, member byte sizes and SHA-256 checksums, observation job identities and completion times, and no raw command output or YAML.
 54. Open multiple ready devices in one console workspace, switch among closable tabs, select a one- or two-pane layout, reconnect only the affected device, and close a tab to revoke its server-side session without exposing credentials or Kubernetes shells.
 55. Review the visual topology's recent lab-scoped jobs and audit events directly in the inspector; refresh the bounded panel, inspect progress or redacted failure evidence, and open the full job center without leaving payloads or unrelated project records on the canvas.
+56. Select a topology link and save it as enabled or shut down; every new runtime applies that state after both launchers are ready, replays it after launcher replacement, and exposes the resulting impairment plus bounded reachability evidence in the GUI.
 
 Containerlab/Kubernetes YAML is an internal adapter concern. It may be inspected by platform administrators for troubleshooting, but it is not part of the normal user workflow.
 
