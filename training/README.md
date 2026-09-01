@@ -48,6 +48,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 | `36-topology-canvas-objects.png` | Canvas notes and regions | Documents intent and groups devices with editable, styled objects that persist with the topology. |
 | `37-enforced-device-resources.png` | Enforced device resources | Verifies the pinned CPU and memory profile on a real Clabernetes-backed device. |
 | `38-subgraph-duplication.png` | Multi-device subgraph duplication | Copies selected devices and their internal links while preserving runtime-ready configuration and pins. |
+| `39-topology-arrangement.png` | Topology arrangement and discovery | Automatically lays out linked groups clear of canvas objects, aligns a selection, and filters devices by name, kind, or category. |
 
 ## No-YAML operating model
 
@@ -62,6 +63,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 9. Use Save As and revision restore for change workflows. Backup/Restore downloads a product-native JSON bundle; YAML is never required.
 10. Add notes and colored regions directly on the canvas to document intent and visually organize larger topologies.
 11. Multi-select devices to move, duplicate, or remove an internal subgraph as one safe, undoable canvas operation.
+12. Arrange linked groups automatically, align selected devices into rows or columns, and filter the device palette by name, kind, or category.
 
 Containerlab/Kubernetes YAML is an internal adapter concern. It may be inspected by platform administrators for troubleshooting, but it is not part of the normal user workflow.
 

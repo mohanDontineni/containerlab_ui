@@ -153,6 +153,18 @@ try {
       await editor.getByText("2 devices selected", { exact: true }).waitFor();
     });
   } else console.warn("38-subgraph-duplication.png retained: Subgraph Duplication Acceptance fixture is unavailable");
+  if (subgraphHref) {
+    await capture("39-topology-arrangement.png", subgraphHref, async (p) => {
+      const editor = p.frameLocator('iframe[title^="Topology workspace"]');
+      await editor.getByText("Draft loaded", { exact: true }).waitFor();
+      await editor.locator('input[placeholder="Filter devices…"]').fill("routing");
+      const nodes = editor.locator(".react-flow__node");
+      await nodes.nth(1).waitFor();
+      await nodes.nth(0).click();
+      await nodes.nth(1).click({ modifiers: ["Meta"] });
+      await editor.getByText("2 devices selected", { exact: true }).waitFor();
+    });
+  } else console.warn("39-topology-arrangement.png retained: Subgraph Duplication Acceptance fixture is unavailable");
 
   await capture("10-image-library.png", "/images/");
   await page.goto(`${baseUrl}/images/`, { waitUntil: "networkidle" });

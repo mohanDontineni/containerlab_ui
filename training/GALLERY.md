@@ -229,3 +229,9 @@ The operator sees the CPU and memory profile pinned to each live device beside i
 ![Subgraph duplication](38-subgraph-duplication.png)
 
 The designer selects several devices and duplicates the complete internal subgraph in one action. Studio creates collision-free device and link identities, offsets the copy, preserves pinned templates, images, interface bindings, and encrypted startup configurations, excludes links leaving the selection, and supports undo/redo plus keyboard duplication and deletion.
+
+## 39 — Topology arrangement and device discovery
+
+![Topology arrangement](39-topology-arrangement.png)
+
+The designer automatically arranges connected device groups into a deterministic layout that stays clear of notes and regions. Multi-selected devices can be aligned into a row or column, while the device palette filters immediately by template name, Containerlab kind, or category. Arrangement and alignment are undoable, saved with the draft, and restored on reload without YAML.
