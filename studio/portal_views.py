@@ -19,6 +19,7 @@ from .permissions import project_role
 from .configurations import decrypt_configuration, encrypt_configuration
 from .quotas import normalized_quotas,project_usage,quota_exceeded
 from .topology_annotations import normalize_legacy_topology_annotations,validate_topology_annotations
+from .edit_leases import acquire as acquire_edit_lease, conflict_payload as edit_lease_conflict, is_active as edit_lease_active, release as release_edit_lease, status_payload as edit_lease_status, valid_token as valid_edit_lease
 
 def visible_projects(user):
     return Project.objects.filter(Q(owner=user) | Q(memberships__user=user),deleted_at__isnull=True).distinct()
@@ -136,6 +137,31 @@ def topology_images(request, lab_id):
         "digest":row.registry_digest,"architecture":row.architecture,"status":row.lifecycle_status,"compatibility":row.compatibility_result} for row in rows]})
 
 @login_required
+@require_http_methods(["GET", "POST", "DELETE"])
+def topology_edit_lease(request, lab_id):
+    lab=get_object_or_404(Lab.objects.filter(project__in=visible_projects(request.user),deleted_at__isnull=True).select_related("edit_lock_owner"),id=lab_id)
+    if project_role(request.user,lab.project) not in (ProjectMembership.Role.ADMIN,ProjectMembership.Role.EDITOR):
+        return JsonResponse({"error":{"code":"editor_access_required","details":"Editor access is required to change this topology."}},status=403)
+    supplied=request.headers.get("X-Edit-Lease")
+    if request.method=="GET":
+        return JsonResponse(edit_lease_status(lab,request.user,supplied))
+    with transaction.atomic():
+        lab=Lab.objects.select_for_update().select_related("edit_lock_owner").get(pk=lab.pk)
+        if request.method=="DELETE":
+            if not valid_edit_lease(lab,request.user,supplied): return JsonResponse(edit_lease_conflict(lab),status=409)
+            release_edit_lease(lab)
+            AuditEvent.objects.create(actor=request.user,project=lab.project,action="lab.edit_lease_released",target_type="Lab",target_id=lab.id,
+                correlation_id=getattr(request,"correlation_id",""),metadata={})
+            return JsonResponse({"active":False,"can_edit":False})
+        was_active=edit_lease_active(lab);previous_owner=lab.edit_lock_owner_id
+        token,payload=acquire_edit_lease(lab,request.user,supplied)
+        if not token: return JsonResponse({"error":{"code":"edit_lease_conflict","details":f"{payload['owner']} is currently editing this topology.",**payload}},status=409)
+        if not was_active or previous_owner!=request.user.id or not supplied:
+            AuditEvent.objects.create(actor=request.user,project=lab.project,action="lab.edit_lease_acquired",target_type="Lab",target_id=lab.id,
+                correlation_id=getattr(request,"correlation_id",""),metadata={"expires_at":payload["expires_at"]})
+        return JsonResponse(payload)
+
+@login_required
 @require_http_methods(["GET", "PUT"])
 def topology_document(request, lab_id):
     lab = get_object_or_404(Lab.objects.filter(project__in=visible_projects(request.user),deleted_at__isnull=True), id=lab_id)
@@ -174,7 +200,9 @@ def topology_document(request, lab_id):
     if len(node_ids) != len(set(node_ids)) or len(link_ids) != len(set(link_ids)):
         return JsonResponse({"error": "Node and link IDs must be unique"}, status=422)
     with transaction.atomic():
-        lab = Lab.objects.select_for_update().get(id=lab.id)
+        lab = Lab.objects.select_for_update().select_related("edit_lock_owner").get(id=lab.id)
+        if edit_lease_active(lab) and not valid_edit_lease(lab,request.user,request.headers.get("X-Edit-Lease")):
+            return JsonResponse(edit_lease_conflict(lab),status=409)
         revision = lab.current_draft
         if revision and revision.immutable: return JsonResponse({"error": "Published revisions cannot be edited"}, status=409)
         if revision and int(payload.get("editVersion", -1)) != revision.edit_version: return JsonResponse({"error": "This draft changed in another session", "editVersion": revision.edit_version}, status=409)

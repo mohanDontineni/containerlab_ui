@@ -1,0 +1,22 @@
+.edit-lease-banner {
+  position: fixed;
+  top: 64px;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 9px 18px;
+  border-bottom: 1px solid rgba(246, 173, 60, .35);
+  background: linear-gradient(90deg, rgba(246, 173, 60, .16), rgba(246, 173, 60, .05));
+  color: #e8c987;
+  font-size: 10px;
+  z-index: 8;
+}
+.edit-lease-banner strong { color: #ffd88b; text-transform: uppercase; letter-spacing: .7px; }
+.edit-lease-banner small { margin-left: auto; color: #987d52; }
+.workspace-shell.read-only .inspector input,
+.workspace-shell.read-only .inspector select,
+.workspace-shell.read-only .inspector textarea,
+.workspace-shell.read-only .inspector button,
+.workspace-shell.read-only .palette-item { pointer-events: none; opacity: .58; }

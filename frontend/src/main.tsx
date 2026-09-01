@@ -33,6 +33,7 @@ import "./clone.css";
 import "./configuration.css";
 import "./annotations.css";
 import "./bulk-selection.css";
+import "./edit-lease.css";
 import { alignSelectedNodes, arrangeTopology, duplicateSubgraph, interfaceFromHandle } from "./topology-utils";
 
 type Template = {
@@ -97,6 +98,7 @@ type BundlePreview = { checksum:string; source_lab:string; destination_lab:strin
   configured_node_count:number; template_count:number; image_count:number; templates:string[]; will_replace_draft:boolean;
   preserved_published_revisions:number; running_deployments_unchanged:number; expected_current_draft:string|null;
   deployable:boolean; deployability_issues:string[] };
+type EditLease = {active:boolean;can_edit:boolean;owner:string|null;expires_at:string|null;lease_seconds:number;token?:string};
 const params = new URLSearchParams(location.search);
 const labId = params.get("lab") || "";
 const labName = params.get("name") || "Topology Workspace";
@@ -185,6 +187,8 @@ function Workspace() {
   const [currentDraftId, setCurrentDraftId] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [workspaceReady,setWorkspaceReady]=useState(false);
+  const [editLease,setEditLease]=useState<EditLease|null>(null);
+  const leaseToken=useRef("");
   const [templateQuery,setTemplateQuery]=useState("");
   const [notice, setNotice] = useState("Ready");
   const [history, setHistory] = useState<Snapshot[]>([]);
@@ -204,8 +208,9 @@ function Workspace() {
       fetch("/api/v1/topology/templates/").then((r) => r.json()),
       fetch(`/api/v1/labs/${labId}/topology/images/`).then((r) => r.json()),
       fetch(`/api/v1/labs/${labId}/topology/`).then((r) => r.json()),
+      fetch(`/api/v1/labs/${labId}/topology/edit-lease/`,{method:"POST",credentials:"same-origin",headers:{"X-CSRFToken":csrf()}}).then(async r=>({ok:r.ok,data:await r.json()})),
     ])
-      .then(([catalog, imageCatalog, doc]) => {
+      .then(([catalog, imageCatalog, doc, leaseResult]) => {
         setTemplates(catalog.templates);
         setImages(imageCatalog.images);
         const map = new Map<string, Template>(
@@ -253,10 +258,19 @@ function Workspace() {
         setEditVersion(doc.editVersion);
         counter.current = doc.nodes.length + 1;
         setWorkspaceReady(true);
-        setNotice("Draft loaded");
+        const lease=leaseResult.data.error?leaseResult.data.error:leaseResult.data;
+        if(leaseResult.ok&&lease.token){leaseToken.current=lease.token;setEditLease(lease);setNotice("Draft loaded · editing session secured");}
+        else {setEditLease(lease);setNotice(`${lease.owner||"Another operator"} is editing · read-only mode`);}
       })
       .catch(() => setNotice("Unable to load workspace"));
   }, []);
+  useEffect(()=>{
+    if(!editLease?.can_edit||!leaseToken.current)return;
+    const renew=window.setInterval(async()=>{const response=await fetch(`/api/v1/labs/${labId}/topology/edit-lease/`,{method:"POST",credentials:"same-origin",headers:{"X-CSRFToken":csrf(),"X-Edit-Lease":leaseToken.current}});const data=await response.json();if(response.ok)setEditLease(data);else{leaseToken.current="";setEditLease(data.error||data);setNotice("Editing session lost · workspace is now read-only")}},120000);
+    const release=()=>{if(leaseToken.current)fetch(`/api/v1/labs/${labId}/topology/edit-lease/`,{method:"DELETE",credentials:"same-origin",keepalive:true,headers:{"X-CSRFToken":csrf(),"X-Edit-Lease":leaseToken.current}}).catch(()=>{})};
+    addEventListener("pagehide",release);return()=>{clearInterval(renew);removeEventListener("pagehide",release)};
+  },[editLease?.can_edit]);
+  const canEdit=Boolean(editLease?.can_edit);
   useEffect(() => {
     const warn = (e: BeforeUnloadEvent) => {
       if (dirty) {
@@ -284,6 +298,7 @@ function Workspace() {
   const filteredTemplates=templates.filter(template=>`${template.name} ${template.kind} ${template.category}`.toLowerCase().includes(templateQuery.trim().toLowerCase()));
   const onNodesChange = useCallback(
     (changes: NodeChange<Node<DeviceData>>[]) => {
+      if(!canEdit)return;
       setNodes((n) => applyNodeChanges(changes, n));
       if (
         changes.some((change) =>
@@ -292,10 +307,11 @@ function Workspace() {
       )
         setDirty(true);
     },
-    [],
+    [canEdit],
   );
   const onEdgesChange = useCallback(
     (changes: EdgeChange<Edge>[]) => {
+      if(!canEdit)return;
       if (changes.some((c) => c.type === "remove")) snapshot();
       setEdges((e) => applyEdgeChanges(changes, e));
       if (
@@ -305,7 +321,7 @@ function Workspace() {
       )
         setDirty(true);
     },
-    [snapshot],
+    [snapshot,canEdit],
   );
   const validConnection = useCallback(
     (c: Connection | Edge) => {
@@ -325,6 +341,7 @@ function Workspace() {
   );
   const onConnect = useCallback(
     (c: Connection) => {
+      if(!canEdit)return;
       if (!validConnection(c)) {
         setNotice("Connection rejected: choose two unused interfaces");
         return;
@@ -348,14 +365,14 @@ function Workspace() {
       setDirty(true);
       setNotice(`Connected ${si} to ${ti}`);
     },
-    [snapshot, validConnection],
+    [snapshot, validConnection,canEdit],
   );
   const drop = useCallback(
     (event: DragEvent) => {
       event.preventDefault();
       const id = event.dataTransfer.getData("template");
       const template = templates.find((t) => t.id === id);
-      if (!template || !rf || !workspaceReady) return;
+      if (!template || !rf || !workspaceReady || !canEdit) return;
       snapshot();
       const position = rf.screenToFlowPosition({
         x: event.clientX,
@@ -395,20 +412,21 @@ function Workspace() {
       setDirty(true);
       setNotice(`${template.name} added`);
     },
-    [templates, rf, nodes, snapshot,workspaceReady],
+    [templates, rf, nodes, snapshot,workspaceReady,canEdit],
   );
   const addAnnotation=(type:"note"|"region")=>{
-    if(!rf||!workspaceReady)return;snapshot();const center=rf.screenToFlowPosition({x:window.innerWidth/2,y:window.innerHeight/2});
+    if(!rf||!workspaceReady||!canEdit)return;snapshot();const center=rf.screenToFlowPosition({x:window.innerWidth/2,y:window.innerHeight/2});
     const annotation:TopologyAnnotation={id:crypto.randomUUID(),type,x:center.x-(type==="region"?180:120),y:center.y-(type==="region"?100:45),
       width:type==="region"?360:240,height:type==="region"?200:90,text:type==="region"?"Network zone":"Add an operator note",
       color:type==="region"?"blue":"amber",fontSize:type==="region"?16:14,zIndex:type==="region"?-10:10};
     setAnnotations(items=>[...items,annotation]);setSelected(`annotation:${annotation.id}`);setDirty(true);setNotice(type==="region"?"Region added":"Note added");
   };
   const updateAnnotation=(id:string,changes:Partial<TopologyAnnotation>)=>{
+    if(!canEdit)return;
     setAnnotations(items=>items.map(item=>item.id===id?{...item,...changes}:item));setDirty(true);
   };
   const beginAnnotationGesture=(event:React.PointerEvent,annotation:TopologyAnnotation,resize=false)=>{
-    if(!rf)return;event.preventDefault();event.stopPropagation();snapshot();setSelected(`annotation:${annotation.id}`);
+    if(!rf||!canEdit)return;event.preventDefault();event.stopPropagation();snapshot();setSelected(`annotation:${annotation.id}`);
     const startX=event.clientX,startY=event.clientY,zoom=rf.getZoom(),origin={x:annotation.x,y:annotation.y,width:annotation.width,height:annotation.height};
     const move=(next:PointerEvent)=>{const dx=(next.clientX-startX)/zoom,dy=(next.clientY-startY)/zoom;
       if(resize)updateAnnotation(annotation.id,{width:Math.max(80,Math.min(2000,origin.width+dx)),height:Math.max(40,Math.min(1600,origin.height+dy))});
@@ -417,6 +435,7 @@ function Workspace() {
     window.addEventListener("pointermove",move);window.addEventListener("pointerup",stop,{once:true});
   };
   const save = async () => {
+    if(!canEdit){setNotice("Read-only: another operator owns the editing session");return;}
     setSaving(true);
     setNotice("Saving draft…");
     const body = {
@@ -445,7 +464,7 @@ function Workspace() {
       const r = await fetch(`/api/v1/labs/${labId}/topology/`, {
         method: "PUT",
         credentials: "same-origin",
-        headers: { "Content-Type": "application/json", "X-CSRFToken": csrf() },
+        headers: { "Content-Type": "application/json", "X-CSRFToken": csrf(), "X-Edit-Lease":leaseToken.current },
         body: JSON.stringify(body),
       });
       const data = await r.json();
@@ -460,7 +479,7 @@ function Workspace() {
     }
   };
   const updateImage = (imageId: string) => {
-    if (!selectedNode) return;
+    if (!selectedNode||!canEdit) return;
     setNodes((ns) => ns.map((n) => n.id === selectedNode.id ? { ...n, data: { ...n.data, imageId } } : n));
     setDirty(true);
   };
@@ -497,7 +516,7 @@ function Workspace() {
     setRestoring(revision.id);setNotice(`Restoring revision ${revision.revision_number}…`);
     try {
       const response=await fetch(`/api/v1/labs/${labId}/revisions/${revision.id}/restore/`,{method:"POST",credentials:"same-origin",
-        headers:{"Content-Type":"application/json","X-CSRFToken":csrf(),"Idempotency-Key":crypto.randomUUID()},
+        headers:{"Content-Type":"application/json","X-CSRFToken":csrf(),"Idempotency-Key":crypto.randomUUID(),"X-Edit-Lease":leaseToken.current},
         body:JSON.stringify({expected_current_draft:currentDraftId})});const data=await response.json();
       if (!response.ok) throw new Error(data.error?.details||data.error?.code||"Restore failed");
       setNotice(`Revision ${revision.revision_number} restored as draft revision ${data.revision_number}`);location.reload();
@@ -519,7 +538,7 @@ function Workspace() {
     if (!bundleRestore)return;setBundleRestoring(true);setNotice("Restoring validated lab backup…");
     try {const response=await fetch(`/api/v1/labs/${labId}/import/`,{method:"POST",credentials:"same-origin",headers:{
       "Content-Type":"application/vnd.containerlab.studio.lab+json","X-CSRFToken":csrf(),"Idempotency-Key":crypto.randomUUID(),
-      "X-Expected-Draft":bundleRestore.preview.expected_current_draft||"none"},body:bundleRestore.file});const data=await response.json();
+      "X-Expected-Draft":bundleRestore.preview.expected_current_draft||"none","X-Edit-Lease":leaseToken.current},body:bundleRestore.file});const data=await response.json();
       if(!response.ok)throw new Error(data.error?.details||data.error?.code||"Restore failed");
       setNotice(`Restored ${data.node_count} devices and ${data.link_count} links from verified backup`);location.reload();
     }catch(error){setNotice(error instanceof Error?error.message:"Backup restore failed");setBundleRestoring(false)}
@@ -529,7 +548,7 @@ function Workspace() {
     if (!confirm("Publish this revision and deploy it to Kubernetes? The published revision becomes immutable.")) return;
     setDeploying(true); setNotice("Scheduling deployment…");
     try {
-      const response = await fetch(`/api/v1/labs/${labId}/deploy/`, { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", "X-CSRFToken": csrf(), "Idempotency-Key": crypto.randomUUID() }, body: "{}" });
+      const response = await fetch(`/api/v1/labs/${labId}/deploy/`, { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", "X-CSRFToken": csrf(), "Idempotency-Key": crypto.randomUUID(), "X-Edit-Lease":leaseToken.current }, body: "{}" });
       const data = await response.json();
       if (!response.ok) throw new Error(Array.isArray(data.error?.details) ? data.error.details.join(" · ") : data.error?.details || data.error?.code || "Deployment failed");
       setNotice("Deployment accepted — opening runtime view");
@@ -600,7 +619,7 @@ function Workspace() {
   };
   const duplicateSelected = () => {
     const source=selectedDeviceNodes.length?selectedDeviceNodes:selectedNode?[selectedNode]:[];
-    if (!source.length || !workspaceReady) return;
+    if (!source.length || !workspaceReady || !canEdit) return;
     snapshot();
     const result=duplicateSubgraph(nodes,edges,new Set(source.map(node=>node.id)),()=>crypto.randomUUID());
     setNodes(current=>[...current.map(node=>({...node,selected:false})),...result.nodes]);
@@ -609,7 +628,7 @@ function Workspace() {
     setNotice(`Duplicated ${result.nodes.length} device${result.nodes.length===1?"":"s"} and ${result.edges.length} internal link${result.edges.length===1?"":"s"}`);
   };
   const arrangeAll = () => {
-    if(nodes.length<2||!workspaceReady)return;snapshot();setNodes(arrangeTopology(nodes,edges,annotations));setDirty(true);setSelected(null);
+    if(nodes.length<2||!workspaceReady||!canEdit)return;snapshot();setNodes(arrangeTopology(nodes,edges,annotations));setDirty(true);setSelected(null);
     setNotice(`Arranged ${nodes.length} devices into linked groups`);requestAnimationFrame(()=>rf?.fitView({padding:.2,duration:350}));
   };
   const alignSelection = (axis:"row"|"column") => {
@@ -649,7 +668,7 @@ function Workspace() {
     return issues;
   }, [nodes, used]);
   return (
-    <div className="workspace-shell">
+    <div className={`workspace-shell ${editLease&&!canEdit?"read-only":""}`}>
       <header className="workspace-top">
         <a href="/labs/" className="back">
           ‹
@@ -662,22 +681,22 @@ function Workspace() {
           </p>
         </div>
         <div className="toolbar">
-          <button onClick={undo} disabled={!history.length} title="Undo">
+          <button onClick={undo} disabled={!canEdit||!history.length} title="Undo">
             ↶
           </button>
-          <button onClick={redo} disabled={!future.length} title="Redo">
+          <button onClick={redo} disabled={!canEdit||!future.length} title="Redo">
             ↷
           </button>
           <i></i>
           <button onClick={() => rf?.fitView({ padding: 0.2 })}>Fit</button>
-          <button onClick={arrangeAll} disabled={!workspaceReady||nodes.length<2} title="Automatically arrange linked device groups (undoable)">⌘ Arrange</button>
-          <button onClick={duplicateSelected} disabled={!workspaceReady||(!selectedDeviceNodes.length&&!selectedNode)} title="Duplicate selected devices and their internal links (Ctrl/Cmd+D)">⧉ Duplicate{selectedDeviceNodes.length>1?` ${selectedDeviceNodes.length}`:""}</button>
-          <button onClick={()=>addAnnotation("note")} disabled={!workspaceReady} title="Add a movable text note">＋ Note</button>
-          <button onClick={()=>addAnnotation("region")} disabled={!workspaceReady} title="Add a colored topology region">▧ Region</button>
+          <button onClick={arrangeAll} disabled={!canEdit||!workspaceReady||nodes.length<2} title="Automatically arrange linked device groups (undoable)">⌘ Arrange</button>
+          <button onClick={duplicateSelected} disabled={!canEdit||!workspaceReady||(!selectedDeviceNodes.length&&!selectedNode)} title="Duplicate selected devices and their internal links (Ctrl/Cmd+D)">⧉ Duplicate{selectedDeviceNodes.length>1?` ${selectedDeviceNodes.length}`:""}</button>
+          <button onClick={()=>addAnnotation("note")} disabled={!canEdit||!workspaceReady} title="Add a movable text note">＋ Note</button>
+          <button onClick={()=>addAnnotation("region")} disabled={!canEdit||!workspaceReady} title="Add a colored topology region">▧ Region</button>
           <button onClick={exportBundle} disabled={dirty} title="Download a product-native lab backup. No YAML editing is required.">Backup</button>
           <button onClick={() => setCloneOpen(true)} disabled={dirty}>Save as</button>
           <button onClick={openHistory} disabled={dirty}>History</button>
-          <button onClick={() => importInput.current?.click()} title="Restore a ContainerLab Studio backup. This does not require a YAML file.">Restore</button>
+          <button onClick={() => importInput.current?.click()} disabled={!canEdit} title="Restore a ContainerLab Studio backup. This does not require a YAML file.">Restore</button>
           <input ref={importInput} className="file-input" type="file" accept=".json,.clabstudio.json,application/json" onChange={(e)=>importBundle(e.target.files?.[0])}/>
           <button>
             Validate{" "}
@@ -685,14 +704,15 @@ function Workspace() {
               {errors.length}
             </span>
           </button>
-          <button className="deploy" onClick={deploy} disabled={errors.length > 0 || dirty || deploying}>
+          <button className="deploy" onClick={deploy} disabled={!canEdit||errors.length > 0 || dirty || deploying}>
             {deploying ? "Deploying…" : "▶ Deploy"}
           </button>
-          <button className="save" onClick={save} disabled={!workspaceReady || saving || !dirty}>
+          <button className="save" onClick={save} disabled={!canEdit||!workspaceReady || saving || !dirty}>
             {saving ? "Saving…" : dirty ? "Save draft" : "Saved ✓"}
           </button>
         </div>
       </header>
+      {editLease&&!canEdit&&<div className="edit-lease-banner" role="status"><strong>Read-only workspace</strong><span>{editLease.owner||"Another operator"} is editing this topology. Your view is protected from overwriting their changes.</span><small>{editLease.expires_at?`Available after ${new Date(editLease.expires_at).toLocaleTimeString()}`:"Waiting for the editing session to be released"}</small></div>}
       {cloneOpen && <div className="modal-backdrop" role="presentation" onMouseDown={()=>!cloning&&setCloneOpen(false)}>
         <section className="clone-dialog" role="dialog" aria-modal="true" aria-labelledby="clone-title" onMouseDown={(event)=>event.stopPropagation()}>
           <p className="dialog-eyebrow">LAB WORKFLOW</p><h2 id="clone-title">Save topology as a new lab</h2>
@@ -790,6 +810,8 @@ function Workspace() {
               else if(selectedNodes.length>1)setSelected(null);
             }}
             selectionOnDrag
+            nodesDraggable={canEdit}
+            nodesConnectable={canEdit}
             panOnDrag={[1,2]}
             deleteKeyCode={null}
             minZoom={0.25}

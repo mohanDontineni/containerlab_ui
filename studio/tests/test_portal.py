@@ -1,9 +1,32 @@
 import json
 import uuid
+from datetime import timedelta
 import pytest
 from django.db.models import F
 from django.test import Client
+from django.utils import timezone
 from studio.models import AuditEvent, DeviceTemplateVersion, ImageArtifact, Lab, LabDeployment, LabLink, LabNode, LabRevision, Project, ProjectMembership, PublishedImage, User
+
+@pytest.mark.django_db
+def test_topology_edit_lease_blocks_second_editor_and_expires(client):
+    owner=User.objects.create_user("lease-owner",password="long-enough-password")
+    editor=User.objects.create_user("lease-editor",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="Lease project")
+    ProjectMembership.objects.create(project=project,user=editor,role=ProjectMembership.Role.EDITOR)
+    lab=Lab.objects.create(project=project,name="Protected topology")
+    client.force_login(owner)
+    acquired=client.post(f"/api/v1/labs/{lab.id}/topology/edit-lease/")
+    token=acquired.json()["token"]
+    rejected=client.put(f"/api/v1/labs/{lab.id}/topology/",json.dumps({"editVersion":0,"nodes":[],"links":[]}),content_type="application/json")
+    assert acquired.status_code==200 and rejected.status_code==409
+    saved=client.put(f"/api/v1/labs/{lab.id}/topology/",json.dumps({"editVersion":0,"nodes":[],"links":[]}),content_type="application/json",HTTP_X_EDIT_LEASE=token)
+    assert saved.status_code==200
+    client.force_login(editor)
+    conflict=client.post(f"/api/v1/labs/{lab.id}/topology/edit-lease/")
+    assert conflict.status_code==409 and conflict.json()["error"]["owner"]=="lease-owner"
+    lab.refresh_from_db();lab.edit_lock_expires_at=timezone.now()-timedelta(seconds=1);lab.save(update_fields=["edit_lock_expires_at"])
+    takeover=client.post(f"/api/v1/labs/{lab.id}/topology/edit-lease/")
+    assert takeover.status_code==200 and takeover.json()["token"]!=token
 
 @pytest.mark.django_db
 def test_product_navigation_never_links_to_model_admin(client):

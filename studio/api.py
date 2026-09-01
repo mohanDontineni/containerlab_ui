@@ -23,6 +23,12 @@ from .uploads import UploadError, append_chunk, finalize
 from .bundles import BundleError, LabBundleParser, export_lab_bundle, import_lab_bundle, inspect_lab_bundle
 from .configurations import decrypt_configuration
 from .quotas import ProjectQuotaExceeded,normalized_quotas,project_usage,quota_exceeded,validate_quotas
+from .edit_leases import conflict_payload as edit_lease_conflict, is_active as edit_lease_active, valid_token as valid_edit_lease
+
+def require_edit_lease(request,lab):
+    if edit_lease_active(lab) and not valid_edit_lease(lab,request.user,request.headers.get("X-Edit-Lease")):
+        return Response(edit_lease_conflict(lab),status=409)
+    return None
 
 class OctetStreamParser(BaseParser):
     media_type="application/octet-stream"
@@ -396,6 +402,8 @@ class LabViewSet(viewsets.ModelViewSet):
         lab=self.get_object()
         if project_role(request.user,lab.project) not in (models.ProjectMembership.Role.ADMIN,models.ProjectMembership.Role.EDITOR):
             from rest_framework.exceptions import PermissionDenied; raise PermissionDenied()
+        conflict=require_edit_lease(request,lab)
+        if conflict: return conflict
         try: source_id=uuid.UUID(str(revision_id))
         except (ValueError,TypeError,AttributeError): return Response({"error":{"code":"invalid_revision"}},status=422)
         source=lab.revisions.filter(pk=source_id).first()
@@ -461,6 +469,8 @@ class LabViewSet(viewsets.ModelViewSet):
         lab=self.get_object()
         if project_role(request.user,lab.project) not in (models.ProjectMembership.Role.ADMIN,models.ProjectMembership.Role.EDITOR):
             from rest_framework.exceptions import PermissionDenied; raise PermissionDenied()
+        conflict=require_edit_lease(request,lab)
+        if conflict: return conflict
         key=request.headers.get("Idempotency-Key")
         if not key: return Response({"error":{"code":"idempotency_key_required"}},status=400)
         expected_header=request.headers.get("X-Expected-Draft")
@@ -494,6 +504,8 @@ class LabViewSet(viewsets.ModelViewSet):
         lab=self.get_object()
         if project_role(request.user,lab.project) not in ("administrator","editor"):
             from rest_framework.exceptions import PermissionDenied; raise PermissionDenied()
+        conflict=require_edit_lease(request,lab)
+        if conflict: return conflict
         key=request.headers.get("Idempotency-Key")
         if not key: return Response({"error":{"code":"idempotency_key_required"}},status=400)
         existing=models.OperationJob.objects.filter(owner=request.user,idempotency_key=key).select_related("deployment").first()
@@ -747,6 +759,8 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=True,methods=["post"],url_path=r"configurations/(?P<configuration_id>[^/.]+)/restore")
     def restore_configuration(self,request,pk=None,configuration_id=None):
         deployment=self.get_object();self._require_operator(deployment)
+        conflict=require_edit_lease(request,deployment.revision.lab)
+        if conflict: return conflict
         configuration,event=self._collected_configuration(deployment,configuration_id)
         if not configuration: return Response({"error":{"code":"configuration_not_found"}},status=404)
         device_name=event.metadata.get("device","")
