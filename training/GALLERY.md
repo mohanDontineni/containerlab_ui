@@ -283,3 +283,9 @@ The operator selects both live BGP routers and opens one guarded reset preview. 
 ![Topology revision comparison](47-topology-revision-comparison.png)
 
 The designer selects two saved revisions inside the visual workspace and opens a read-only structural comparison. Studio matches devices by topology name and links by canonical node/interface endpoints, then reports added, removed, and modified devices and links plus canvas and annotation changes. Template versions, immutable image references, interface sets, and startup-configuration checksums participate without decrypting configuration content. Firefox compared Alpine Connectivity QA revisions 1 and 2, correctly isolated the `client-a` startup-configuration change, and left both revisions, the active draft, and every runtime unchanged.
+
+## 48 — Hierarchical lab folders
+
+![Hierarchical lab folders](48-hierarchical-lab-folders.png)
+
+The operator creates a project-scoped parent folder and nested child folder entirely through Studio, then moves the live Alpine Connectivity QA design into that hierarchy with the native lab form. Folder cards expose their complete path, direct lab and child counts, and editor-only management controls; the lab catalog repeats the path beside each design for fast scanning. Firefox verified that deleting the populated child is blocked with an exact dependency count, then restored the lab to root and removed both empty test folders without YAML, cluster access, console errors, or failed application requests.

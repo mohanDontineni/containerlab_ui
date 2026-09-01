@@ -57,11 +57,13 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 | `45-live-device-network-state.png` | Live device network state | Collects bounded interface, address, route, and neighbor data from a ready appliance and presents it as structured GUI tables. |
 | `46-guarded-selected-device-reset.png` | Guarded selected-device reset | Preflights several devices together, reports saved baselines and session impact, then resets every eligible selection through independently tracked jobs. |
 | `47-topology-revision-comparison.png` | Topology revision comparison | Selects two saved revisions and reviews structured device, link, canvas, object, image, template, and configuration-checksum changes before restore or deployment. |
+| `48-hierarchical-lab-folders.png` | Hierarchical lab folders | Organizes a real lab into project-scoped nested folders and demonstrates guarded deletion while the folder still contains a lab. |
 
 ## No-YAML operating model
 
 1. Create a project and assign roles and quotas in the GUI.
-2. Add images through resumable upload or OCI registry registration.
+2. Create nested project folders in the lab library and assign or move labs with the native forms; populated folders are protected from deletion.
+3. Add images through resumable upload or OCI registry registration.
 3. Create a lab and add nodes from verified device templates.
 4. Select a published image and enter optional or required startup configuration in the node inspector.
 5. Connect devices by dragging between named interface handles. Used point-to-point interfaces cannot be selected twice.
