@@ -112,7 +112,9 @@ class DeviceTemplateViewSet(viewsets.ReadOnlyModelViewSet):
         serializer=serializers.ManagedTemplateSerializer(data=request.data);serializer.is_valid(raise_exception=True);data=serializer.validated_data
         try:
             with transaction.atomic():
-                locked=models.DeviceTemplate.objects.select_for_update().select_related("active_version").get(pk=template.pk)
+                # Lock only the template row. Joining the nullable active_version
+                # relation makes PostgreSQL reject FOR UPDATE on the outer join.
+                locked=models.DeviceTemplate.objects.select_for_update().get(pk=template.pk)
                 if str(locked.active_version_id)!=expected:
                     return Response({"error":{"code":"template_version_changed","details":"The active template version changed after this form was opened.",
                         "active_version":str(locked.active_version_id)}},status=409)
