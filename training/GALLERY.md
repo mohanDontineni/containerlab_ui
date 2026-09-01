@@ -331,3 +331,9 @@ The runtime page displays current CPU and memory use for every device launcher b
 ![Verified platform capabilities](55-verified-platform-capabilities.png)
 
 The dashboard reports database connectivity, Redis-backed worker execution, Clabernetes reconciliation, and the Kubernetes Metrics API in the native product instead of relying on static optimistic labels. Worker and runtime evidence is published through the shared cache with a two-minute expiry, so stale control-plane observations return to Pending automatically. The production preflight requires a serving metrics API, accepts the release's own occupied NodePort during upgrades, and offers an explicit pinned metrics-server installer for new clusters. Firefox rendered all four services Ready after a real reconciliation, and the idempotent installer retained live BGP pod samples.
+
+## 56 — Saved topology startup plan
+
+![Saved topology startup plan](56-saved-topology-startup-plan.png)
+
+The visual topology inspector lets operators assign each device a bounded startup priority from 1–250. Those priorities persist with drafts, immutable revisions, clones, backups, and runtime instances; equal priorities are resolved deterministically by device name. When all planned devices are stopped, the runtime's Saved plan action selects them automatically and opens the existing guarded staged-start preview, where the operator can still review the exact order and choose a bounded interval. Firefox restored the production BGP design as revision 3, saved `r2=10` and `r1=20`, deployed it, stopped both routers, loaded `r2 → r1` without manual selection, and ran the durable sequence 8.101 seconds apart. Both routers returned Ready and routed reachability passed 3/3 with 0% loss.
