@@ -34,6 +34,8 @@ pnpm --dir frontend build
 
 The production image uses Python 3.13, Gunicorn with Uvicorn workers, a multi-stage React build, and a non-root UID. See `scripts/` for preflight, install, smoke test, backup, restore, and uninstall entry points.
 
+Platform disaster recovery uses a mandatory-quiesce, integrity-manifested bundle of PostgreSQL, artifacts, registry, Redis, protected Secrets, and deployment metadata. Always validate with `scripts/restore.sh BUNDLE --verify-only` before an isolated restore rehearsal; see [`docs/backup-restore.md`](docs/backup-restore.md).
+
 The labeled operator screenshot catalog and its read-only capture procedure are in [`training/README.md`](training/README.md).
 
 ## Important limitations
