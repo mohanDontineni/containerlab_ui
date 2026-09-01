@@ -14,7 +14,7 @@ from django.utils.text import slugify
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.parsers import BaseParser,JSONParser
+from rest_framework.parsers import BaseParser,FormParser,JSONParser,MultiPartParser
 from rest_framework.views import exception_handler as drf_exception_handler
 from . import models, serializers
 from .permissions import ProjectAccess, project_role
@@ -27,6 +27,8 @@ from .quotas import ProjectQuotaExceeded,normalized_quotas,project_usage,quota_e
 from .edit_leases import conflict_payload as edit_lease_conflict, is_active as edit_lease_active, valid_token as valid_edit_lease
 from .pcap import PcapError, analyze_pcap
 from .image_compatibility import evaluate as evaluate_image_compatibility
+from .containerlab_interop import ContainerlabInteropError, import_containerlab_topology, inspect_containerlab_topology, read_containerlab_upload
+from .topology import export_containerlab
 
 def require_edit_lease(request,lab):
     if edit_lease_active(lab) and not valid_edit_lease(lab,request.user,request.headers.get("X-Edit-Lease")):
@@ -571,6 +573,65 @@ class LabViewSet(viewsets.ModelViewSet):
         response["Content-Disposition"]=f'attachment; filename="{slugify(lab.name)[:80] or "lab"}.clabstudio.json"'
         response["X-Content-Type-Options"]="nosniff"
         return response
+    @action(detail=True,methods=["get"],url_path="containerlab-export")
+    def export_containerlab_topology(self,request,pk=None):
+        lab=self.get_object();revision=lab.current_draft or lab.revisions.order_by("-revision_number").first()
+        if not revision:return Response({"error":{"code":"topology_unavailable","details":"Save at least one topology revision before export."}},status=422)
+        payload=export_containerlab(revision).encode()
+        models.AuditEvent.objects.create(actor=request.user,project=lab.project,action="lab.containerlab_exported",target_type="LabRevision",target_id=revision.id,
+            correlation_id=getattr(request,"correlation_id",""),metadata={"bytes":len(payload),"revision":revision.revision_number,
+                "checksum":revision.topology_checksum,"format":"containerlab-yaml"})
+        response=HttpResponse(payload,content_type="application/yaml; charset=utf-8")
+        response["Content-Disposition"]=f'attachment; filename="{slugify(lab.name)[:70] or "lab"}.clab.yml"'
+        response["Cache-Control"]="no-store";response["X-Content-Type-Options"]="nosniff";return response
+    @action(detail=True,methods=["post"],url_path="containerlab-import-preview",parser_classes=[MultiPartParser,FormParser])
+    def containerlab_import_preview(self,request,pk=None):
+        lab=self.get_object()
+        if project_role(request.user,lab.project) not in (models.ProjectMembership.Role.ADMIN,models.ProjectMembership.Role.EDITOR):
+            from rest_framework.exceptions import PermissionDenied;raise PermissionDenied()
+        try:_raw,document=read_containerlab_upload(request.data.get("file"));preview=inspect_containerlab_topology(lab,document)
+        except ContainerlabInteropError as exc:return Response({"error":{"code":"invalid_containerlab_topology","details":str(exc)}},status=422)
+        models.AuditEvent.objects.create(actor=request.user,project=lab.project,action="lab.containerlab_import_previewed",target_type="Lab",target_id=lab.id,
+            correlation_id=getattr(request,"correlation_id",""),metadata={key:preview[key] for key in ("checksum","node_count","link_count","external_configuration_count")})
+        response=Response(preview);response["Cache-Control"]="no-store";response["X-Content-Type-Options"]="nosniff";return response
+    @action(detail=True,methods=["post"],url_path="containerlab-import",parser_classes=[MultiPartParser,FormParser])
+    def containerlab_import(self,request,pk=None):
+        lab=self.get_object()
+        if project_role(request.user,lab.project) not in (models.ProjectMembership.Role.ADMIN,models.ProjectMembership.Role.EDITOR):
+            from rest_framework.exceptions import PermissionDenied;raise PermissionDenied()
+        conflict=require_edit_lease(request,lab)
+        if conflict:return conflict
+        key=request.headers.get("Idempotency-Key")
+        if not key:return Response({"error":{"code":"idempotency_key_required"}},status=400)
+        existing=models.OperationJob.objects.filter(owner=request.user,idempotency_key=key).first()
+        if existing:
+            if existing.operation_type!="import_containerlab_topology" or existing.target_id!=lab.id:return Response({"error":{"code":"idempotency_conflict"}},status=409)
+            return Response(existing.result_payload,status=200)
+        try:
+            _raw,document=read_containerlab_upload(request.data.get("file"));preview=inspect_containerlab_topology(lab,document)
+            expected_checksum=str(request.data.get("expected_checksum") or "")
+            if not expected_checksum:return Response({"error":{"code":"import_preview_required","details":"Review a fresh Containerlab import preview first."}},status=400)
+            if expected_checksum!=preview["checksum"]:return Response({"error":{"code":"topology_changed","details":"The selected topology changed after preview."}},status=409)
+            try:mappings=json.loads(request.data.get("mappings") or "")
+            except (TypeError,ValueError,json.JSONDecodeError):raise ContainerlabInteropError("Device mappings must be valid JSON.")
+            expected_draft=str(request.data.get("expected_current_draft") or "") or None
+            with transaction.atomic():
+                locked=models.Lab.objects.select_for_update().get(pk=lab.pk);actual=str(locked.current_draft_id) if locked.current_draft_id else None
+                if actual!=expected_draft:return Response({"error":{"code":"draft_changed","details":"The saved draft changed while the import preview was open.","current_draft":actual}},status=409)
+                job=models.OperationJob.objects.create(owner=request.user,operation_type="import_containerlab_topology",target_id=lab.id,
+                    idempotency_key=key,state="started",progress=25,request_payload={"lab_id":str(lab.id),"topology_checksum":preview["checksum"]})
+                revision,_=import_containerlab_topology(locked,request.user,document,mappings,
+                    str(request.data.get("acknowledge_external_configurations") or "").lower() in ("true","1","yes"))
+                result={"revision_id":str(revision.id),"revision_number":revision.revision_number,"edit_version":revision.edit_version,
+                    "node_count":revision.nodes.count(),"link_count":revision.links.count(),"operation_id":str(job.id),"topology_checksum":preview["checksum"]}
+                job.state="succeeded";job.progress=100;job.result_payload=result;job.save(update_fields=["state","progress","result_payload","updated_at"])
+                models.AuditEvent.objects.create(actor=request.user,project=lab.project,action="lab.containerlab_imported",target_type="LabRevision",target_id=revision.id,
+                    correlation_id=getattr(request,"correlation_id",""),metadata={"lab":str(lab.id),"revision":revision.revision_number,
+                        "source_checksum":preview["checksum"],"node_count":result["node_count"],"link_count":result["link_count"],"operation":str(job.id),
+                        "external_configurations_omitted":preview["external_configuration_count"]})
+        except (ContainerlabInteropError,BundleError) as exc:return Response({"error":{"code":"containerlab_import_failed","details":str(exc)}},status=422)
+        except IntegrityError:return Response({"error":{"code":"operation_conflict"}},status=409)
+        return Response(result,status=201)
     @action(detail=True,methods=["post"],url_path="import-preview",parser_classes=[LabBundleParser,JSONParser])
     def import_preview(self,request,pk=None):
         lab=self.get_object()

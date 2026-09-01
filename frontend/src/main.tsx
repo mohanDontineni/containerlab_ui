@@ -35,6 +35,7 @@ import "./annotations.css";
 import "./bulk-selection.css";
 import "./edit-lease.css";
 import "./preflight.css";
+import "./interop.css";
 import { alignSelectedNodes, arrangeTopology, duplicateSubgraph, interfaceFromHandle } from "./topology-utils";
 
 type Template = {
@@ -120,6 +121,12 @@ type ValidationReport = {lab_id:string;lab:string;ready:boolean;errors:string[];
     interfaces:{total:number;linked:number;free:number;required:number};configuration:{state:string;required:boolean;supported:boolean};
     resources:Record<string,string>;capabilities:{console:boolean;capture:boolean;link_impairment:boolean};errors:string[];warnings:string[]}[];
   adapter?:{api:string;clabernetes:string;mode:string}};
+type ContainerlabImageChoice={id:string;name:string;digest:string;architecture:string;status:string;selectable:boolean;reasons:string[];warnings:string[];source_match:boolean};
+type ContainerlabTemplateChoice={id:string;name:string;version:number;kind:string;verified:boolean;interfaces:string[];images:ContainerlabImageChoice[]};
+type ContainerlabImportPreview={source_name:string;checksum:string;node_count:number;link_count:number;issues:string[];structurally_importable:boolean;
+  external_configuration_count:number;expected_current_draft:string|null;will_replace_draft:boolean;preserved_published_revisions:number;
+  running_deployments_unchanged:number;impact:string[];nodes:{name:string;kind:string;source_image:string;interfaces:string[];
+    external_startup_configuration:boolean;template_choices:ContainerlabTemplateChoice[];recommended_template:string|null;recommended_image:string|null}[]};
 type EditLease = {active:boolean;can_edit:boolean;owner:string|null;expires_at:string|null;lease_seconds:number;token?:string};
 const params = new URLSearchParams(location.search);
 const labId = params.get("lab") || "";
@@ -202,6 +209,12 @@ function Workspace() {
   const [deploymentAcknowledged, setDeploymentAcknowledged] = useState(false);
   const [validationReport,setValidationReport]=useState<ValidationReport|null>(null);
   const [validationLoading,setValidationLoading]=useState(false);
+  const [interopOpen,setInteropOpen]=useState(false);
+  const [containerlabImport,setContainerlabImport]=useState<{file:File;preview:ContainerlabImportPreview}|null>(null);
+  const [containerlabMappings,setContainerlabMappings]=useState<Record<string,{template_id:string;image_id:string}>>({});
+  const [containerlabAcknowledged,setContainerlabAcknowledged]=useState(false);
+  const [containerlabLoading,setContainerlabLoading]=useState(false);
+  const [containerlabImporting,setContainerlabImporting]=useState(false);
   const [cloneOpen, setCloneOpen] = useState(false);
   const [cloneName, setCloneName] = useState(`${labName} copy`);
   const [cloning, setCloning] = useState(false);
@@ -226,6 +239,7 @@ function Workspace() {
   const [rf, setRf] = useState<any>(null);
   const counter = useRef(1);
   const importInput = useRef<HTMLInputElement>(null);
+  const containerlabInput=useRef<HTMLInputElement>(null);
   const snapshot = useCallback(() => {
     setHistory((h) => [
       ...h.slice(-29),
@@ -585,6 +599,28 @@ function Workspace() {
       setNotice(`Restored ${data.node_count} devices and ${data.link_count} links from verified backup`);location.reload();
     }catch(error){setNotice(error instanceof Error?error.message:"Backup restore failed");setBundleRestoring(false)}
   };
+  const previewContainerlabImport=async(file?:File)=>{
+    if(!file)return;setContainerlabLoading(true);setNotice("Inspecting Containerlab topology and compatible Studio mappings…");
+    try{const form=new FormData();form.append("file",file);const response=await fetch(`/api/v1/labs/${labId}/containerlab-import-preview/`,{method:"POST",credentials:"same-origin",headers:{"X-CSRFToken":csrf()},body:form});const data=await response.json();
+      if(!response.ok)throw new Error(data.error?.details||data.error?.code||"Containerlab preview failed");const preview=data as ContainerlabImportPreview;
+      const mappings:Record<string,{template_id:string;image_id:string}>={};for(const node of preview.nodes){mappings[node.name]={template_id:node.recommended_template||"",image_id:node.recommended_image||""}}
+      setContainerlabMappings(mappings);setContainerlabAcknowledged(false);setContainerlabImport({file,preview});setNotice("Containerlab topology inspected — map every device before import")
+    }catch(error){setNotice(error instanceof Error?error.message:"Containerlab preview failed")}finally{setContainerlabLoading(false);if(containerlabInput.current)containerlabInput.current.value=""}
+  };
+  const updateContainerlabTemplate=(nodeName:string,templateId:string)=>{
+    if(!containerlabImport)return;const node=containerlabImport.preview.nodes.find(item=>item.name===nodeName);const template=node?.template_choices.find(item=>item.id===templateId);
+    const sourceMatches=template?.images.filter(image=>image.selectable&&image.source_match)||[];const selectable=template?.images.filter(image=>image.selectable)||[];
+    const imageId=sourceMatches.length===1?sourceMatches[0].id:selectable.length===1?selectable[0].id:"";
+    setContainerlabMappings(current=>({...current,[nodeName]:{template_id:templateId,image_id:imageId}}))
+  };
+  const confirmContainerlabImport=async()=>{
+    if(!containerlabImport)return;setContainerlabImporting(true);setNotice("Creating mapped Studio draft from Containerlab topology…");
+    try{const form=new FormData();form.append("file",containerlabImport.file);form.append("expected_checksum",containerlabImport.preview.checksum);form.append("expected_current_draft",containerlabImport.preview.expected_current_draft||"");
+      form.append("mappings",JSON.stringify(containerlabMappings));form.append("acknowledge_external_configurations",String(containerlabAcknowledged));
+      const response=await fetch(`/api/v1/labs/${labId}/containerlab-import/`,{method:"POST",credentials:"same-origin",headers:{"X-CSRFToken":csrf(),"Idempotency-Key":crypto.randomUUID(),"X-Edit-Lease":leaseToken.current},body:form});const data=await response.json();
+      if(!response.ok)throw new Error(data.error?.details||data.error?.code||"Containerlab import failed");setNotice(`Imported ${data.node_count} devices and ${data.link_count} links into draft revision ${data.revision_number}`);location.reload()
+    }catch(error){setNotice(error instanceof Error?error.message:"Containerlab import failed");setContainerlabImporting(false)}
+  };
   const openDeploymentPlan = async () => {
     if (dirty) { setNotice("Save the draft before deployment"); return; }
     setDeploymentPlanLoading(true); setNotice("Building a server-verified deployment plan…");
@@ -758,6 +794,7 @@ function Workspace() {
           <button onClick={openHistory} disabled={dirty}>History</button>
           <button onClick={() => importInput.current?.click()} disabled={!canEdit} title="Restore a ContainerLab Studio backup. This does not require a YAML file.">Restore</button>
           <input ref={importInput} className="file-input" type="file" accept=".json,.clabstudio.json,application/json" onChange={(e)=>importBundle(e.target.files?.[0])}/>
+          <button onClick={()=>setInteropOpen(true)} disabled={dirty} title="Import or export an existing Containerlab topology through a guarded GUI workflow.">Interop</button>
           <button onClick={openValidationReport} disabled={dirty||validationLoading} title={dirty?"Save the draft before server validation":"Run server-authoritative deployment preflight"}>
             {validationLoading?"Validating…":"Validate"}{" "}
             <span className={errors.length ? "warn" : "ok"}>
@@ -773,6 +810,19 @@ function Workspace() {
         </div>
       </header>
       {editLease&&!canEdit&&<div className="edit-lease-banner" role="status"><strong>Read-only workspace</strong><span>{editLease.owner||"Another operator"} is editing this topology. Your view is protected from overwriting their changes.</span><small>{editLease.expires_at?`Available after ${new Date(editLease.expires_at).toLocaleTimeString()}`:"Waiting for the editing session to be released"}</small></div>}
+      {interopOpen&&<div className="modal-backdrop" role="presentation" onMouseDown={()=>!containerlabImporting&&setInteropOpen(false)}>
+        <section className="interop-dialog" role="dialog" aria-modal="true" aria-labelledby="interop-title" onMouseDown={event=>event.stopPropagation()}>
+          <header><div><p className="dialog-eyebrow">GUARDED MIGRATION WORKFLOW</p><h2 id="interop-title">Containerlab interoperability</h2><p>Import an existing topology through explicit Studio mappings or export the saved visual design. Normal lab operation remains GUI-only.</p></div><button aria-label="Close Containerlab interoperability" onClick={()=>setInteropOpen(false)} disabled={containerlabImporting}>×</button></header>
+          {!containerlabImport?<div className="interop-start"><article><span>⇩</span><div><h3>Import existing topology</h3><p>Studio safely inspects a bounded <code>.clab.yml</code> file, rejects host escape fields, and requires an active template plus immutable project image for every device.</p><button className="primary" onClick={()=>containerlabInput.current?.click()} disabled={!canEdit||containerlabLoading}>{containerlabLoading?"Inspecting…":"Choose Containerlab topology"}</button><input ref={containerlabInput} className="file-input" type="file" accept=".yml,.yaml,.clab.yml,application/yaml,text/yaml" onChange={event=>previewContainerlabImport(event.target.files?.[0])}/></div></article><article><span>⇧</span><div><h3>Export saved visual topology</h3><p>Download the current saved revision as a portable Containerlab topology. Studio generates it from the visual model; users never need to author YAML.</p><a className="primary" href={`/api/v1/labs/${labId}/containerlab-export/`}>Download .clab.yml</a></div></article></div>:
+          <div className="interop-review"><div className="interop-source"><div><span>Source topology</span><strong>{containerlabImport.preview.source_name}</strong><small>{containerlabImport.file.name} · SHA-256 {containerlabImport.preview.checksum.slice(0,16)}…</small></div><b>{containerlabImport.preview.node_count} devices · {containerlabImport.preview.link_count} links</b></div>
+            {containerlabImport.preview.issues.length>0&&<section className="interop-issues"><strong>Topology compatibility issues</strong><ul>{containerlabImport.preview.issues.map(issue=><li key={issue}>{issue}</li>)}</ul></section>}
+            <section className="interop-mappings"><h3>Device mappings</h3><p>Containerlab kinds do not identify a complete appliance personality. Select the exact versioned Studio template and immutable image for each node.</p>{containerlabImport.preview.nodes.map(node=>{const mapping=containerlabMappings[node.name]||{template_id:"",image_id:""};const selectedTemplate=node.template_choices.find(choice=>choice.id===mapping.template_id);return <article key={node.name}><div className="interop-node"><strong>{node.name}</strong><small>{node.kind} · {node.interfaces.length?node.interfaces.join(" · "):"no linked interfaces"}</small><code>{node.source_image||"No source image"}</code></div><label>Studio template<select aria-label={`${node.name} Studio template`} value={mapping.template_id} onChange={event=>updateContainerlabTemplate(node.name,event.target.value)}><option value="">Choose template…</option>{node.template_choices.map(choice=><option key={choice.id} value={choice.id}>{choice.name} v{choice.version}{choice.verified?" · verified":""}</option>)}</select></label><label>Immutable image<select aria-label={`${node.name} immutable image`} value={mapping.image_id} disabled={!selectedTemplate} onChange={event=>setContainerlabMappings(current=>({...current,[node.name]:{...mapping,image_id:event.target.value}}))}><option value="">Choose image…</option>{selectedTemplate?.images.map(image=><option key={image.id} value={image.id} disabled={!image.selectable}>{image.name} · {image.architecture} · {image.source_match?"source match":image.status}</option>)}</select></label></article>})}</section>
+            <section className="interop-impact"><h3>Import impact</h3><ul>{containerlabImport.preview.impact.map(item=><li key={item}>{item}</li>)}</ul><small>{containerlabImport.preview.will_replace_draft?"The current editable draft will be replaced.":"A new editable draft will be created."} {containerlabImport.preview.preserved_published_revisions} published revision(s) and {containerlabImport.preview.running_deployments_unchanged} active runtime(s) remain unchanged.</small></section>
+            {containerlabImport.preview.external_configuration_count>0&&<label className="interop-ack"><input type="checkbox" checked={containerlabAcknowledged} onChange={event=>setContainerlabAcknowledged(event.target.checked)}/><span><strong>I understand {containerlabImport.preview.external_configuration_count} external startup-file reference(s) will be omitted.</strong><small>External client paths are never read. Add or paste configurations securely in the node inspector after import.</small></span></label>}
+          </div>}
+          <footer>{containerlabImport?<button onClick={()=>setContainerlabImport(null)} disabled={containerlabImporting}>Back</button>:<span>Safe import is optional; designing and operating labs never requires YAML.</span>}<div><button onClick={()=>setInteropOpen(false)} disabled={containerlabImporting}>Cancel</button>{containerlabImport&&<button className="primary" onClick={confirmContainerlabImport} disabled={containerlabImporting||!containerlabImport.preview.structurally_importable||containerlabImport.preview.nodes.some(node=>!containerlabMappings[node.name]?.template_id||!containerlabMappings[node.name]?.image_id)||(containerlabImport.preview.external_configuration_count>0&&!containerlabAcknowledged)}>{containerlabImporting?"Importing…":"Create mapped Studio draft"}</button>}</div></footer>
+        </section>
+      </div>}
       {validationReport&&<div className="modal-backdrop" role="presentation" onMouseDown={()=>setValidationReport(null)}>
         <section className="preflight-dialog" role="dialog" aria-modal="true" aria-labelledby="preflight-title" onMouseDown={event=>event.stopPropagation()}>
           <header><div><p className="dialog-eyebrow">SERVER-AUTHORITATIVE PREFLIGHT</p><h2 id="preflight-title">Deployment readiness report</h2><p>Saved draft revision {validationReport.revision?.number??"—"} checked against pinned templates, images, configurations, interfaces, and the Clabernetes adapter.</p></div><button aria-label="Close validation report" onClick={()=>setValidationReport(null)}>×</button></header>
