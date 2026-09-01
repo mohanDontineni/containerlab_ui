@@ -205,3 +205,9 @@ An administrator reviews active labs, images, uploads, runtimes, and jobs before
 ![Guarded runtime removal](34-guarded-runtime-removal.png)
 
 The operator reviews the runtime namespace, device, console, capture, artifact, and active-job impact before confirming permanent compute removal. Studio deletes only the deployment-owned Kubernetes namespace, revokes console access, clears live compute references, preserves the immutable lab revision and operation history, and prevents the removed runtime from being redeployed or refreshed.
+
+## 35 — Versioned device template management
+
+![Versioned device template management](35-versioned-device-template.png)
+
+A platform administrator manages the catalog identity, Containerlab kind, generated data interfaces, reserved management port, bounded compute resources, console mode, reviewed configuration preset, privilege requirement, and verification state without Django admin or YAML. Saving creates and activates a new immutable version; the history panel shows earlier versions that remain pinned by existing lab revisions.

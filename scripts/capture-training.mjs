@@ -153,13 +153,18 @@ try {
   const removalRow = page.locator(".catalog-row").filter({ hasText: /Runtime Removal Acceptance/i }).first();
   if (await removalRow.count()) {
     const removalHref = await removalRow.locator('a[href^="/deployments/"]').getAttribute("href");
-    if (removalHref) await capture("34-guarded-runtime-removal.png", removalHref, async (p) => {
-      await p.locator("#device-list article").first().waitFor({ timeout: 20_000 });
-      await p.locator("#remove-runtime").click();
-      const dialog = p.locator("#runtime-removal-dialog");
-      await dialog.waitFor();
-      return dialog;
-    });
+    if (removalHref) {
+      await page.goto(`${baseUrl}${removalHref}`, { waitUntil: "networkidle" });
+      const removalButton = page.locator("#remove-runtime");
+      if (await removalButton.count()) {
+        await page.locator("#device-list article").first().waitFor({ timeout: 20_000 });
+        await removalButton.click();
+        const dialog = page.locator("#runtime-removal-dialog");
+        await dialog.waitFor();
+        await dialog.screenshot({ path: path.join(output, "34-guarded-runtime-removal.png") });
+        console.log(`34-guarded-runtime-removal.png <- ${page.url()}`);
+      } else console.warn("34-guarded-runtime-removal.png retained: specimen is already terminal");
+    }
   }
   let deploymentHref = deploymentHrefs[0] || null;
   for (const candidate of deploymentHrefs) {
@@ -274,6 +279,12 @@ try {
   }
 
   await capture("21-device-templates.png", "/device-templates/");
+  await page.goto(`${baseUrl}/device-templates/`, { waitUntil: "networkidle" });
+  const managedTemplate = page.locator(".catalog-row").filter({ hasText: /GUI Template Acceptance/i }).first();
+  if (await managedTemplate.count()) {
+    const managedTemplateHref = await managedTemplate.locator('a[href^="/device-templates/"]').getAttribute("href");
+    if (managedTemplateHref) await capture("35-versioned-device-template.png", managedTemplateHref);
+  }
   await capture("22-jobs-events.png", "/operations/");
   await capture("23-account-security.png", "/settings/");
   await capture("24-api-explorer.png", "/api/v1/docs/");

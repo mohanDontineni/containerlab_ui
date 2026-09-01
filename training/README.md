@@ -44,6 +44,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 | `32-guarded-lab-deletion.png` | Guarded lab deletion | Reviews runtime/history blockers before removing a lab-library entry. |
 | `33-guarded-project-retirement.png` | Guarded project retirement | Reviews workspace dependencies before retiring a project. |
 | `34-guarded-runtime-removal.png` | Guarded runtime removal | Reviews compute and session impact before deleting the owned runtime namespace. |
+| `35-versioned-device-template.png` | Versioned device templates | Creates or activates a validated launch-profile version while preserving lab pins and history. |
 
 ## No-YAML operating model
 
