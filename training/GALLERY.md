@@ -367,3 +367,9 @@ Project administrators and editors can give uploaded device software a searchabl
 ![Protected registry credentials](61-protected-registry-credentials.png)
 
 Project administrators and editors manage private OCI access in a dedicated no-YAML workspace. Studio encrypts passwords and tokens before persistence, displays only a short one-way fingerprint, never prepopulates the edit secret, prevents cross-project and registry-host mismatches, and retains image references when access is deactivated. Firefox created a disposable token reference for `registry.example.invalid`, confirmed neither the DOM nor redacted API contained either secret, rotated it to a different fingerprint, captured the active record, and deactivated it. The non-routable host deliberately validates credential lifecycle without claiming a private image pull; launcher authentication remains unverified until real registry reachability and CA trust are supplied. Both production BGP routers remained ready.
+
+## 62 — Automatic stale-upload cleanup
+
+![Automatic stale-upload cleanup](62-stale-upload-cleanup.png)
+
+The image onboarding page retains the operator's 20 most recent upload sessions with exact byte progress, resume deadline, lifecycle state, and quarantine disposition. Celery Beat schedules a bounded cleanup every 15 minutes; the worker row-locks expired active or failed sessions, removes only files resolved beneath Studio's quarantine root, persists an idempotent cleanup result, releases reservation accounting, and emits system audit evidence. Firefox created a real 4 KiB upload session and transferred 1 KiB into quarantine. Acceptance moved only that test deadline into the past, dispatched the actual Celery task `669c775e…`, and verified `Expired / Released`, 1 KiB of retained progress, no internal path in the API, and a visible `image.upload_expired` audit event. Both production routers remained ready.

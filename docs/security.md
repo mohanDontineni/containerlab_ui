@@ -20,6 +20,10 @@ The single-node installation publishes validated Docker/OCI archives through a s
 
 Writing to the containerd socket is equivalent to node-runtime administration. Publication remains limited to administrator/editor roles and retains checksum re-verification, license acknowledgement, idempotency, and audit events. This mode is not an image distribution mechanism for multi-node clusters; use a trusted registry there.
 
+## Upload quarantine lifecycle
+
+Incomplete image uploads receive a fixed 24-hour resume deadline. Every 15 minutes, a bounded Celery task locks at most 200 expired active or failed sessions, deletes only regular files whose resolved path remains under Studio's configured quarantine root, records bytes and removal outcome, and changes active sessions to `expired`. Replays skip sessions with an existing cleanup result, so duplicate scheduler delivery is harmless. System audit events contain filename, sizes, status, and removal result but never the internal path; browser/API upload projections likewise exclude `artifact_destination`. Files outside the quarantine root are never removed even if a corrupted database row points to them.
+
 ## Runtime startup configurations
 
 Startup configurations are encrypted and versioned in PostgreSQL. At deployment time the worker decrypts only the selected versions and writes deployment-labeled ConfigMaps in the isolated lab namespace; Clabernetes mounts those files into the appropriate launcher and Containerlab binds them into supported appliances. The Topology definition contains only mount paths, not configuration content. Topology audit events contain checksums and counts rather than plaintext.
