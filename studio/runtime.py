@@ -6,6 +6,7 @@ import json
 import shlex
 import time
 import struct
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from django.conf import settings
 from django.db.models import Q
@@ -22,6 +23,22 @@ class CapabilityError(RuntimeError): pass
 PCAP_MAGICS=(b"\xd4\xc3\xb2\xa1",b"\xa1\xb2\xc3\xd4",b"\x4d\x3c\xb2\xa1",b"\xa1\xb2\x3c\x4d")
 CAPTURE_STOP_MARKER=b"CLABSTUDIOPCAPSTOP"
 CAPTURE_STOP_DESTINATION=bytes.fromhex("ff020000000000000000000000000114")
+
+def cpu_to_millicores(value):
+    text=str(value or "").strip();units={"n":Decimal("0.000001"),"u":Decimal("0.001"),"m":Decimal("1")}
+    suffix=text[-1:] if text[-1:] in units else ""
+    try: result=Decimal(text[:-1] if suffix else text)*(units[suffix] if suffix else Decimal(1000))
+    except (InvalidOperation,ValueError): raise CapabilityError("Metrics API returned an invalid CPU quantity")
+    if result<0 or result>Decimal(100_000_000): raise CapabilityError("Metrics API CPU quantity is outside safe bounds")
+    return int(result.to_integral_value())
+
+def memory_to_mib(value):
+    text=str(value or "").strip();multipliers={"Ki":Decimal(1024),"Mi":Decimal(1024**2),"Gi":Decimal(1024**3),"Ti":Decimal(1024**4),"K":Decimal(1000),"M":Decimal(1000**2),"G":Decimal(1000**3),"T":Decimal(1000**4)}
+    suffix=next((unit for unit in multipliers if text.endswith(unit)),"")
+    try: byte_count=Decimal(text[:-len(suffix)] if suffix else text)*(multipliers[suffix] if suffix else 1)
+    except (InvalidOperation,ValueError): raise CapabilityError("Metrics API returned an invalid memory quantity")
+    if byte_count<0 or byte_count>Decimal(1024**6): raise CapabilityError("Metrics API memory quantity is outside safe bounds")
+    return int((byte_count/Decimal(1024**2)).to_integral_value(rounding="ROUND_CEILING"))
 
 def strip_capture_stop_packets(payload):
     """Remove locally generated stop frames from a classic PCAP stream."""
@@ -163,6 +180,16 @@ class ClabernetesAdapter:
         node_items=self.custom.list_namespaced_custom_object(API_GROUP,API_VERSION,deployment.namespace,"nodes").get("items",[])
         pods=self.core.list_namespaced_pod(deployment.namespace,label_selector="c9s.run/topologyOwner=topology").items
         pod_by_node={pod.metadata.labels.get("c9s.run/topologyNode"):pod for pod in pods if pod.metadata.labels}
+        metric_by_pod={};metrics_error=None
+        try:
+            metric_items=self.custom.list_namespaced_custom_object("metrics.k8s.io","v1beta1",deployment.namespace,"pods").get("items",[])
+            for metric in metric_items[:256]:
+                usage={"cpu_millicores":0,"memory_mib":0}
+                for container in metric.get("containers",[])[:64]:
+                    values=container.get("usage",{});usage["cpu_millicores"]+=cpu_to_millicores(values.get("cpu"));usage["memory_mib"]+=memory_to_mib(values.get("memory"))
+                usage.update({"timestamp":metric.get("timestamp"),"window":metric.get("window")});metric_by_pod[metric.get("metadata",{}).get("name")]=usage
+        except (ApiException,CapabilityError) as exc:
+            metrics_error="metrics_api_unavailable" if isinstance(exc,ApiException) and exc.status in (404,503) else "metrics_read_failed"
         observed=[]
         for item in node_items:
             name=item.get("metadata",{}).get("labels",{}).get("c9s.run/topologyNode") or item.get("metadata",{}).get("name")
@@ -182,7 +209,8 @@ class ClabernetesAdapter:
             observed.append({"name":name,"node_uid":item.get("metadata",{}).get("uid"),"readiness":readiness,
                 "pod":pod.metadata.name if pod else None,"pod_uid":str(pod.metadata.uid) if pod else None,"worker":pod.spec.node_name if pod else None,
                 "pod_phase":pod.status.phase if pod else "Pending","appliance_running":appliance_running,"appliance_paused":appliance_paused,
-                "deployment_disabled":DISABLE_DEPLOYMENTS_LABEL in item.get("metadata",{}).get("labels",{})})
+                "deployment_disabled":DISABLE_DEPLOYMENTS_LABEL in item.get("metadata",{}).get("labels",{}),
+                "telemetry":metric_by_pod.get(pod.metadata.name) if pod else None,"telemetry_error":metrics_error})
         return observed
     def ping(self,deployment,node,target,count=3,timeout=2):
         device=deployment.devices.select_related("lab_node").get(lab_node=node)

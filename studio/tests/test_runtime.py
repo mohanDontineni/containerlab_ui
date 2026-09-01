@@ -135,7 +135,7 @@ def test_observe_devices_resolves_only_topology_owned_pods(monkeypatch):
     core=SimpleNamespace(list_namespaced_pod=lambda *_args,**_kwargs:SimpleNamespace(items=[pod]),connect_get_namespaced_pod_exec=object())
     adapter=ClabernetesAdapter(custom_api=custom,core_api=core)
     observed=adapter.observe_devices(SimpleNamespace(namespace="lab-one"))
-    assert observed==[{"name":"r1","node_uid":"node-uid","readiness":"ready","pod":"r1-pod","pod_uid":"pod-uid","worker":"worker-1","pod_phase":"Running","appliance_running":True,"appliance_paused":False,"deployment_disabled":False}]
+    assert observed==[{"name":"r1","node_uid":"node-uid","readiness":"ready","pod":"r1-pod","pod_uid":"pod-uid","worker":"worker-1","pod_phase":"Running","appliance_running":True,"appliance_paused":False,"deployment_disabled":False,"telemetry":None,"telemetry_error":None}]
 
 def test_observe_devices_does_not_trust_controller_readiness_without_appliance(monkeypatch):
     monkeypatch.setattr("studio.runtime.stream",lambda *_args,**_kwargs:"")

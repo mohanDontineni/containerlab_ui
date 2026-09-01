@@ -196,6 +196,7 @@ def reconcile_deployment(self,deployment_id):
                 desired_suspended=current and current.runtime_resources.get("manual_desired_state")=="suspended"
                 desired_stopped=current and current.runtime_resources.get("manual_desired_state")=="stopped"
                 resources={"node_uid":observed_device["node_uid"],"pod":observed_device["pod"],"pod_uid":observed_device["pod_uid"],"pod_phase":observed_device["pod_phase"],"appliance_running":observed_device["appliance_running"],"appliance_paused":observed_device["appliance_paused"]}
+                resources["telemetry"]={"available":True,**observed_device["telemetry"]} if observed_device.get("telemetry") else {"available":False,"reason":observed_device.get("telemetry_error") or ("compute_released" if not observed_device.get("pod") else "metrics_pending")}
                 same_launcher=current and current.runtime_resources.get("pod_uid")==observed_device["pod_uid"]
                 if same_launcher: resources={**current.runtime_resources,**resources}
                 if desired_suspended or desired_stopped:
