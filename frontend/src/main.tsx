@@ -25,11 +25,13 @@ import {
   applyNodeChanges,
   addEdge,
   MarkerType,
+  ViewportPortal,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import "./style.css";
 import "./clone.css";
 import "./configuration.css";
+import "./annotations.css";
 import { interfaceFromHandle } from "./topology-utils";
 
 type Template = {
@@ -84,7 +86,9 @@ type SavedLink = {
   label: string;
   properties: Record<string, unknown>;
 };
-type Snapshot = { nodes: Node<DeviceData>[]; edges: Edge[] };
+type TopologyAnnotation = { id:string;type:"note"|"region";x:number;y:number;width:number;height:number;
+  text:string;color:"cyan"|"blue"|"violet"|"amber"|"rose"|"green"|"slate";fontSize:number;zIndex:number };
+type Snapshot = { nodes: Node<DeviceData>[]; edges: Edge[]; annotations:TopologyAnnotation[] };
 type PublishedImage = { id: string; name: string; digest: string; architecture: string; status: string };
 type RevisionSummary = { id:string; revision_number:number; edit_version:number; immutable:boolean; topology_checksum:string;
   node_count:number; link_count:number; deployment_count:number; created_at:string; is_current_draft:boolean };
@@ -163,6 +167,7 @@ function Workspace() {
   const [images, setImages] = useState<PublishedImage[]>([]);
   const [nodes, setNodes] = useState<Node<DeviceData>[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
+  const [annotations,setAnnotations]=useState<TopologyAnnotation[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [editVersion, setEditVersion] = useState(0);
   const [saving, setSaving] = useState(false);
@@ -187,10 +192,10 @@ function Workspace() {
   const snapshot = useCallback(() => {
     setHistory((h) => [
       ...h.slice(-29),
-      { nodes: structuredClone(nodes), edges: structuredClone(edges) },
+      { nodes: structuredClone(nodes), edges: structuredClone(edges),annotations:structuredClone(annotations) },
     ]);
     setFuture([]);
-  }, [nodes, edges]);
+  }, [nodes, edges,annotations]);
   useEffect(() => {
     Promise.all([
       fetch("/api/v1/topology/templates/").then((r) => r.json()),
@@ -241,6 +246,7 @@ function Workspace() {
             data: { properties: l.properties },
           })),
         );
+        setAnnotations(Array.isArray(doc.annotations)?doc.annotations:[]);
         setEditVersion(doc.editVersion);
         counter.current = doc.nodes.length + 1;
         setNotice("Draft loaded");
@@ -269,6 +275,7 @@ function Workspace() {
   );
   const selectedNode = nodes.find((n) => n.id === selected);
   const selectedEdge = edges.find((e) => e.id === selected);
+  const selectedAnnotation=annotations.find((annotation)=>`annotation:${annotation.id}`===selected);
   const onNodesChange = useCallback(
     (changes: NodeChange<Node<DeviceData>>[]) => {
       setNodes((n) => applyNodeChanges(changes, n));
@@ -384,6 +391,25 @@ function Workspace() {
     },
     [templates, rf, nodes, snapshot],
   );
+  const addAnnotation=(type:"note"|"region")=>{
+    if(!rf)return;snapshot();const center=rf.screenToFlowPosition({x:window.innerWidth/2,y:window.innerHeight/2});
+    const annotation:TopologyAnnotation={id:crypto.randomUUID(),type,x:center.x-(type==="region"?180:120),y:center.y-(type==="region"?100:45),
+      width:type==="region"?360:240,height:type==="region"?200:90,text:type==="region"?"Network zone":"Add an operator note",
+      color:type==="region"?"blue":"amber",fontSize:type==="region"?16:14,zIndex:type==="region"?-10:10};
+    setAnnotations(items=>[...items,annotation]);setSelected(`annotation:${annotation.id}`);setDirty(true);setNotice(type==="region"?"Region added":"Note added");
+  };
+  const updateAnnotation=(id:string,changes:Partial<TopologyAnnotation>)=>{
+    setAnnotations(items=>items.map(item=>item.id===id?{...item,...changes}:item));setDirty(true);
+  };
+  const beginAnnotationGesture=(event:React.PointerEvent,annotation:TopologyAnnotation,resize=false)=>{
+    if(!rf)return;event.preventDefault();event.stopPropagation();snapshot();setSelected(`annotation:${annotation.id}`);
+    const startX=event.clientX,startY=event.clientY,zoom=rf.getZoom(),origin={x:annotation.x,y:annotation.y,width:annotation.width,height:annotation.height};
+    const move=(next:PointerEvent)=>{const dx=(next.clientX-startX)/zoom,dy=(next.clientY-startY)/zoom;
+      if(resize)updateAnnotation(annotation.id,{width:Math.max(80,Math.min(2000,origin.width+dx)),height:Math.max(40,Math.min(1600,origin.height+dy))});
+      else updateAnnotation(annotation.id,{x:Math.max(-10000,Math.min(10000,origin.x+dx)),y:Math.max(-10000,Math.min(10000,origin.y+dy))});};
+    const stop=()=>{window.removeEventListener("pointermove",move);window.removeEventListener("pointerup",stop)};
+    window.addEventListener("pointermove",move);window.addEventListener("pointerup",stop,{once:true});
+  };
   const save = async () => {
     setSaving(true);
     setNotice("Saving draft…");
@@ -407,7 +433,7 @@ function Workspace() {
         label: typeof e.label === "string" ? e.label : "",
         properties: e.data?.properties || {},
       })),
-      annotations: [],
+      annotations,
     };
     try {
       const r = await fetch(`/api/v1/labs/${labId}/topology/`, {
@@ -508,11 +534,12 @@ function Workspace() {
     const previous = history.at(-1);
     if (!previous) return;
     setFuture((f) => [
-      { nodes: structuredClone(nodes), edges: structuredClone(edges) },
+      { nodes: structuredClone(nodes), edges: structuredClone(edges),annotations:structuredClone(annotations) },
       ...f,
     ]);
     setNodes(previous.nodes);
     setEdges(previous.edges);
+    setAnnotations(previous.annotations);
     setHistory((h) => h.slice(0, -1));
     setDirty(true);
   };
@@ -521,10 +548,11 @@ function Workspace() {
     if (!next) return;
     setHistory((h) => [
       ...h,
-      { nodes: structuredClone(nodes), edges: structuredClone(edges) },
+      { nodes: structuredClone(nodes), edges: structuredClone(edges),annotations:structuredClone(annotations) },
     ]);
     setNodes(next.nodes);
     setEdges(next.edges);
+    setAnnotations(next.annotations);
     setFuture((f) => f.slice(1));
     setDirty(true);
   };
@@ -559,6 +587,7 @@ function Workspace() {
       setNodes((ns) => ns.filter((n) => n.id !== selectedNode.id));
     } else if (selectedEdge)
       setEdges((es) => es.filter((e) => e.id !== selectedEdge.id));
+    else if(selectedAnnotation)setAnnotations(items=>items.filter(item=>item.id!==selectedAnnotation.id));
     setSelected(null);
     setDirty(true);
   };
@@ -603,6 +632,8 @@ function Workspace() {
           </button>
           <i></i>
           <button onClick={() => rf?.fitView({ padding: 0.2 })}>Fit</button>
+          <button onClick={()=>addAnnotation("note")} title="Add a movable text note">＋ Note</button>
+          <button onClick={()=>addAnnotation("region")} title="Add a colored topology region">▧ Region</button>
           <button onClick={exportBundle} disabled={dirty} title="Download a product-native lab backup. No YAML editing is required.">Backup</button>
           <button onClick={() => setCloneOpen(true)} disabled={dirty}>Save as</button>
           <button onClick={openHistory} disabled={dirty}>History</button>
@@ -717,6 +748,16 @@ function Workspace() {
             maxZoom={2}
           >
             <Background color="#29435a" gap={24} size={1} />
+            <ViewportPortal>
+              {annotations.map(annotation=><div key={annotation.id}
+                className={`topology-annotation ${annotation.type} color-${annotation.color} ${selected===`annotation:${annotation.id}`?"selected":""}`}
+                style={{transform:`translate(${annotation.x}px,${annotation.y}px)`,width:annotation.width,height:annotation.height,
+                  zIndex:annotation.zIndex,fontSize:annotation.fontSize}}
+                onPointerDown={event=>beginAnnotationGesture(event,annotation)} onClick={event=>{event.stopPropagation();setSelected(`annotation:${annotation.id}`)}}>
+                <span>{annotation.text}</span><button type="button" className="annotation-resize" aria-label={`Resize ${annotation.type}`}
+                  onPointerDown={event=>beginAnnotationGesture(event,annotation,true)}>⌟</button>
+              </div>)}
+            </ViewportPortal>
             <Controls showInteractive={false} />
             <MiniMap
               pannable
@@ -726,8 +767,8 @@ function Workspace() {
             />
             <Panel position="top-left" className="canvas-hint">
               {nodes.length
-                ? `${nodes.length} devices · ${edges.length} links`
-                : "Drag a device here to begin"}
+                ? `${nodes.length} devices · ${edges.length} links · ${annotations.length} canvas objects`
+                : annotations.length?`${annotations.length} canvas objects · Drag a device here to continue`:"Drag a device here to begin"}
             </Panel>
           </ReactFlow>
         </main>
@@ -740,7 +781,7 @@ function Workspace() {
                   ? "Device selected"
                   : selectedEdge
                     ? "Link selected"
-                    : "Nothing selected"}
+                    : selectedAnnotation?`${selectedAnnotation.type} selected`:"Nothing selected"}
               </small>
             </p>
           </div>
@@ -843,6 +884,19 @@ function Workspace() {
               <button className="danger" onClick={removeSelected}>
                 Remove link
               </button>
+            </div>
+          ) : selectedAnnotation ? (
+            <div className="properties annotation-properties">
+              <label>Object type<input value={selectedAnnotation.type==="note"?"Text note":"Colored region"} disabled /></label>
+              <label>Text<textarea maxLength={2000} value={selectedAnnotation.text}
+                onChange={event=>updateAnnotation(selectedAnnotation.id,{text:event.target.value})}/><small className="field-help">Visible on the topology canvas and included in native backup/restore.</small></label>
+              <label>Color<select value={selectedAnnotation.color} onChange={event=>updateAnnotation(selectedAnnotation.id,{color:event.target.value as TopologyAnnotation["color"]})}>
+                <option value="cyan">Cyan</option><option value="blue">Blue</option><option value="violet">Violet</option><option value="amber">Amber</option><option value="rose">Rose</option><option value="green">Green</option><option value="slate">Slate</option>
+              </select></label>
+              <label>Font size<input type="number" min={10} max={32} value={selectedAnnotation.fontSize} onChange={event=>updateAnnotation(selectedAnnotation.id,{fontSize:Number(event.target.value)})}/></label>
+              <div className="annotation-dimensions"><label>Width<input type="number" min={80} max={2000} value={Math.round(selectedAnnotation.width)} onChange={event=>updateAnnotation(selectedAnnotation.id,{width:Number(event.target.value)})}/></label><label>Height<input type="number" min={40} max={1600} value={Math.round(selectedAnnotation.height)} onChange={event=>updateAnnotation(selectedAnnotation.id,{height:Number(event.target.value)})}/></label></div>
+              <label>Layer<select value={selectedAnnotation.zIndex} onChange={event=>updateAnnotation(selectedAnnotation.id,{zIndex:Number(event.target.value)})}><option value={-20}>Behind all devices</option><option value={-10}>Behind devices</option><option value={10}>Above devices</option><option value={20}>Top annotation</option></select></label>
+              <button className="danger" onClick={removeSelected}>Remove canvas object</button>
             </div>
           ) : (
             <div className="inspector-empty">

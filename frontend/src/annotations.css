@@ -1,0 +1,31 @@
+.topology-annotation {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: flex;
+  padding: 12px;
+  cursor: move;
+  user-select: none;
+  white-space: pre-wrap;
+  overflow: hidden;
+  line-height: 1.45;
+  color: #dceaf3;
+  border: 1px solid rgba(38, 198, 218, 0.45);
+  background: rgba(16, 49, 65, 0.78);
+  border-radius: 8px;
+  box-shadow: 0 7px 18px rgba(0, 0, 0, 0.16);
+  pointer-events: auto;
+}
+.topology-annotation.region { align-items: flex-start; background: rgba(44, 116, 163, 0.09); border-style: dashed; border-width: 2px; color: #76b8d8; }
+.topology-annotation.note { align-items: center; }
+.topology-annotation.selected { outline: 2px solid rgba(118, 226, 238, 0.68); outline-offset: 2px; }
+.topology-annotation.color-blue { border-color: #4c91d7; background-color: rgba(42, 101, 156, 0.14); }
+.topology-annotation.color-violet { border-color: #946dff; background-color: rgba(115, 80, 199, 0.13); }
+.topology-annotation.color-amber { border-color: #d59b3f; background-color: rgba(153, 106, 33, 0.14); color: #f0cf91; }
+.topology-annotation.color-rose { border-color: #e1647a; background-color: rgba(154, 49, 69, 0.14); }
+.topology-annotation.color-green { border-color: #43bf92; background-color: rgba(39, 128, 96, 0.13); }
+.topology-annotation.color-slate { border-color: #60798d; background-color: rgba(60, 80, 96, 0.16); }
+.annotation-resize { position: absolute; right: 1px; bottom: 0; width: 22px; height: 22px; border: 0; background: transparent; color: currentColor; cursor: nwse-resize; opacity: 0.65; }
+.annotation-properties textarea { min-height: 110px; resize: vertical; }
+.annotation-dimensions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.annotation-dimensions label { margin-bottom: 10px; }

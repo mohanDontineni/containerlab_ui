@@ -97,6 +97,28 @@ def test_topology_workspace_persists_device_interfaces_and_links(client):
     assert audit.metadata["node_count"]==2 and audit.metadata["link_count"]==1 and "startupConfiguration" not in audit.metadata
 
 @pytest.mark.django_db
+def test_topology_annotations_are_bounded_persisted_and_checksum_protected(client):
+    owner=User.objects.create_user("annotation-owner",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="Annotation project");lab=Lab.objects.create(project=project,name="Annotated lab")
+    client.force_login(owner);note_id=str(uuid.uuid4());region_id=str(uuid.uuid4())
+    annotations=[{"id":note_id,"type":"note","x":120,"y":85,"width":240,"height":90,"text":"Change window 22:00 UTC",
+        "color":"amber","fontSize":14,"zIndex":10},{"id":region_id,"type":"region","x":50.1234,"y":40,"width":620,"height":310,
+        "text":"Core routing","color":"blue","fontSize":16,"zIndex":-10}]
+    first=client.put(f"/api/v1/labs/{lab.id}/topology/",json.dumps({"editVersion":0,"nodes":[],"links":[],"annotations":annotations}),content_type="application/json")
+    assert first.status_code==200;first_checksum=first.json()["checksum"]
+    document=client.get(f"/api/v1/labs/{lab.id}/topology/").json()
+    assert document["annotations"][0]["text"]=="Change window 22:00 UTC" and document["annotations"][1]["x"]==50.12
+    annotations[0]["text"]="Approved change window"
+    second=client.put(f"/api/v1/labs/{lab.id}/topology/",json.dumps({"editVersion":1,"nodes":[],"links":[],"annotations":annotations}),content_type="application/json")
+    assert second.status_code==200 and second.json()["checksum"]!=first_checksum
+    invalid={**annotations[0],"id":region_id}
+    rejected=client.put(f"/api/v1/labs/{lab.id}/topology/",json.dumps({"editVersion":2,"nodes":[],"links":[],"annotations":[annotations[1],invalid]}),content_type="application/json")
+    assert rejected.status_code==422 and "unique" in rejected.json()["error"]
+    oversized={**annotations[0],"id":str(uuid.uuid4()),"text":"x"*2001}
+    rejected=client.put(f"/api/v1/labs/{lab.id}/topology/",json.dumps({"editVersion":2,"nodes":[],"links":[],"annotations":[oversized]}),content_type="application/json")
+    assert rejected.status_code==422 and "2000" in rejected.json()["error"]
+
+@pytest.mark.django_db
 def test_firewall_catalog_exposes_policy_and_interface_requirements(client):
     user=User.objects.create_user("firewall-catalog",password="long-enough-password")
     client.force_login(user)

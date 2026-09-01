@@ -4,6 +4,7 @@ from django.contrib.auth import update_session_auth_hash
 from django.core.exceptions import PermissionDenied
 import hashlib
 import json
+import math
 import uuid
 from django.db import transaction
 from django.db.models import Count, F, Max, Q
@@ -21,6 +22,38 @@ from .quotas import normalized_quotas,project_usage,quota_exceeded
 
 def visible_projects(user):
     return Project.objects.filter(Q(owner=user) | Q(memberships__user=user),deleted_at__isnull=True).distinct()
+
+ANNOTATION_COLORS={"cyan","blue","violet","amber","rose","green","slate"}
+def validate_topology_annotations(value):
+    if not isinstance(value,list): raise ValueError("Annotations must be a list")
+    if len(value)>200: raise ValueError("A topology can contain at most 200 annotations")
+    normalized=[];identities=set()
+    for index,item in enumerate(value,1):
+        if not isinstance(item,dict): raise ValueError(f"Annotation {index} must be an object")
+        try: identity=str(uuid.UUID(str(item.get("id"))))
+        except (TypeError,ValueError,AttributeError): raise ValueError(f"Annotation {index} needs a valid UUID")
+        if identity in identities: raise ValueError("Annotation IDs must be unique")
+        identities.add(identity);kind=item.get("type")
+        if kind not in ("note","region"): raise ValueError(f"Annotation {index} has an unsupported type")
+        geometry={}
+        for field,minimum,maximum in (("x",-10000,10000),("y",-10000,10000),("width",80,2000),("height",40,1600)):
+            number=item.get(field)
+            if isinstance(number,bool) or not isinstance(number,(int,float)) or not math.isfinite(number) or number<minimum or number>maximum:
+                raise ValueError(f"Annotation {index} has an invalid {field}")
+            geometry[field]=round(float(number),2)
+        text=item.get("text","")
+        if not isinstance(text,str) or not text.strip() or len(text.encode("utf-8"))>2000:
+            raise ValueError(f"Annotation {index} text must be between 1 and 2000 UTF-8 bytes")
+        color=item.get("color","cyan")
+        if color not in ANNOTATION_COLORS: raise ValueError(f"Annotation {index} has an invalid color")
+        font_size=item.get("fontSize",14);z_index=item.get("zIndex",0)
+        if isinstance(font_size,bool) or not isinstance(font_size,int) or not 10<=font_size<=32:
+            raise ValueError(f"Annotation {index} has an invalid font size")
+        if isinstance(z_index,bool) or not isinstance(z_index,int) or not -100<=z_index<=100:
+            raise ValueError(f"Annotation {index} has an invalid layer")
+        normalized.append({"id":identity,"type":kind,**geometry,"text":text.strip(),"color":color,
+            "fontSize":font_size,"zIndex":z_index})
+    return normalized
 
 @login_required
 def projects(request):
@@ -157,6 +190,8 @@ def topology_document(request, lab_id):
     except (ValueError, TypeError): return JsonResponse({"error": "Invalid JSON document"}, status=400)
     if not isinstance(payload, dict) or not isinstance(payload.get("nodes", []), list) or not isinstance(payload.get("links", []), list):
         return JsonResponse({"error": "Topology nodes and links must be lists"}, status=400)
+    try: annotations=validate_topology_annotations(payload.get("annotations",[]))
+    except ValueError as exc: return JsonResponse({"error":str(exc)},status=422)
     node_limit=normalized_quotas(lab.project)["max_nodes_per_lab"]
     if len(payload.get("nodes", []))>node_limit: return JsonResponse(quota_exceeded("nodes_per_lab",node_limit,0,len(payload.get("nodes",[]))),status=409)
     if len(payload.get("links", [])) > 1000: return JsonResponse({"error": "Topology exceeds workspace limits"}, status=422)
@@ -175,14 +210,14 @@ def topology_document(request, lab_id):
         revision = lab.current_draft
         if revision and revision.immutable: return JsonResponse({"error": "Published revisions cannot be edited"}, status=409)
         if revision and int(payload.get("editVersion", -1)) != revision.edit_version: return JsonResponse({"error": "This draft changed in another session", "editVersion": revision.edit_version}, status=409)
-        canonical = json.dumps({"nodes": payload.get("nodes", []), "links": payload.get("links", [])}, sort_keys=True, separators=(",", ":"))
+        canonical = json.dumps({"nodes": payload.get("nodes", []), "links": payload.get("links", []),"annotations":annotations}, sort_keys=True, separators=(",", ":"))
         if not revision:
             number = (lab.revisions.aggregate(n=Max("revision_number"))["n"] or 0) + 1
-            revision = LabRevision.objects.create(lab=lab, revision_number=number, topology_checksum=hashlib.sha256(canonical.encode()).hexdigest(), canvas_layout={}, annotations=payload.get("annotations", []))
+            revision = LabRevision.objects.create(lab=lab, revision_number=number, topology_checksum=hashlib.sha256(canonical.encode()).hexdigest(), canvas_layout={}, annotations=annotations)
             lab.current_draft = revision; lab.save(update_fields=["current_draft", "updated_at"])
         else:
             revision.links.all().delete(); revision.nodes.all().delete()
-            revision.edit_version += 1; revision.topology_checksum = hashlib.sha256(canonical.encode()).hexdigest(); revision.annotations = payload.get("annotations", []); revision.save()
+            revision.edit_version += 1; revision.topology_checksum = hashlib.sha256(canonical.encode()).hexdigest(); revision.annotations = annotations; revision.save()
         node_map, interface_map = {}, {}
         templates = {str(t.id): t for t in DeviceTemplateVersion.objects.filter(id__in=[n.get("templateVersionId") for n in payload.get("nodes", [])])}
         image_ids=[n.get("publishedImageId") for n in payload.get("nodes", []) if n.get("publishedImageId")]
