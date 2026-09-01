@@ -46,8 +46,8 @@
     <div class="service-list">
       <div><span class="service-icon db">▤</span><p><strong>PostgreSQL</strong><small>Application database</small></p><b class="healthy">Ready</b></div>
       <div><span class="service-icon queue">↯</span><p><strong>Redis & Celery</strong><small>Jobs and live events</small></p><b class="healthy">Ready</b></div>
-      <div><span class="service-icon cluster">⬡</span><p><strong>Clabernetes</strong><small>Runtime v0.8.0</small></p><b class="healthy">Ready</b></div>
-      <div><span class="service-icon storage">▰</span><p><strong>Resource metrics</strong><small>Metrics API</small></p><b class="unavailable">Unavailable</b></div>
+      <div><span class="service-icon cluster">⬡</span><p><strong>Clabernetes</strong><small>{% if platform_health.runtime %}Runtime v{{ platform_health.runtime.version }} · reconciled{% else %}Awaiting first runtime reconciliation{% endif %}</small></p><b class="{% if platform_health.runtime.available %}healthy{% else %}unavailable{% endif %}">{% if platform_health.runtime.available %}Ready{% else %}Pending{% endif %}</b></div>
+      <div><span class="service-icon storage">▰</span><p><strong>Resource metrics</strong><small>{% if platform_health.metrics.checked_at %}Metrics API · worker verified{% else %}Awaiting capability probe{% endif %}</small></p><b class="{% if platform_health.metrics.available %}healthy{% else %}unavailable{% endif %}">{% if platform_health.metrics.available %}Ready{% elif platform_health.metrics %}Unavailable{% else %}Pending{% endif %}</b></div>
     </div>
   </aside>
 

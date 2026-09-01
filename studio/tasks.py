@@ -3,12 +3,17 @@ import hashlib
 import os
 from pathlib import Path
 from django.conf import settings
+from django.core.cache import cache
 from django.db import transaction
 from django.db.models import Max
 from django.utils import timezone
 from .configurations import encrypt_configuration
 from .models import AuditEvent, CaptureSession, ConfigurationVersion, ConsoleSession, DeploymentSchedule, DeviceInstance, ImageArtifact, ImageBuild, LabArtifact, LabDeployment, LabLink, LabNode, OperationJob, Project, PublishedImage
 from .runtime import ClabernetesAdapter
+
+def publish_platform_health(key,payload):
+    try: cache.set(key,payload,120)
+    except Exception: pass
 
 @shared_task(bind=True,autoretry_for=(ConnectionError,),retry_backoff=True,max_retries=5)
 def execute_operation(self,job_id):
@@ -189,6 +194,12 @@ def reconcile_deployment(self,deployment_id):
         deployment.error_details={} if observed!=LabDeployment.State.FAILED else {"runtime_status":status}
         deployment.resource_identities={**deployment.resource_identities,"status":status}
         observed_devices=adapter.observe_devices(deployment)
+        telemetry_available=any(item.get("telemetry") for item in observed_devices)
+        telemetry_reason=next((item.get("telemetry_error") for item in observed_devices if item.get("telemetry_error")),None)
+        publish_platform_health("studio:platform:metrics",{"available":telemetry_available,"reason":telemetry_reason,
+            "checked_at":timezone.now().isoformat()})
+        publish_platform_health("studio:platform:runtime",{"available":True,"version":deployment.runtime_version,
+            "checked_at":timezone.now().isoformat()})
         for observed_device in observed_devices:
             node=deployment.revision.nodes.filter(name=observed_device["name"]).first()
             if node:

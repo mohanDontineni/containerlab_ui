@@ -59,6 +59,7 @@ REST_FRAMEWORK = {"DEFAULT_AUTHENTICATION_CLASSES": ["rest_framework.authenticat
     "EXCEPTION_HANDLER": "studio.api.exception_handler"}
 SPECTACULAR_SETTINGS = {"TITLE": "ContainerLab Studio API", "VERSION": "1.0.0"}
 redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+CACHES = {"default": {"BACKEND": "django.core.cache.backends.redis.RedisCache", "LOCATION": redis_url}}
 CHANNEL_LAYERS = {"default": {"BACKEND": "channels_redis.core.RedisChannelLayer", "CONFIG": {"hosts": [redis_url]}}}
 CELERY_BROKER_URL = redis_url
 CELERY_RESULT_BACKEND = redis_url

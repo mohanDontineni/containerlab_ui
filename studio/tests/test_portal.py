@@ -8,6 +8,16 @@ from django.utils import timezone
 from studio.models import AuditEvent, DeviceTemplateVersion, ImageArtifact, Lab, LabDeployment, LabFolder, LabLink, LabNode, LabRevision, Project, ProjectMembership, PublishedImage, User
 
 @pytest.mark.django_db
+def test_dashboard_reports_expiring_worker_verified_platform_capabilities(client,monkeypatch):
+    user=User.objects.create_user("health-viewer",password="long-enough-password");client.force_login(user)
+    values={"studio:platform:metrics":{"available":True,"checked_at":"2026-09-01T10:00:00Z"},
+        "studio:platform:runtime":{"available":True,"version":"0.8.0","checked_at":"2026-09-01T10:00:00Z"}}
+    monkeypatch.setattr("studio.views.cache.get",lambda key:values.get(key))
+    response=client.get("/");html=response.content.decode()
+    assert response.status_code==200 and "Metrics API · worker verified" in html and "Runtime v0.8.0 · reconciled" in html
+    assert html.count('class="healthy">Ready</b>')==4
+
+@pytest.mark.django_db
 def test_topology_edit_lease_blocks_second_editor_and_expires(client):
     owner=User.objects.create_user("lease-owner",password="long-enough-password")
     editor=User.objects.create_user("lease-editor",password="long-enough-password")
