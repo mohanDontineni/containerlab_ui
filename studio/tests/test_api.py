@@ -623,8 +623,12 @@ def test_owner_can_publish_and_schedule_deployable_lab(django_capture_on_commit_
     image=PublishedImage.objects.create(artifact=artifact,registry_digest="docker.io/alpine@sha256:"+"b"*64,repository="docker.io/alpine",architecture="amd64")
     LabNode.objects.create(revision=revision,name="client",template_version=template,published_image=image)
     c=APIClient(); c.force_authenticate(owner)
+    preview=c.get(f"/api/v1/labs/{lab.id}/deploy-preview/")
+    assert preview.status_code==200 and preview.data["can_deploy"] is True
+    assert preview.data["draft"]["id"]==str(revision.id) and preview.data["capacity"]["after"]==1
     with django_capture_on_commit_callbacks(execute=False):
-        response=c.post(f"/api/v1/labs/{lab.id}/deploy/",{},format="json",HTTP_IDEMPOTENCY_KEY="test-deploy")
+        response=c.post(f"/api/v1/labs/{lab.id}/deploy/",{"expected_draft":str(revision.id),"strategy":"new_runtime",
+            "acknowledge_existing_runtimes":False},format="json",HTTP_IDEMPOTENCY_KEY="test-deploy")
     assert response.status_code==202, response.data
     lab.refresh_from_db(); assert lab.current_draft is None
     assert response.data["deployment"]["namespace"].startswith("clab-")
@@ -646,10 +650,50 @@ def test_active_deployment_quota_blocks_new_runtime_without_consuming_draft():
     image=PublishedImage.objects.create(artifact=artifact,registry_digest="docker.io/alpine@sha256:"+"9"*64,repository="docker.io/alpine",architecture="amd64")
     LabNode.objects.create(revision=revision,name="client",template_version=template,published_image=image)
     client=APIClient();client.force_authenticate(owner)
-    response=client.post(f"/api/v1/labs/{lab.id}/deploy/",{},format="json",HTTP_IDEMPOTENCY_KEY="quota-blocked-deploy")
+    preview=client.get(f"/api/v1/labs/{lab.id}/deploy-preview/")
+    assert preview.status_code==200 and preview.data["can_deploy"] is False
+    assert preview.data["capacity"]=={"used":1,"limit":1,"after":2}
+    response=client.post(f"/api/v1/labs/{lab.id}/deploy/",{"expected_draft":str(revision.id),"strategy":"new_runtime",
+        "acknowledge_existing_runtimes":False},format="json",HTTP_IDEMPOTENCY_KEY="quota-blocked-deploy")
     assert response.status_code==409 and response.data["error"]["code"]=="project_quota_exceeded"
     lab.refresh_from_db();revision.refresh_from_db()
     assert lab.current_draft_id==revision.id and revision.immutable is False
+
+@pytest.mark.django_db
+def test_deployment_plan_protects_existing_runtime_and_rejects_stale_or_unacknowledged_drafts(django_capture_on_commit_callbacks):
+    owner=User.objects.create_user("safe-deployer",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="safe-runtime",quotas={"max_running_deployments":3})
+    lab=Lab.objects.create(project=project,name="branch-office")
+    published=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="1"*64,immutable=True)
+    running=LabDeployment.objects.create(revision=published,cluster_identity="test",namespace="clab-pinned-runtime",
+        runtime_version="0.8.0",observed_state="running")
+    draft=LabRevision.objects.create(lab=lab,revision_number=2,topology_checksum="2"*64)
+    lab.current_draft=draft;lab.save(update_fields=["current_draft"])
+    template=DeviceTemplateVersion.objects.get(template__name="Linux Host")
+    artifact=ImageArtifact.objects.create(project=project,owner=owner,source_type="registry",original_filename="alpine",detected_format="oci-registry",
+        byte_size=0,checksum="3"*64,architecture="amd64",storage_reference="docker.io/alpine",validation_status="validated")
+    image=PublishedImage.objects.create(artifact=artifact,registry_digest="docker.io/alpine@sha256:"+"3"*64,repository="docker.io/alpine",architecture="amd64")
+    LabNode.objects.create(revision=draft,name="client",template_version=template,published_image=image)
+    client=APIClient();client.force_authenticate(owner)
+    preview=client.get(f"/api/v1/labs/{lab.id}/deploy-preview/")
+    assert preview.status_code==200 and preview.data["requires_active_runtime_acknowledgement"] is True
+    assert preview.data["active_runtimes"][0]["id"]==str(running.id)
+    assert preview.data["capacity"]=={"used":1,"limit":3,"after":2}
+    assert any("pinned revision unchanged" in item for item in preview.data["impact"])
+    payload={"expected_draft":str(draft.id),"strategy":"new_runtime","acknowledge_existing_runtimes":False}
+    blocked=client.post(f"/api/v1/labs/{lab.id}/deploy/",payload,format="json",HTTP_IDEMPOTENCY_KEY="ack-required")
+    assert blocked.status_code==409 and blocked.data["error"]["code"]=="active_runtime_acknowledgement_required"
+    stale=client.post(f"/api/v1/labs/{lab.id}/deploy/",{**payload,"expected_draft":str(uuid.uuid4()),"acknowledge_existing_runtimes":True},
+        format="json",HTTP_IDEMPOTENCY_KEY="stale-preview")
+    assert stale.status_code==409 and stale.data["error"]["code"]=="draft_changed"
+    with django_capture_on_commit_callbacks(execute=False):
+        accepted=client.post(f"/api/v1/labs/{lab.id}/deploy/",{**payload,"acknowledge_existing_runtimes":True},
+            format="json",HTTP_IDEMPOTENCY_KEY="safe-new-runtime")
+    assert accepted.status_code==202
+    running.refresh_from_db();published.refresh_from_db()
+    assert running.observed_state=="running" and running.revision_id==published.id
+    event=AuditEvent.objects.get(action="lab.deployment_scheduled",target_id=accepted.data["deployment"]["id"])
+    assert event.metadata["existing_active_runtimes"]==[str(running.id)]
 
 @pytest.mark.django_db
 def test_viewer_can_read_runtime_but_cannot_run_diagnostics():

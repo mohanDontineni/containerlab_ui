@@ -566,6 +566,33 @@ class LabViewSet(viewsets.ModelViewSet):
         models.AuditEvent.objects.create(actor=request.user,project=lab.project,action="lab.imported",target_type="Lab",target_id=lab.id,
             correlation_id=getattr(request,"correlation_id",""),metadata={"revision":str(revision.id),"bytes":len(raw),"checksum":preview["checksum"],"operation":str(job.id)})
         return Response(result,status=201)
+    @action(detail=True,methods=["get"],url_path="deploy-preview")
+    def deploy_preview(self,request,pk=None):
+        lab=self.get_object()
+        if project_role(request.user,lab.project) not in ("administrator","editor"):
+            from rest_framework.exceptions import PermissionDenied;raise PermissionDenied()
+        revision=lab.current_draft
+        active_states=(models.LabDeployment.State.PENDING,models.LabDeployment.State.DEPLOYING,models.LabDeployment.State.RUNNING,
+            models.LabDeployment.State.DEGRADED,models.LabDeployment.State.DELETING)
+        active=list(models.LabDeployment.objects.filter(revision__lab=lab,observed_state__in=active_states).select_related("revision").order_by("-created_at"))
+        usage=project_usage(lab.project);limit=normalized_quotas(lab.project)["max_running_deployments"]
+        issues=[]
+        if not revision or not revision.nodes.exists(): issues.append("Save at least one device before deployment.")
+        elif revision: issues.extend(ClabernetesAdapter.validate_topology(revision))
+        if usage["running_deployments"]>=limit: issues.append(f"Project runtime quota is full ({usage['running_deployments']}/{limit}).")
+        active_job=models.OperationJob.objects.filter(deployment__revision__lab=lab,state__in=("accepted","scheduled","started")).order_by("created_at").first()
+        if active_job: issues.append(f"{active_job.operation_label} is already active for this lab.")
+        response=Response({"strategy":"new_runtime","lab_id":str(lab.id),"lab":lab.name,
+            "draft":{"id":str(revision.id),"revision":revision.revision_number,"edit_version":revision.edit_version,"checksum":revision.topology_checksum,
+                "nodes":revision.nodes.count(),"links":revision.links.count(),"configurations":revision.nodes.exclude(startup_configuration__isnull=True).count()} if revision else None,
+            "active_runtimes":[{"id":str(item.id),"revision":item.revision.revision_number,"state":item.observed_state,
+                "namespace":item.namespace,"url":f"/deployments/{item.id}/"} for item in active],
+            "requires_active_runtime_acknowledgement":bool(active),"can_deploy":not issues,"issues":issues,
+            "capacity":{"used":usage["running_deployments"],"limit":limit,"after":usage["running_deployments"]+1},
+            "impact":["Publish the current draft as an immutable revision.","Create a new Clabernetes runtime in its own Kubernetes namespace.",
+                "Leave every existing runtime on its pinned revision unchanged." if active else "Create the first active runtime for this lab.",
+                "Preserve saved configurations, images, earlier revisions, and operation history."]})
+        response["Cache-Control"]="no-store";response["X-Content-Type-Options"]="nosniff";return response
     @action(detail=True,methods=["post"])
     def deploy(self,request,pk=None):
         lab=self.get_object()
@@ -585,6 +612,15 @@ class LabViewSet(viewsets.ModelViewSet):
             # current_draft outer join, while SQLite silently permits it.
             lab=models.Lab.objects.select_for_update().get(pk=lab.pk)
             project=models.Project.objects.select_for_update().get(pk=lab.project_id)
+            expected=str(request.data.get("expected_draft") or "")
+            if not expected: return Response({"error":{"code":"deployment_preview_required","details":"Review a fresh deployment plan before publishing this draft."}},status=400)
+            if expected!=str(lab.current_draft_id): return Response({"error":{"code":"draft_changed","details":"The active draft changed after deployment preview.","current_draft":str(lab.current_draft_id) if lab.current_draft_id else None}},status=409)
+            if request.data.get("strategy")!="new_runtime": return Response({"error":{"code":"invalid_deployment_strategy","details":"Only an isolated new runtime is supported for a new revision."}},status=422)
+            active_states=(models.LabDeployment.State.PENDING,models.LabDeployment.State.DEPLOYING,models.LabDeployment.State.RUNNING,
+                models.LabDeployment.State.DEGRADED,models.LabDeployment.State.DELETING)
+            active=list(models.LabDeployment.objects.filter(revision__lab=lab,observed_state__in=active_states).values_list("id",flat=True))
+            if active and request.data.get("acknowledge_existing_runtimes") is not True:
+                return Response({"error":{"code":"active_runtime_acknowledgement_required","details":"Confirm that existing runtimes remain unchanged while a new runtime is created.","active_runtimes":[str(value) for value in active]}},status=409)
             usage=project_usage(project);limit=normalized_quotas(project)["max_running_deployments"]
             if usage["running_deployments"]>=limit: return Response(quota_exceeded("running_deployments",limit,usage["running_deployments"]),status=409)
             revision=lab.current_draft
@@ -597,6 +633,9 @@ class LabViewSet(viewsets.ModelViewSet):
             deployment=models.LabDeployment.objects.create(id=deployment_id,revision=revision,namespace=f"clab-{deployment_id.hex[:20]}",
                 cluster_identity="kubernetes-admin@kubernetes",runtime_version="0.8.0",observed_state=models.LabDeployment.State.PENDING)
             job=models.OperationJob.objects.create(deployment=deployment,owner=request.user,operation_type="deploy_lab",target_id=deployment.id,idempotency_key=key,state="scheduled")
+            models.AuditEvent.objects.create(actor=request.user,project=project,action="lab.deployment_scheduled",target_type="LabDeployment",target_id=deployment.id,
+                correlation_id=getattr(request,"correlation_id",""),metadata={"lab":str(lab.id),"revision":revision.revision_number,
+                    "strategy":"new_runtime","existing_active_runtimes":[str(value) for value in active],"operation":str(job.id)})
             transaction.on_commit(lambda: execute_operation.delay(str(job.id)))
         return Response({"deployment":serializers.DeploymentSerializer(deployment).data,"operation":serializers.OperationSerializer(job).data},status=202)
 

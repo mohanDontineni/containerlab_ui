@@ -105,6 +105,11 @@ type BundlePreview = { checksum:string; source_lab:string; destination_lab:strin
   configured_node_count:number; template_count:number; image_count:number; templates:string[]; will_replace_draft:boolean;
   preserved_published_revisions:number; running_deployments_unchanged:number; expected_current_draft:string|null;
   deployable:boolean; deployability_issues:string[] };
+type DeploymentPlan = { strategy:"new_runtime"; lab_id:string; lab:string;
+  draft:{id:string;revision:number;edit_version:number;checksum:string;nodes:number;links:number;configurations:number}|null;
+  active_runtimes:{id:string;revision:number;state:string;namespace:string;url:string}[];
+  requires_active_runtime_acknowledgement:boolean; can_deploy:boolean; issues:string[];
+  capacity:{used:number;limit:number;after:number}; impact:string[] };
 type EditLease = {active:boolean;can_edit:boolean;owner:string|null;expires_at:string|null;lease_seconds:number;token?:string};
 const params = new URLSearchParams(location.search);
 const labId = params.get("lab") || "";
@@ -182,6 +187,9 @@ function Workspace() {
   const [editVersion, setEditVersion] = useState(0);
   const [saving, setSaving] = useState(false);
   const [deploying, setDeploying] = useState(false);
+  const [deploymentPlan, setDeploymentPlan] = useState<DeploymentPlan|null>(null);
+  const [deploymentPlanLoading, setDeploymentPlanLoading] = useState(false);
+  const [deploymentAcknowledged, setDeploymentAcknowledged] = useState(false);
   const [cloneOpen, setCloneOpen] = useState(false);
   const [cloneName, setCloneName] = useState(`${labName} copy`);
   const [cloning, setCloning] = useState(false);
@@ -565,17 +573,27 @@ function Workspace() {
       setNotice(`Restored ${data.node_count} devices and ${data.link_count} links from verified backup`);location.reload();
     }catch(error){setNotice(error instanceof Error?error.message:"Backup restore failed");setBundleRestoring(false)}
   };
-  const deploy = async () => {
+  const openDeploymentPlan = async () => {
     if (dirty) { setNotice("Save the draft before deployment"); return; }
-    if (!confirm("Publish this revision and deploy it to Kubernetes? The published revision becomes immutable.")) return;
+    setDeploymentPlanLoading(true); setNotice("Building a server-verified deployment plan…");
+    try {
+      const response=await fetch(`/api/v1/labs/${labId}/deploy-preview/`,{credentials:"same-origin"});
+      const data=await response.json();
+      if(!response.ok)throw new Error(data.error?.details||data.error?.code||"Deployment plan failed");
+      setDeploymentAcknowledged(false);setDeploymentPlan(data);setNotice("Deployment plan ready for review");
+    } catch(error) {setNotice(error instanceof Error?error.message:"Deployment plan failed");}
+    finally {setDeploymentPlanLoading(false);}
+  };
+  const confirmDeployment = async () => {
+    if (!deploymentPlan?.draft) return;
     setDeploying(true); setNotice("Scheduling deployment…");
     try {
-      const response = await fetch(`/api/v1/labs/${labId}/deploy/`, { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", "X-CSRFToken": csrf(), "Idempotency-Key": crypto.randomUUID(), "X-Edit-Lease":leaseToken.current }, body: "{}" });
+      const response = await fetch(`/api/v1/labs/${labId}/deploy/`, { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", "X-CSRFToken": csrf(), "Idempotency-Key": crypto.randomUUID(), "X-Edit-Lease":leaseToken.current }, body: JSON.stringify({expected_draft:deploymentPlan.draft.id,strategy:deploymentPlan.strategy,acknowledge_existing_runtimes:deploymentAcknowledged}) });
       const data = await response.json();
       if (!response.ok) throw new Error(Array.isArray(data.error?.details) ? data.error.details.join(" · ") : data.error?.details || data.error?.code || "Deployment failed");
       setNotice("Deployment accepted — opening runtime view");
-      location.href = "/deployments/";
-    } catch (error) { setNotice(error instanceof Error ? error.message : "Deployment failed"); setDeploying(false); }
+      location.href = `/deployments/${data.deployment.id}/`;
+    } catch (error) { setNotice(error instanceof Error ? error.message : "Deployment failed"); setDeploying(false); setDeploymentPlan(null); }
   };
   const undo = () => {
     const previous = history.at(-1);
@@ -726,8 +744,8 @@ function Workspace() {
               {errors.length}
             </span>
           </button>
-          <button className="deploy" onClick={deploy} disabled={!canEdit||errors.length > 0 || dirty || deploying}>
-            {deploying ? "Deploying…" : "▶ Deploy"}
+          <button className="deploy" onClick={openDeploymentPlan} disabled={!canEdit||errors.length > 0 || dirty || deploying||deploymentPlanLoading}>
+            {deploymentPlanLoading ? "Planning…" : deploying ? "Deploying…" : "▶ Deploy"}
           </button>
           <button className="save" onClick={save} disabled={!canEdit||!workspaceReady || saving || !dirty}>
             {saving ? "Saving…" : dirty ? "Save draft" : "Saved ✓"}
@@ -735,6 +753,17 @@ function Workspace() {
         </div>
       </header>
       {editLease&&!canEdit&&<div className="edit-lease-banner" role="status"><strong>Read-only workspace</strong><span>{editLease.owner||"Another operator"} is editing this topology. Your view is protected from overwriting their changes.</span><small>{editLease.expires_at?`Available after ${new Date(editLease.expires_at).toLocaleTimeString()}`:"Waiting for the editing session to be released"}</small></div>}
+      {deploymentPlan&&<div className="modal-backdrop" role="presentation" onMouseDown={()=>!deploying&&setDeploymentPlan(null)}>
+        <section className="deployment-dialog" role="dialog" aria-modal="true" aria-labelledby="deployment-plan-title" onMouseDown={event=>event.stopPropagation()}>
+          <header><div><p className="dialog-eyebrow">SAFE RUNTIME WORKFLOW</p><h2 id="deployment-plan-title">Review deployment plan</h2><p>Publish the saved draft and create a separate Clabernetes runtime. No YAML is required.</p></div><button aria-label="Close deployment plan" onClick={()=>setDeploymentPlan(null)} disabled={deploying}>×</button></header>
+          {deploymentPlan.draft?<><div className="deployment-facts"><article><span>Draft revision</span><strong>{deploymentPlan.draft.revision}</strong></article><article><span>Devices</span><strong>{deploymentPlan.draft.nodes}</strong></article><article><span>Links</span><strong>{deploymentPlan.draft.links}</strong></article><article><span>Capacity after</span><strong>{deploymentPlan.capacity.after} / {deploymentPlan.capacity.limit}</strong><small>{deploymentPlan.capacity.used} active now</small></article></div>
+          <section className="deployment-impact"><h3>What will happen</h3><ul>{deploymentPlan.impact.map(item=><li key={item}>{item}</li>)}</ul></section></>:<p className="deployment-empty">There is no saved draft to deploy.</p>}
+          {deploymentPlan.active_runtimes.length>0&&<section className="deployment-runtimes"><h3>Existing runtimes stay unchanged</h3><p>These environments keep running their pinned revisions. Your draft is not applied to them.</p>{deploymentPlan.active_runtimes.map(runtime=><article key={runtime.id}><i className={`dot ${runtime.state}`}></i><div><strong>Revision {runtime.revision}</strong><code>{runtime.namespace}</code></div><span>{runtime.state}</span><a href={runtime.url} target="_blank" rel="noreferrer">Open runtime</a></article>)}</section>}
+          {deploymentPlan.issues.length>0&&<section className="deployment-issues"><strong>Deployment is blocked</strong><ul>{deploymentPlan.issues.map(issue=><li key={issue}>{issue}</li>)}</ul></section>}
+          {deploymentPlan.requires_active_runtime_acknowledgement&&<label className="deployment-ack"><input type="checkbox" checked={deploymentAcknowledged} onChange={event=>setDeploymentAcknowledged(event.target.checked)}/><span><strong>I understand the existing runtimes stay on their pinned revisions.</strong><small>This action creates an additional isolated Kubernetes namespace.</small></span></label>}
+          <footer><button onClick={()=>setDeploymentPlan(null)} disabled={deploying}>Cancel</button><button className="primary" onClick={confirmDeployment} disabled={deploying||!deploymentPlan.can_deploy||!deploymentPlan.draft||(deploymentPlan.requires_active_runtime_acknowledgement&&!deploymentAcknowledged)}>{deploying?"Scheduling…":"Publish and create new runtime"}</button></footer>
+        </section>
+      </div>}
       {cloneOpen && <div className="modal-backdrop" role="presentation" onMouseDown={()=>!cloning&&setCloneOpen(false)}>
         <section className="clone-dialog" role="dialog" aria-modal="true" aria-labelledby="clone-title" onMouseDown={(event)=>event.stopPropagation()}>
           <p className="dialog-eyebrow">LAB WORKFLOW</p><h2 id="clone-title">Save topology as a new lab</h2>
