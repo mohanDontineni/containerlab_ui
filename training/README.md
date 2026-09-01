@@ -76,6 +76,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 | `64-operations-job-center.png` | Searchable operations job center | Filters durable jobs by state, type, and lab, expands sanitized failure evidence, and navigates to the affected resource. |
 | `65-template-image-compatibility.png` | Template-to-image compatibility | Evaluates accessible immutable publications against template architecture, category, verification, format, and lifecycle requirements. |
 | `66-explicit-deployment-plan.png` | Explicit deployment plan | Reviews immutable publication, new-namespace creation, quota impact, active pinned runtimes, and required operator acknowledgement before scheduling. |
+| `67-server-topology-preflight.png` | Server topology preflight | Runs pinned adapter validation and presents platform checks plus per-device image, interface, configuration, and resource evidence. |
 
 ## No-YAML operating model
 
@@ -116,6 +117,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 34. Search and filter durable operations by lifecycle state, operation type, lab name, or correlation key; expand sanitized failures and follow the resource-aware recovery action instead of issuing an unsafe generic retry.
 35. Review each template version's image policy and accessible publication matrix; the topology editor disables incompatible choices, explains warnings, and the server revalidates compatibility during draft save and runtime preflight.
 36. Review the server-generated deployment plan before publishing a draft; Studio creates a separate runtime, leaves active pinned revisions unchanged, requires explicit acknowledgement, and keeps quota-blocked plans non-actionable.
+37. Run Validate on a saved draft to inspect a server-authoritative readiness report; resolve blocking device, image, configuration, interface, or adapter findings before opening the deployment plan.
 
 Containerlab/Kubernetes YAML is an internal adapter concern. It may be inspected by platform administrators for troubleshooting, but it is not part of the normal user workflow.
 
