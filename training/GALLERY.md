@@ -253,3 +253,9 @@ The operator selects multiple runtime devices and previews one coordinated start
 ![Topology edit lease](42-topology-edit-lease.png)
 
 The first editor receives a renewable, token-bound five-minute editing session. A second project editor can still inspect the complete topology, validation state, backups, and history, but sees the active owner's name and expiry in a prominent read-only banner. Canvas mutations, restores, saves, revision replacement, configuration restore, and deployment publication are server-protected so another browser cannot silently overwrite the active draft. Sessions renew automatically, release on navigation, and can be safely acquired after expiry without YAML or coordination outside the GUI.
+
+## 43 — Native user administration
+
+![Native user administration](43-native-user-administration.png)
+
+A platform administrator creates a local operator with policy-validated temporary credentials, normalized profile data, and an explicit time zone entirely inside Studio. The searchable directory shows owned projects, memberships, privilege level, and sign-in state. Before deactivation, the guarded dialog reports dependencies and impact; active project owners and the current administrator are protected, browser consoles are revoked, and memberships plus audit history remain intact. Firefox verified disabled sign-in rejection, reactivation, and restored sign-in without using Django administration.
