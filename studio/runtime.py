@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 import base64
 import binascii
+import json
 import shlex
 import time
 import struct
@@ -200,6 +201,39 @@ class ClabernetesAdapter:
             stderr=True,stdin=False,stdout=True,tty=False,_request_timeout=min(45,max_hops*timeout+5))
         return {"node":node.name,"target":target,"command":"traceroute","max_hops":max_hops,"timeout":timeout,
             "probes":probes,"output":output[-24000:]}
+    def inspect_device(self,deployment,device):
+        if device.deployment_id!=deployment.id: raise CapabilityError("Device does not belong to this deployment")
+        pod=device.runtime_resources.get("pod")
+        if not pod: raise CapabilityError("Device launcher pod is not available")
+        def read_ip(arguments,limit):
+            output=stream(self.core.connect_get_namespaced_pod_exec,pod,deployment.namespace,
+                command=["docker","exec",device.lab_node.name,"ip","-j",*arguments],stderr=True,stdin=False,stdout=True,tty=False,
+                _request_timeout=12)
+            if len(output.encode("utf-8",errors="replace"))>256_000: raise CapabilityError("Device state exceeded the 256 KB inspection limit")
+            try: rows=json.loads(output)
+            except (TypeError,ValueError) as exc: raise CapabilityError("Device did not return structured network state") from exc
+            if not isinstance(rows,list): raise CapabilityError("Device returned an invalid network-state document")
+            return rows[:limit],len(rows)>limit
+        addresses,address_truncated=read_ip(["address","show"],256)
+        routes,route_truncated=read_ip(["route","show","table","all"],512)
+        neighbors,neighbor_truncated=read_ip(["neighbor","show"],512)
+        interfaces=[]
+        for row in addresses:
+            interfaces.append({"name":str(row.get("ifname", ""))[:64],"state":str(row.get("operstate","UNKNOWN"))[:24],
+                "mtu":row.get("mtu"),"mac":str(row.get("address", ""))[:64],"addresses":[{
+                    "family":str(address.get("family", ""))[:16],"local":str(address.get("local", ""))[:128],
+                    "prefixlen":address.get("prefixlen"),"scope":str(address.get("scope", ""))[:24]
+                } for address in row.get("addr_info",[])[:32] if isinstance(address,dict)]})
+        safe_routes=[{"destination":str(row.get("dst","default"))[:128],"gateway":str(row.get("gateway", ""))[:128],
+            "device":str(row.get("dev", ""))[:64],"protocol":str(row.get("protocol", ""))[:32],"scope":str(row.get("scope", ""))[:24],
+            "source":str(row.get("prefsrc", ""))[:128],"metric":row.get("metric"),"table":row.get("table")}
+            for row in routes if isinstance(row,dict)]
+        safe_neighbors=[{"destination":str(row.get("dst", ""))[:128],"device":str(row.get("dev", ""))[:64],
+            "mac":str(row.get("lladdr", ""))[:64],"state":",".join(str(value)[:24] for value in row.get("state",[]))
+                if isinstance(row.get("state"),list) else str(row.get("state", ""))[:64]}
+            for row in neighbors if isinstance(row,dict)]
+        return {"device_id":str(device.id),"device":device.lab_node.name,"interfaces":interfaces,"routes":safe_routes,
+            "neighbors":safe_neighbors,"truncated":{"interfaces":address_truncated,"routes":route_truncated,"neighbors":neighbor_truncated}}
     def capture_packets(self,deployment,node,interface,duration=10,packet_limit=500):
         if not 1<=duration<=30 or not 1<=packet_limit<=5000: raise CapabilityError("Capture bounds are invalid")
         device=deployment.devices.get(lab_node=node)

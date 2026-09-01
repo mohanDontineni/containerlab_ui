@@ -910,8 +910,8 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
     def device_operations(self,request,pk=None):
         deployment=self.get_object(); self._require_operator(deployment)
         operation=str(request.data.get("operation",""))
-        if operation not in ("restart_device","reset_device","stop_device","start_device","suspend_device","resume_device","collect_configuration","get_device_logs"):
-            return Response({"error":{"code":"unsupported_operation","details":"Supported device operations are start, stop, restart, reset, suspend, resume, configuration collection, and bounded runtime logs."}},status=422)
+        if operation not in ("restart_device","reset_device","stop_device","start_device","suspend_device","resume_device","collect_configuration","get_device_logs","inspect_device"):
+            return Response({"error":{"code":"unsupported_operation","details":"Supported device operations are start, stop, restart, reset, suspend, resume, configuration collection, bounded runtime logs, and structured network inspection."}},status=422)
         try: device_id=uuid.UUID(str(request.data.get("device_id")))
         except (ValueError,TypeError,AttributeError): return Response({"error":{"code":"invalid_device"}},status=422)
         operation_payload={"device_id":str(device_id)}
@@ -951,7 +951,7 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
                 if not desired_stopped: return Response({"error":{"code":"device_not_stopped"}},status=409)
             elif desired_stopped:
                 return Response({"error":{"code":"device_stopped","details":"Start the device before running another operation."}},status=409)
-            elif operation=="get_device_logs":
+            elif operation in ("get_device_logs","inspect_device"):
                 if not device.runtime_resources.get("pod"): return Response({"error":{"code":"device_runtime_unavailable"}},status=409)
             elif device.observed_readiness!="ready" or not device.runtime_resources.get("pod"):
                 return Response({"error":{"code":"device_not_ready"}},status=409)
@@ -961,7 +961,7 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
                 return Response({"error":{"code":"device_operation_in_progress"}},status=409)
             job=models.OperationJob.objects.create(deployment=deployment,owner=request.user,operation_type=operation,
                 target_id=device.id,idempotency_key=key,state="scheduled",request_payload=operation_payload)
-            audit_action="device.logs_requested" if operation=="get_device_logs" else f"device.{operation.removesuffix('_device')}"
+            audit_action={"get_device_logs":"device.logs_requested","inspect_device":"device.inspection_requested"}.get(operation,f"device.{operation.removesuffix('_device')}")
             metadata={"operation_job":str(job.id),"node":device.lab_node.name}
             if operation=="get_device_logs": metadata.update({"source":source,"tail":tail})
             models.AuditEvent.objects.create(actor=request.user,project=deployment.revision.lab.project,action=audit_action,

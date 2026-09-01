@@ -556,6 +556,29 @@ def test_traceroute_diagnostic_is_bounded_idempotent_audited_and_executed(monkey
     assert deployment.observed_state=="running"
 
 @pytest.mark.django_db
+def test_structured_device_inspection_is_authorized_idempotent_audited_and_executed(monkeypatch):
+    monkeypatch.setattr("studio.api.execute_operation.delay",lambda *_:None)
+    owner=User.objects.create_user("inspect-owner",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="inspect-project");lab=Lab.objects.create(project=project,name="inspect-lab")
+    revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="4"*64,immutable=True)
+    node=LabNode.objects.create(revision=revision,name="r1",template_version=DeviceTemplateVersion.objects.get(template__name="FRR Router"))
+    deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-inspect",runtime_version="0.8.0",observed_state="running")
+    device=DeviceInstance.objects.create(deployment=deployment,lab_node=node,observed_readiness="ready",runtime_resources={"pod":"r1-pod"})
+    client=APIClient();client.force_authenticate(owner);endpoint=f"/api/v1/deployments/{deployment.id}/device-operations/"
+    payload={"operation":"inspect_device","device_id":str(device.id)}
+    first=client.post(endpoint,payload,format="json",HTTP_IDEMPOTENCY_KEY="inspect-once")
+    second=client.post(endpoint,payload,format="json",HTTP_IDEMPOTENCY_KEY="inspect-once")
+    assert first.status_code==second.status_code==202 and first.data["id"]==second.data["id"]
+    assert AuditEvent.objects.filter(action="device.inspection_requested",target_id=device.id).count()==1
+    class Adapter:
+        def inspect_device(self,received_deployment,received_device):
+            assert (received_deployment.id,received_device.id)==(deployment.id,device.id)
+            return {"device":"r1","interfaces":[{"name":"eth1","state":"UP","addresses":[]}],"routes":[],"neighbors":[],"truncated":{}}
+    monkeypatch.setattr("studio.tasks.ClabernetesAdapter",Adapter);execute_operation.run(str(first.data["id"]))
+    job=OperationJob.objects.get(id=first.data["id"])
+    assert job.state=="succeeded" and job.result_payload["interfaces"][0]["name"]=="eth1"
+
+@pytest.mark.django_db
 def test_runtime_device_contract_exposes_logical_node_identity():
     owner=User.objects.create_user("device-owner",password="long-enough-password")
     project=Project.objects.create(owner=owner,name="devices")

@@ -19,7 +19,7 @@ def execute_operation(self,job_id):
         if job.state=="succeeded": return str(job.id)
         job.state="started"; job.attempts+=1; job.heartbeat=timezone.now(); job.progress=10; job.save()
     adapter=ClabernetesAdapter()
-    device_operations=("restart_device","reset_device","stop_device","start_device","suspend_device","resume_device","collect_configuration","get_device_logs")
+    device_operations=("restart_device","reset_device","stop_device","start_device","suspend_device","resume_device","collect_configuration","get_device_logs","inspect_device")
     try:
         if job.operation_type=="publish_image":
             artifact=ImageArtifact.objects.get(pk=job.target_id)
@@ -62,6 +62,7 @@ def execute_operation(self,job_id):
         elif job.operation_type in device_operations:
             device=DeviceInstance.objects.select_related("lab_node").get(pk=job.target_id,deployment=job.deployment)
             if job.operation_type=="get_device_logs": result=adapter.get_device_logs(job.deployment,device,job.request_payload["source"],job.request_payload["tail"])
+            elif job.operation_type=="inspect_device": result=adapter.inspect_device(job.deployment,device)
             else: result=getattr(adapter,job.operation_type)(job.deployment,device)
             if job.operation_type in ("restart_device","reset_device","stop_device","start_device","suspend_device","resume_device"):
                 device.observed_readiness=result["readiness"]
