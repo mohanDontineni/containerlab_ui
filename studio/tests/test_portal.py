@@ -5,7 +5,8 @@ import pytest
 from django.db.models import F
 from django.test import Client
 from django.utils import timezone
-from studio.models import AuditEvent, DeviceTemplateVersion, ImageArtifact, Lab, LabDeployment, LabFolder, LabLink, LabNode, LabRevision, Project, ProjectMembership, PublishedImage, User
+from studio.configurations import decrypt_secret
+from studio.models import AuditEvent, DeviceTemplateVersion, ImageArtifact, ImageCredentialReference, Lab, LabDeployment, LabFolder, LabLink, LabNode, LabRevision, Project, ProjectMembership, PublishedImage, User
 
 @pytest.mark.django_db
 def test_dashboard_reports_expiring_worker_verified_platform_capabilities(client,monkeypatch):
@@ -49,6 +50,28 @@ def test_product_navigation_never_links_to_model_admin(client):
     assert 'href="/labs/"' in html
     assert '/admin/studio/' not in html
     assert 'href="/admin/"' not in client.get("/settings/").content.decode()
+
+@pytest.mark.django_db
+def test_registry_credential_gui_never_renders_secret_and_registry_registration_pins_reference(client):
+    owner=User.objects.create_user("registry-gui-owner",password="long-enough-password");project=Project.objects.create(owner=owner,name="Registry GUI")
+    client.force_login(owner);secret="GUI-Registry-Secret-2026"
+    created=client.post("/images/credentials/new/",{"project":str(project.id),"name":"Private lab registry","registry_host":"registry.example:5000",
+        "credential_type":"token","username":"","secret":secret,"is_active":"on"})
+    assert created.status_code==302 and created.url=="/images/credentials/",created.context["form"].errors
+    credential=ImageCredentialReference.objects.get(project=project);assert decrypt_secret(credential.encrypted_secret)==secret
+    page=client.get("/images/credentials/");html=page.content.decode()
+    assert page.status_code==200 and "Private lab registry" in html and credential.secret_fingerprint in html and secret not in html
+    digest="registry.example:5000/frr@sha256:"+"b"*64
+    registered=client.post("/images/register/",{"project":str(project.id),"name":"Private FRR","registry_digest":digest,"architecture":"amd64",
+        "vendor":"FRRouting","version":"10.4.1","credential_reference":str(credential.id)})
+    assert registered.status_code==302 and registered.url=="/images/"
+    artifact=ImageArtifact.objects.get(project=project);assert artifact.credential_reference==credential and artifact.registry_reference==digest
+    publication=PublishedImage.objects.get(artifact=artifact)
+    assert publication.compatibility_result=={"digest_pinned":True,"runtime_pull":"not_yet_verified","credential_configured":True}
+    assert AuditEvent.objects.filter(action="image.registry_registered",target_id=artifact.id,metadata__credential_reference=str(credential.id)).exists()
+    mismatch=client.post("/images/register/",{"project":str(project.id),"name":"Wrong host","registry_digest":"other.example/frr@sha256:"+"c"*64,
+        "architecture":"amd64","vendor":"","version":"","credential_reference":str(credential.id)})
+    assert mismatch.status_code==200 and "This reference resolves to other.example" in mismatch.content.decode()
 
 @pytest.mark.django_db
 def test_native_platform_user_administration_is_staff_only_and_audited(client):

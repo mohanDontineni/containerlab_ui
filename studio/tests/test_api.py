@@ -5,8 +5,8 @@ from pathlib import Path
 from django.conf import settings
 from django.utils import timezone
 from rest_framework.test import APIClient
-from studio.configurations import decrypt_configuration, encrypt_configuration
-from studio.models import (AuditEvent, CaptureSession, ConsoleSession, DeploymentSchedule, DeviceInstance, DeviceTemplate, DeviceTemplateVersion, ImageArtifact, ImageBuild, Lab, LabDeployment,
+from studio.configurations import decrypt_configuration, decrypt_secret, encrypt_configuration
+from studio.models import (AuditEvent, CaptureSession, ConsoleSession, DeploymentSchedule, DeviceInstance, DeviceTemplate, DeviceTemplateVersion, ImageArtifact, ImageBuild, ImageCredentialReference, Lab, LabDeployment,
     ConfigurationVersion, LabArtifact, LabInterface, LabLink, LabNode, LabRevision, OperationJob, Project, ProjectMembership, PublishedImage, UploadSession, User)
 from studio.tasks import dispatch_due_schedules, execute_operation, execute_staged_start, reconcile_active_deployments, reconcile_deployment
 from studio.quotas import project_usage
@@ -535,6 +535,40 @@ def test_image_metadata_is_operator_only_validated_optimistic_and_audited():
     assert stale.status_code==409 and stale.data["error"]["code"]=="image_changed"
     replay=client.put(endpoint,payload,format="json",HTTP_X_EXPECTED_UPDATED_AT=artifact.updated_at.isoformat())
     assert replay.status_code==200 and AuditEvent.objects.filter(action="image.metadata_updated",target_id=artifact.id).count()==1
+
+@pytest.mark.django_db
+def test_registry_credentials_are_project_scoped_encrypted_redacted_rotatable_and_deactivated():
+    owner=User.objects.create_user("credential-owner",password="long-enough-password")
+    editor=User.objects.create_user("credential-editor",password="long-enough-password")
+    viewer=User.objects.create_user("credential-viewer",password="long-enough-password")
+    stranger=User.objects.create_user("credential-stranger",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="credential-project")
+    ProjectMembership.objects.create(project=project,user=editor,role="editor");ProjectMembership.objects.create(project=project,user=viewer,role="viewer")
+    endpoint="/api/v1/image-credentials/";payload={"project":str(project.id),"name":"Private registry","registry_host":"registry.example:5000",
+        "credential_type":"basic","username":"studio-pull","secret":"Top-Secret-Registry-Token"}
+    client=APIClient();client.force_authenticate(viewer)
+    assert client.post(endpoint,payload,format="json").status_code==403
+    client.force_authenticate(editor);created=client.post(endpoint,payload,format="json")
+    assert created.status_code==201 and created.data["credential_present"] is True and created.data["secret_fingerprint"]
+    serialized=str(created.data);assert "Top-Secret" not in serialized and "encrypted_secret" not in serialized and "secret_name" not in serialized
+    credential=ImageCredentialReference.objects.get(id=created.data["id"])
+    assert decrypt_secret(credential.encrypted_secret)=="Top-Secret-Registry-Token" and b"Top-Secret" not in bytes(credential.encrypted_secret)
+    client.force_authenticate(viewer);listing=client.get(endpoint)
+    assert listing.status_code==200 and "Top-Secret" not in str(listing.data) and listing.data["results"][0]["credential_present"] is True
+    client.force_authenticate(stranger)
+    assert client.get(f"{endpoint}{credential.id}/").status_code==404
+    client.force_authenticate(editor)
+    artifact=ImageArtifact.objects.create(project=project,owner=owner,credential_reference=credential,source_type="registry",registry_reference="registry.example:5000/frr@sha256:"+"a"*64,
+        original_filename="frr",detected_format="oci-registry",byte_size=0,checksum="a"*64,architecture="amd64",storage_reference="registry.example:5000/frr",
+        validation_status="validated",license_acknowledged=True)
+    rejected=client.patch(f"{endpoint}{credential.id}/",{"registry_host":"other.example"},format="json")
+    assert rejected.status_code==400
+    rotated=client.patch(f"{endpoint}{credential.id}/",{"secret":"Rotated-Registry-Token"},format="json")
+    credential.refresh_from_db();assert rotated.status_code==200 and decrypt_secret(credential.encrypted_secret)=="Rotated-Registry-Token"
+    assert client.delete(f"{endpoint}{credential.id}/").status_code==204
+    credential.refresh_from_db();assert credential.is_active is False and artifact.credential_reference_id==credential.id
+    audit_text=str(list(AuditEvent.objects.filter(target_id=credential.id).values_list("metadata",flat=True)))
+    assert "Registry-Token" not in audit_text and AuditEvent.objects.filter(action="image_credential.deactivated",target_id=credential.id).exists()
 
 @pytest.mark.django_db
 def test_image_deletion_is_previewed_guarded_audited_idempotent_and_releases_storage(settings,tmp_path):

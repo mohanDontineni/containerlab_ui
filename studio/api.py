@@ -778,6 +778,40 @@ class ImageArtifactViewSet(viewsets.ReadOnlyModelViewSet):
             transaction.on_commit(lambda: execute_operation.delay(str(job.id)))
         return Response(serializers.OperationSerializer(job).data,status=202)
 
+class ImageCredentialReferenceViewSet(viewsets.ModelViewSet):
+    serializer_class=serializers.ImageCredentialReferenceSerializer
+    def get_queryset(self):
+        return models.ImageCredentialReference.objects.filter(project__in=visible_projects(self.request.user)).select_related("project","created_by").annotate(referenced_images=Count("image_artifacts")).order_by("project__name","name")
+    def _require_operator(self,project):
+        if project_role(self.request.user,project) not in (models.ProjectMembership.Role.ADMIN,models.ProjectMembership.Role.EDITOR):
+            from rest_framework.exceptions import PermissionDenied; raise PermissionDenied()
+    def perform_create(self,serializer):
+        project=serializer.validated_data["project"];self._require_operator(project)
+        if project.deleted_at:
+            from rest_framework.exceptions import ValidationError;raise ValidationError({"project":"This project has been retired."})
+        credential=serializer.save(created_by=self.request.user)
+        models.AuditEvent.objects.create(actor=self.request.user,project=project,action="image_credential.created",target_type="ImageCredentialReference",
+            target_id=credential.id,correlation_id=getattr(self.request,"correlation_id",""),metadata={"name":credential.name,"registry_host":credential.registry_host,
+                "credential_type":credential.credential_type,"secret_fingerprint":credential.secret_fingerprint})
+    def perform_update(self,serializer):
+        credential=self.get_object();self._require_operator(credential.project)
+        requested_project=serializer.validated_data.get("project",credential.project)
+        if requested_project.id!=credential.project_id:
+            from rest_framework.exceptions import ValidationError;raise ValidationError({"project":"Registry credentials cannot move between projects."})
+        previous={field:getattr(credential,field) for field in ("name","registry_host","credential_type","username","is_active")};rotated=bool(serializer.validated_data.get("secret"))
+        credential=serializer.save(project=credential.project)
+        changed={field:{"from":previous[field],"to":getattr(credential,field)} for field in previous if previous[field]!=getattr(credential,field)}
+        models.AuditEvent.objects.create(actor=self.request.user,project=credential.project,action="image_credential.updated",target_type="ImageCredentialReference",
+            target_id=credential.id,correlation_id=getattr(self.request,"correlation_id",""),metadata={"changed":changed,"secret_rotated":rotated,
+                "secret_fingerprint":credential.secret_fingerprint})
+    def destroy(self,request,*args,**kwargs):
+        credential=self.get_object();self._require_operator(credential.project)
+        if not credential.is_active: return Response(status=204)
+        credential.is_active=False;credential.save(update_fields=["is_active","updated_at"])
+        models.AuditEvent.objects.create(actor=request.user,project=credential.project,action="image_credential.deactivated",target_type="ImageCredentialReference",
+            target_id=credential.id,correlation_id=getattr(request,"correlation_id",""),metadata={"referenced_images":credential.image_artifacts.count()})
+        return Response(status=204)
+
 class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class=serializers.DeploymentSerializer
     def get_queryset(self): return models.LabDeployment.objects.filter(revision__lab__project__in=visible_projects(self.request.user))

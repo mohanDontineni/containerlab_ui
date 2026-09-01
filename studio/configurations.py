@@ -29,3 +29,11 @@ def decrypt_configuration(content: bytes) -> str:
     except (InvalidToken, UnicodeDecodeError) as exc:
         raise ConfigurationError("Configuration cannot be decrypted with the active key") from exc
 
+def encrypt_secret(content: str) -> bytes:
+    if not isinstance(content,str) or not content: raise ConfigurationError("Credential secret must not be empty")
+    if len(content.encode("utf-8"))>4096: raise ConfigurationError("Credential secret exceeds the 4 KiB limit")
+    return _cipher().encrypt(content.encode("utf-8"))
+
+def decrypt_secret(content: bytes) -> str:
+    try: return _cipher().decrypt(bytes(content)).decode("utf-8")
+    except (InvalidToken,UnicodeDecodeError) as exc: raise ConfigurationError("Credential secret cannot be decrypted with the active key") from exc

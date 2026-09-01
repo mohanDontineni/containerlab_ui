@@ -1,6 +1,8 @@
+import hashlib
 import re
 from rest_framework import serializers
 from . import models
+from .configurations import encrypt_secret
 
 class ProjectSerializer(serializers.ModelSerializer):
     class Meta: model=models.Project; fields="__all__"; read_only_fields=("owner","deleted_at"); validators=[]
@@ -64,7 +66,7 @@ class UploadSessionSerializer(serializers.ModelSerializer):
 class ImageArtifactSerializer(serializers.ModelSerializer):
     class Meta:
         model=models.ImageArtifact
-        fields=("id","project","owner","upload_session","source_type","registry_reference","original_filename","detected_format","byte_size",
+        fields=("id","project","owner","upload_session","credential_reference","source_type","registry_reference","original_filename","detected_format","byte_size",
             "checksum","vendor","category","version","architecture","license_acknowledged","inspection_result","validation_status","deleted_at","created_at","updated_at")
         read_only_fields=fields
 class ImageMetadataSerializer(serializers.Serializer):
@@ -77,6 +79,40 @@ class ImageMetadataSerializer(serializers.Serializer):
     def validate_version(self,value):
         if any(ord(character)<32 for character in value): raise serializers.ValidationError("Control characters are not allowed.")
         return value
+class ImageCredentialReferenceSerializer(serializers.ModelSerializer):
+    secret=serializers.CharField(write_only=True,max_length=4096,required=False,trim_whitespace=False)
+    credential_present=serializers.SerializerMethodField()
+    referenced_images=serializers.IntegerField(read_only=True,default=0)
+    def get_credential_present(self,obj): return bool(obj.encrypted_secret or obj.secret_name)
+    def validate_registry_host(self,value):
+        value=value.strip().lower()
+        if not re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::[1-9][0-9]{0,4})?",value) or ".." in value:
+            raise serializers.ValidationError("Enter a registry hostname with an optional port, without a URL scheme or path.")
+        if ":" in value and int(value.rsplit(":",1)[1])>65535: raise serializers.ValidationError("Registry port must be between 1 and 65535.")
+        return value
+    def validate(self,attrs):
+        credential_type=attrs.get("credential_type",getattr(self.instance,"credential_type",models.ImageCredentialReference.CredentialType.BASIC))
+        username=attrs.get("username",getattr(self.instance,"username","")).strip()
+        secret=attrs.get("secret")
+        if credential_type==models.ImageCredentialReference.CredentialType.BASIC and not username:
+            raise serializers.ValidationError({"username":"A username is required for basic authentication."})
+        if not self.instance and not secret: raise serializers.ValidationError({"secret":"A credential secret is required."})
+        if self.instance and self.instance.image_artifacts.exists() and "registry_host" in attrs and attrs["registry_host"]!=self.instance.registry_host:
+            raise serializers.ValidationError({"registry_host":"The registry host cannot change while images reference this credential."})
+        return attrs
+    def _apply_secret(self,credential,secret):
+        if secret: credential.encrypted_secret=encrypt_secret(secret);credential.secret_fingerprint=hashlib.sha256(secret.encode()).hexdigest()[:16]
+    def create(self,validated_data):
+        secret=validated_data.pop("secret",None);credential=models.ImageCredentialReference(**validated_data);self._apply_secret(credential,secret);credential.save();return credential
+    def update(self,instance,validated_data):
+        secret=validated_data.pop("secret",None)
+        for field,value in validated_data.items(): setattr(instance,field,value)
+        self._apply_secret(instance,secret);instance.save();return instance
+    class Meta:
+        model=models.ImageCredentialReference
+        fields=("id","project","name","registry_host","credential_type","username","secret","secret_fingerprint","credential_present",
+            "is_active","last_used_at","referenced_images","created_by","created_at","updated_at")
+        read_only_fields=("secret_fingerprint","credential_present","last_used_at","referenced_images","created_by","created_at","updated_at")
 class PublishedImageSerializer(serializers.ModelSerializer):
     class Meta: model=models.PublishedImage; fields="__all__"
 class DeviceTemplateSerializer(serializers.ModelSerializer):

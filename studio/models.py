@@ -87,6 +87,7 @@ class ImageArtifact(UUIDModel):
     project = models.ForeignKey(Project, on_delete=models.PROTECT, related_name="image_artifacts")
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
     upload_session = models.OneToOneField(UploadSession, on_delete=models.PROTECT, related_name="artifact", null=True, blank=True)
+    credential_reference = models.ForeignKey("ImageCredentialReference", on_delete=models.PROTECT, related_name="image_artifacts", null=True, blank=True)
     source_type = models.CharField(max_length=16, choices=Source.choices, default=Source.UPLOAD)
     registry_reference = models.CharField(max_length=512, blank=True)
     original_filename = models.CharField(max_length=255)
@@ -125,11 +126,20 @@ class PublishedImage(UUIDModel):
     lifecycle_status = models.CharField(max_length=24, default="unverified")
 
 class ImageCredentialReference(UUIDModel):
-    project = models.ForeignKey(Project, on_delete=models.CASCADE)
+    class CredentialType(models.TextChoices): BASIC="basic"; TOKEN="token"
+    project = models.ForeignKey(Project, on_delete=models.PROTECT, related_name="image_credentials")
     name = models.CharField(max_length=120)
-    secret_name = models.CharField(max_length=253)
+    secret_name = models.CharField(max_length=253, blank=True, help_text="Optional externally managed Kubernetes Secret name")
     registry_host = models.CharField(max_length=253)
+    credential_type = models.CharField(max_length=16, choices=CredentialType.choices, default=CredentialType.BASIC)
+    username = models.CharField(max_length=253, blank=True)
+    encrypted_secret = models.BinaryField(blank=True, default=bytes)
+    secret_fingerprint = models.CharField(max_length=16, blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="created_image_credentials", null=True, blank=True)
+    is_active = models.BooleanField(default=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
     class Meta: constraints=[models.UniqueConstraint(fields=["project", "name"], name="unique_credential_ref")]
+    def __str__(self): return f"{self.project.name} · {self.name}"
 
 class DeviceTemplate(UUIDModel):
     name = models.CharField(max_length=120, unique=True)

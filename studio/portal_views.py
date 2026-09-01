@@ -17,8 +17,8 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_http_methods
-from .forms import LabEditForm, LabFolderForm, LabForm, PlatformPasswordResetForm, PlatformUserCreateForm, ProfileForm, ProjectForm, RegistryImageForm, StudioPasswordChangeForm
-from .models import (AuditEvent, ConfigurationVersion, DeviceTemplate, DeviceTemplateVersion, ImageArtifact, Lab, LabDeployment, LabFolder,
+from .forms import LabEditForm, LabFolderForm, LabForm, PlatformPasswordResetForm, PlatformUserCreateForm, ProfileForm, ProjectForm, RegistryCredentialForm, RegistryImageForm, StudioPasswordChangeForm
+from .models import (AuditEvent, ConfigurationVersion, DeviceTemplate, DeviceTemplateVersion, ImageArtifact, ImageCredentialReference, Lab, LabDeployment, LabFolder,
                      LabInterface, LabLink, LabNode, LabRevision, OperationJob, Project,
                      ProjectMembership, PublishedImage, User)
 from .permissions import project_role
@@ -455,19 +455,60 @@ def image_register(request):
     if request.method == "POST" and form.is_valid():
         digest = form.cleaned_data["registry_digest"]
         with transaction.atomic():
+            credential=form.cleaned_data["credential_reference"]
             artifact = ImageArtifact.objects.create(project=form.cleaned_data["project"], owner=request.user,
+                credential_reference=credential,
                 source_type=ImageArtifact.Source.REGISTRY, registry_reference=digest, original_filename=form.cleaned_data["name"],
                 detected_format="oci-registry", byte_size=0, checksum=digest.rsplit(":", 1)[1], vendor=form.cleaned_data["vendor"],
                 category=form.cleaned_data["name"], version=form.cleaned_data["version"], architecture=form.cleaned_data["architecture"],
-                storage_reference=digest, license_acknowledged=True, inspection_result={"source": "registry", "digest_pinned": True},
+                storage_reference=digest, license_acknowledged=True, inspection_result={"source": "registry", "digest_pinned": True,
+                    "credential_reference":str(credential.id) if credential else None},
                 validation_status=ImageArtifact.Validation.VALIDATED)
             PublishedImage.objects.create(artifact=artifact, registry_digest=digest, repository=digest.split("@", 1)[0],
-                architecture=form.cleaned_data["architecture"], compatibility_result={"digest_pinned": True, "runtime_pull": "not_yet_verified"},
+                architecture=form.cleaned_data["architecture"], compatibility_result={"digest_pinned": True, "runtime_pull": "not_yet_verified",
+                    "credential_configured":bool(credential)},
                 lifecycle_status="unverified")
+            AuditEvent.objects.create(actor=request.user,project=artifact.project,action="image.registry_registered",target_type="ImageArtifact",target_id=artifact.id,
+                correlation_id=getattr(request,"correlation_id",""),metadata={"registry_host":digest.split("/",1)[0],"checksum":artifact.checksum,
+                    "credential_reference":str(credential.id) if credential else None})
         messages.success(request, "Digest-pinned image registered. Runtime pull verification is still required.")
         return redirect("portal-images")
     return render(request, "studio/form.html", {"form": form, "title": "Register OCI image", "eyebrow": "IMAGE LIBRARY",
         "cancel_url": "/images/", "submit_label": "Register image"})
+
+@login_required
+def image_credentials(request):
+    credentials=ImageCredentialReference.objects.filter(project__in=visible_projects(request.user)).select_related("project","created_by").prefetch_related("image_artifacts").order_by("project__name","name")
+    for credential in credentials:
+        credential.reference_count=len(credential.image_artifacts.all())
+        credential.can_manage=project_role(request.user,credential.project) in (ProjectMembership.Role.ADMIN,ProjectMembership.Role.EDITOR)
+    return render(request,"studio/image_credentials.html",{"credentials":credentials})
+
+@login_required
+def image_credential_manage(request,credential_id=None):
+    credential=get_object_or_404(ImageCredentialReference.objects.select_related("project"),pk=credential_id,project__in=visible_projects(request.user)) if credential_id else None
+    if credential and project_role(request.user,credential.project) not in (ProjectMembership.Role.ADMIN,ProjectMembership.Role.EDITOR): raise PermissionDenied
+    form=RegistryCredentialForm(request.user,request.POST or None,instance=credential)
+    if request.method=="POST" and form.is_valid():
+        with transaction.atomic():
+            saved=form.save();action="image_credential.updated" if credential else "image_credential.created"
+            AuditEvent.objects.create(actor=request.user,project=saved.project,action=action,target_type="ImageCredentialReference",target_id=saved.id,
+                correlation_id=getattr(request,"correlation_id",""),metadata={"name":saved.name,"registry_host":saved.registry_host,
+                    "credential_type":saved.credential_type,"secret_rotated":bool(form.cleaned_data.get("secret")),"secret_fingerprint":saved.secret_fingerprint})
+        messages.success(request,"Registry credential saved without exposing its secret.");return redirect("portal-image-credentials")
+    return render(request,"studio/form.html",{"form":form,"title":"Edit registry credential" if credential else "Add registry credential",
+        "eyebrow":"PROTECTED IMAGE ACCESS","cancel_url":"/images/credentials/","submit_label":"Save credential"})
+
+@login_required
+@require_http_methods(["POST"])
+def image_credential_deactivate(request,credential_id):
+    credential=get_object_or_404(ImageCredentialReference.objects.select_related("project"),pk=credential_id,project__in=visible_projects(request.user))
+    if project_role(request.user,credential.project) not in (ProjectMembership.Role.ADMIN,ProjectMembership.Role.EDITOR): raise PermissionDenied
+    if credential.is_active:
+        credential.is_active=False;credential.save(update_fields=["is_active","updated_at"])
+        AuditEvent.objects.create(actor=request.user,project=credential.project,action="image_credential.deactivated",target_type="ImageCredentialReference",
+            target_id=credential.id,correlation_id=getattr(request,"correlation_id",""),metadata={"referenced_images":credential.image_artifacts.count()})
+    messages.success(request,"Registry credential deactivated. Existing provenance remains retained.");return redirect("portal-image-credentials")
 
 @login_required
 def templates(request):
