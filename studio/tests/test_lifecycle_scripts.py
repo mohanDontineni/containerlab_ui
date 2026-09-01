@@ -88,3 +88,12 @@ esac
     assert "https://studio.test:30444/admin/login/" in calls
     assert calls.count("-n custom-studio get deployment") == 4
     assert "-n containerlab" not in calls
+
+def test_existing_resource_adoption_is_explicit_and_visible_in_plan(fake_cluster_tools,tmp_path):
+    env,log=fake_cluster_tools;plan=tmp_path/"plan.yaml"
+    env={**env,"PLAN_OUTPUT":str(plan),"IMAGE_TAG":"sha-abc","ADOPT_EXISTING_RESOURCES":"true"}
+    result=run("install.sh","plan",env=env)
+    assert result.returncode==0 and "will be adopted" in result.stdout
+    script=(ROOT/"scripts/install.sh").read_text()
+    assert "ADOPT_EXISTING_RESOURCES" in script and "--take-ownership" in script
+    assert "helm upgrade" not in log.read_text()

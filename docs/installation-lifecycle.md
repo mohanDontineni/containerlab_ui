@@ -31,6 +31,12 @@ STORAGE_CLASS=studio-local \
 scripts/install.sh apply
 ```
 
+For an existing installation previously maintained with rendered `kubectl apply`
+manifests, inspect the plan first and set `ADOPT_EXISTING_RESOURCES=true` on the
+first apply. This explicitly enables Helm ownership adoption; it is off by
+default and must not be used to take over resources belonging to another
+application.
+
 After Helm readiness completes, the script records a `containerlab-studio-installation` ConfigMap containing the release, selected context, immutable image, and version-lock checksum, then verifies the HTTPS endpoint on NodePort 30444.
 
 ## Remove or purge
