@@ -20,7 +20,9 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --no-index --find-links=/wheels -r requirements.txt && rm -rf /wheels
 COPY . .
 COPY --from=frontend /src/frontend/dist /app/static/editor
-RUN mkdir -p /app/media /app/staticfiles && python manage.py collectstatic --noinput && chown -R studio:studio /app
+RUN mkdir -p /app/media /app/staticfiles \
+    && python manage.py collectstatic --clear --noinput \
+    && chown -R studio:studio /app
 USER 10001:10001
 EXPOSE 8000
 CMD ["gunicorn","config.asgi:application","-k","uvicorn.workers.UvicornWorker","--bind","0.0.0.0:8000","--workers","2","--access-logfile","-"]
