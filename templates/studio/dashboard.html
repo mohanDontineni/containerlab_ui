@@ -55,7 +55,7 @@
   <section class="panel failures-panel">
     <div class="panel-header"><div><p class="eyebrow">RECOVERY</p><h2>Actionable failures</h2></div><a href="/operations/">All operations <span>→</span></a></div>
     {% if failures %}<div class="failure-list">
-      {% for failure in failures %}<article><header><span class="job-state job-failed">Failed</span><strong>{{ failure.job.operation_label }}</strong><time>{{ failure.job.created_at|timesince }} ago</time></header><p><b>{{ failure.error_type }}</b> · {{ failure.message }}</p><footer><small>{{ failure.guidance }}</small><a class="secondary-button compact" href="{{ failure.url }}">{{ failure.label }} →</a></footer></article>{% endfor %}
+      {% for failure in failures %}<article><header><span class="job-state job-failed">Failed</span><strong>{{ failure.job.operation_label }}</strong><time>{{ failure.job.created_at|timesince }} ago</time></header><p><b>{{ failure.error_type }}</b> · {{ failure.error_message }}</p><footer><small>{{ failure.guidance }}</small><a class="secondary-button compact" href="{{ failure.action_url }}">{{ failure.action_label }} →</a></footer></article>{% endfor %}
     </div>{% else %}<div class="empty-inline"><span>✓</span><div><strong>No failed jobs require triage</strong><p>Bounded failure evidence and a resource-specific recovery path will appear here.</p></div></div>{% endif %}
   </section>
 

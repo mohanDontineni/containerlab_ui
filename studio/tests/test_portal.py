@@ -45,6 +45,29 @@ def test_dashboard_exposes_complete_state_quota_and_actionable_failure_evidence(
     assert str(job.id) not in html
 
 @pytest.mark.django_db
+def test_operations_center_filters_owner_jobs_and_redacts_failure_evidence(client):
+    owner=User.objects.create_user("operations-owner",password="long-enough-password")
+    outsider=User.objects.create_user("operations-outsider",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="Operations evidence")
+    lab=Lab.objects.create(project=project,name="Recovery lab")
+    revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="b"*64,immutable=True)
+    deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-operation-center",
+        runtime_version="0.8.0",observed_state="running")
+    failed=OperationJob.objects.create(owner=owner,deployment=deployment,operation_type="capture_packets",target_id=uuid.uuid4(),
+        idempotency_key="acceptance-correlation",state="failed",attempts=1,progress=100,
+        request_payload={"authorization":"must-never-render"},
+        error_details={"type":"CapabilityError","message":"capture failed token=private-value password:also-private"})
+    OperationJob.objects.create(owner=outsider,operation_type="publish_image",target_id=uuid.uuid4(),idempotency_key="outsider-job",
+        state="failed",error_details={"message":"outsider-only-evidence"})
+    client.force_login(owner)
+    response=client.get("/operations/",{"state":"failed","type":"capture_packets","q":"Recovery"});html=response.content.decode()
+    assert response.status_code==200 and "Capture Packets" in html and "Recovery lab" in html
+    assert "capture failed token=[redacted] password:[redacted]" in html
+    assert "private-value" not in html and "also-private" not in html and "must-never-render" not in html and "outsider-only-evidence" not in html
+    assert f'href="/deployments/{deployment.id}/"' in html and str(failed.id) in html
+    assert "Why there is no generic cancel or retry" in html and "1–1 of 1" not in html
+
+@pytest.mark.django_db
 def test_topology_edit_lease_blocks_second_editor_and_expires(client):
     owner=User.objects.create_user("lease-owner",password="long-enough-password")
     editor=User.objects.create_user("lease-editor",password="long-enough-password")

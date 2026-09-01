@@ -22,6 +22,7 @@ from .models import (AuditEvent, ConfigurationVersion, DeviceTemplate, DeviceTem
                      LabInterface, LabLink, LabNode, LabRevision, OperationJob, Project,
                      ProjectMembership, PublishedImage, UploadSession, User)
 from .permissions import project_role
+from .operation_presenters import present
 from .configurations import decrypt_configuration, encrypt_configuration
 from .quotas import normalized_quotas,project_usage,quota_exceeded
 from .topology_annotations import normalize_legacy_topology_annotations,validate_topology_annotations
@@ -542,9 +543,26 @@ def template_manage(request,template_id=None):
 
 @login_required
 def operations(request):
-    queryset = OperationJob.objects.filter(owner=request.user).select_related("deployment__revision__lab").order_by("-created_at")
-    return render(request, "studio/catalog.html", {"section": "operations", "title": "Jobs & events", "eyebrow": "OPERATIONS", "items": queryset,
-        "description": "Inspect accepted, scheduled, running, completed, and failed background work."})
+    base=OperationJob.objects.filter(owner=request.user).select_related("deployment__revision__lab")
+    allowed_states=("accepted","scheduled","started","succeeded","failed")
+    state=request.GET.get("state","").strip().lower()
+    if state and state not in allowed_states: state=""
+    operation_type=request.GET.get("type","").strip()[:40]
+    available_values=list(base.order_by("operation_type").values_list("operation_type",flat=True).distinct())
+    if operation_type not in available_values: operation_type=""
+    query=request.GET.get("q","").strip()[:80]
+    queryset=base
+    if state: queryset=queryset.filter(state=state)
+    if operation_type: queryset=queryset.filter(operation_type=operation_type)
+    if query: queryset=queryset.filter(Q(operation_type__icontains=query)|Q(deployment__revision__lab__name__icontains=query)|Q(idempotency_key__icontains=query))
+    queryset=queryset.order_by("-created_at")
+    counts={row["state"]:row["total"] for row in base.values("state").annotate(total=Count("id"))}
+    paginator=Paginator(queryset,30);page=paginator.get_page(request.GET.get("page"));page.object_list=[present(job) for job in page.object_list]
+    filters={"q":query,"state":state,"type":operation_type};query_string=urlencode({key:value for key,value in filters.items() if value})
+    return render(request,"studio/operations.html",{"jobs":page,"counts":counts,"filters":filters,"query_string":query_string,
+        "operation_types":[{"value":value,"label":value.replace("_"," ").title()} for value in available_values],"total_count":base.count(),
+        "states":[{"value":value,"label":"Running" if value=="started" else value.title()} for value in allowed_states],
+        "active_count":sum(counts.get(value,0) for value in ("accepted","scheduled","started"))})
 
 def _audit_scope(user):
     queryset=AuditEvent.objects.select_related("actor","project")

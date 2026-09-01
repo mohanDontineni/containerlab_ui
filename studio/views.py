@@ -3,30 +3,8 @@ from django.core.cache import cache
 from django.db.models import Q
 from django.shortcuts import render
 from .models import Lab, LabDeployment, OperationJob, Project
+from .operation_presenters import present
 from .quotas import normalized_quotas, project_usage
-
-OPERATION_REMEDIATION = {
-    "publish_image": ("Review image", "/images/", "Inspect validation and publication evidence before scheduling another publication."),
-    "prepare_image": ("Review image", "/images/", "Inspect the retained build output and correct the image source or recipe."),
-    "import_lab": ("Review labs", "/labs/", "Review the imported lab data and resolve any validation errors."),
-    "restore_lab": ("Review labs", "/labs/", "Review the backup compatibility and destination project before restoring again."),
-}
-
-def operation_remediation(job):
-    if job.deployment_id:
-        return {"label":"Open deployment","url":f"/deployments/{job.deployment_id}/",
-            "guidance":"Inspect runtime state and device evidence before repeating the operation."}
-    label,url,guidance=OPERATION_REMEDIATION.get(job.operation_type,
-        ("Open job center","/operations/","Inspect the request and bounded failure evidence before taking corrective action."))
-    if job.operation_type.startswith("template_"):
-        label,url,guidance="Review templates","/device-templates/","Review the launch profile and publish a corrected template version."
-    return {"label":label,"url":url,"guidance":guidance}
-
-def failure_summary(job):
-    details=job.error_details if isinstance(job.error_details,dict) else {}
-    remediation=operation_remediation(job)
-    return {"job":job,"error_type":str(details.get("type") or "Operation failed")[:80],
-        "message":str(details.get("message") or "No additional failure detail was reported.")[:500],**remediation}
 def platform_health():
     try: return {"metrics":cache.get("studio:platform:metrics"),"runtime":cache.get("studio:platform:runtime")}
     except Exception: return {"metrics":None,"runtime":None}
@@ -53,7 +31,7 @@ def dashboard(request):
     return render(request, "studio/dashboard.html", {
         "deployments": deployments,
         "operations": operations[:6],
-        "failures": [failure_summary(job) for job in operations.filter(state="failed")[:3]],
+        "failures": [present(job) for job in operations.filter(state="failed")[:3]],
         "quota_projects":quota_projects,
         "summary": summary,
         "platform_health":platform_health(),
