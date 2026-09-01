@@ -146,7 +146,7 @@ def topology_edit_lease(request, lab_id):
     if request.method=="GET":
         return JsonResponse(edit_lease_status(lab,request.user,supplied))
     with transaction.atomic():
-        lab=Lab.objects.select_for_update().select_related("edit_lock_owner").get(pk=lab.pk)
+        lab=Lab.objects.select_for_update().get(pk=lab.pk)
         if request.method=="DELETE":
             if not valid_edit_lease(lab,request.user,supplied): return JsonResponse(edit_lease_conflict(lab),status=409)
             release_edit_lease(lab)
@@ -200,7 +200,7 @@ def topology_document(request, lab_id):
     if len(node_ids) != len(set(node_ids)) or len(link_ids) != len(set(link_ids)):
         return JsonResponse({"error": "Node and link IDs must be unique"}, status=422)
     with transaction.atomic():
-        lab = Lab.objects.select_for_update().select_related("edit_lock_owner").get(id=lab.id)
+        lab = Lab.objects.select_for_update().get(id=lab.id)
         if edit_lease_active(lab) and not valid_edit_lease(lab,request.user,request.headers.get("X-Edit-Lease")):
             return JsonResponse(edit_lease_conflict(lab),status=409)
         revision = lab.current_draft
