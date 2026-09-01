@@ -90,7 +90,9 @@ spec:
   podSelector: {matchLabels: {app: containerlab-studio-registry}}
   policyTypes: [Ingress]
   ingress:
-  - from: [{podSelector: {}}]
+  - from:
+    - {podSelector: {matchLabels: {app: containerlab-studio-worker}}}
+    - {podSelector: {matchExpressions: [{key: studio.containerlab.io/image-build,operator: Exists}]}}
     ports: [{protocol: TCP,port: 5000}]
 ---
 apiVersion: apps/v1

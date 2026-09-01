@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import json
 from urllib.request import Request, urlopen
+from kubernetes import client as kubernetes_client, config as kubernetes_config
 from django.conf import settings
 from django.core.cache import cache
 from django.db import transaction
@@ -36,6 +37,45 @@ def probe_registry_health():
         except Exception as exc:
             payload={"available":False,"reason":str(exc)[:200],"checked_at":checked_at}
     publish_platform_health("studio:platform:registry",payload)
+    return payload
+
+@shared_task
+def probe_network_isolation():
+    checked_at=timezone.now().isoformat()
+    expected={
+        "containerlab-studio-web":("containerlab-studio-web",8000,{"containerlab-studio-gateway"}),
+        "containerlab-studio-console":("containerlab-studio-console",8000,{"containerlab-studio-gateway"}),
+        "containerlab-studio-postgres":("containerlab-studio-postgres",5432,{"containerlab-studio-web","containerlab-studio-worker",
+            "containerlab-studio-scheduler","containerlab-studio-console","containerlab-studio-migrate"}),
+        "containerlab-studio-redis":("containerlab-studio-redis",6379,{"containerlab-studio-web","containerlab-studio-worker",
+            "containerlab-studio-scheduler","containerlab-studio-console"}),
+        "containerlab-studio-registry":("containerlab-studio-registry",5000,{"containerlab-studio-worker","@image-build"}),
+    }
+    try:
+        kubernetes_config.load_incluster_config()
+        policies=kubernetes_client.NetworkingV1Api().list_namespaced_network_policy(settings.STUDIO_NAMESPACE).items
+        valid=set()
+        for policy in policies:
+            requirement=expected.get(policy.metadata.name)
+            if not requirement or "Ingress" not in (policy.spec.policy_types or []): continue
+            target,port,sources=requirement
+            if (policy.spec.pod_selector.match_labels or {}).get("app")!=target or len(policy.spec.ingress or [])!=1: continue
+            rule=policy.spec.ingress[0]
+            if {item.port for item in (rule.ports or [])}!={port}: continue
+            observed=set()
+            for peer in rule._from or []:
+                selector=peer.pod_selector
+                app=(selector.match_labels or {}).get("app") if selector else None
+                if app: observed.add(app)
+                for expression in (selector.match_expressions or []) if selector else []:
+                    if expression.key=="studio.containerlab.io/image-build" and expression.operator=="Exists": observed.add("@image-build")
+            if observed==sources: valid.add(policy.metadata.name)
+        missing=sorted(set(expected)-valid)
+        payload={"available":not missing,"verified":len(expected)-len(missing),"expected":len(expected),"missing":missing,
+            "mode":"Workload-scoped ingress · cross-namespace denied","checked_at":checked_at}
+    except Exception as exc:
+        payload={"available":False,"verified":0,"expected":len(expected),"reason":str(exc)[:200],"checked_at":checked_at}
+    publish_platform_health("studio:platform:network_isolation",payload)
     return payload
 
 @shared_task(bind=True,autoretry_for=(ConnectionError,),retry_backoff=True,max_retries=5)

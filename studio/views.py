@@ -7,8 +7,8 @@ from .operation_presenters import present
 from .quotas import normalized_quotas, project_usage
 def platform_health():
     try: return {"metrics":cache.get("studio:platform:metrics"),"runtime":cache.get("studio:platform:runtime"),
-        "registry":cache.get("studio:platform:registry")}
-    except Exception: return {"metrics":None,"runtime":None,"registry":None}
+        "registry":cache.get("studio:platform:registry"),"network_isolation":cache.get("studio:platform:network_isolation")}
+    except Exception: return {"metrics":None,"runtime":None,"registry":None,"network_isolation":None}
 @login_required
 def dashboard(request):
     project_filter = Q(revision__lab__project__owner=request.user) | Q(revision__lab__project__memberships__user=request.user)

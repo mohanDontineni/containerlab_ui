@@ -1,0 +1,48 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: containerlab-studio-web}
+spec:
+  podSelector: {matchLabels: {app: containerlab-studio-web}}
+  policyTypes: [Ingress]
+  ingress:
+  - from: [{podSelector: {matchLabels: {app: containerlab-studio-gateway}}}]
+    ports: [{protocol: TCP,port: 8000}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: containerlab-studio-console}
+spec:
+  podSelector: {matchLabels: {app: containerlab-studio-console}}
+  policyTypes: [Ingress]
+  ingress:
+  - from: [{podSelector: {matchLabels: {app: containerlab-studio-gateway}}}]
+    ports: [{protocol: TCP,port: 8000}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: containerlab-studio-postgres}
+spec:
+  podSelector: {matchLabels: {app: containerlab-studio-postgres}}
+  policyTypes: [Ingress]
+  ingress:
+  - from:
+    - {podSelector: {matchLabels: {app: containerlab-studio-web}}}
+    - {podSelector: {matchLabels: {app: containerlab-studio-worker}}}
+    - {podSelector: {matchLabels: {app: containerlab-studio-scheduler}}}
+    - {podSelector: {matchLabels: {app: containerlab-studio-console}}}
+    - {podSelector: {matchLabels: {app: containerlab-studio-migrate}}}
+    ports: [{protocol: TCP,port: 5432}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: containerlab-studio-redis}
+spec:
+  podSelector: {matchLabels: {app: containerlab-studio-redis}}
+  policyTypes: [Ingress]
+  ingress:
+  - from:
+    - {podSelector: {matchLabels: {app: containerlab-studio-web}}}
+    - {podSelector: {matchLabels: {app: containerlab-studio-worker}}}
+    - {podSelector: {matchLabels: {app: containerlab-studio-scheduler}}}
+    - {podSelector: {matchLabels: {app: containerlab-studio-console}}}
+    ports: [{protocol: TCP,port: 6379}]
