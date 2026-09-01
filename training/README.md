@@ -58,6 +58,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 | `46-guarded-selected-device-reset.png` | Guarded selected-device reset | Preflights several devices together, reports saved baselines and session impact, then resets every eligible selection through independently tracked jobs. |
 | `47-topology-revision-comparison.png` | Topology revision comparison | Selects two saved revisions and reviews structured device, link, canvas, object, image, template, and configuration-checksum changes before restore or deployment. |
 | `48-hierarchical-lab-folders.png` | Hierarchical lab folders | Organizes a real lab into project-scoped nested folders and demonstrates guarded deletion while the folder still contains a lab. |
+| `49-navigable-lab-folder-browser.png` | Navigable lab folder browser | Opens nested folder levels with breadcrumbs, contextual creation actions, project-aware preselection, and a catalog scoped to the current folder. |
 
 ## No-YAML operating model
 

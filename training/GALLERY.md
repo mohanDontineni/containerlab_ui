@@ -289,3 +289,9 @@ The designer selects two saved revisions inside the visual workspace and opens a
 ![Hierarchical lab folders](48-hierarchical-lab-folders.png)
 
 The operator creates a project-scoped parent folder and nested child folder entirely through Studio, then moves the live Alpine Connectivity QA design into that hierarchy with the native lab form. Folder cards expose their complete path, direct lab and child counts, and editor-only management controls; the lab catalog repeats the path beside each design for fast scanning. Firefox verified that deleting the populated child is blocked with an exact dependency count, then restored the lab to root and removed both empty test folders without YAML, cluster access, console errors, or failed application requests.
+
+## 49 — Navigable lab folder browser
+
+![Navigable lab folder browser](49-navigable-lab-folder-browser.png)
+
+The operator drills from the project-wide lab root into `Navigable Evidence 49 / Routing Validation` using folder cards and linked breadcrumbs. Contextual actions create subfolders and labs with the project and parent already selected, while the catalog shows only the current folder's direct labs instead of repeating the entire library. Firefox moved the real Alpine Connectivity QA design into the nested folder, verified the exact one-item scope and folder-preserving redirect, captured this view without console or request failures, restored the lab to root, and deleted both disposable folders through the GUI.
