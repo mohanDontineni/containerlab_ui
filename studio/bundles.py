@@ -71,24 +71,66 @@ def _uuid(value, label):
         raise BundleError(f"Invalid {label} UUID") from exc
 
 
+def inspect_lab_bundle(lab, raw):
+    if isinstance(raw, bytes):
+        if len(raw) > MAX_BUNDLE_BYTES: raise BundleError("Bundle exceeds the 4 MiB limit")
+        try: bundle=json.loads(raw)
+        except (UnicodeDecodeError,json.JSONDecodeError) as exc: raise BundleError("Bundle is not valid UTF-8 JSON") from exc
+    else: bundle=raw
+    if not isinstance(bundle,dict) or bundle.get("format")!=BUNDLE_FORMAT or bundle.get("version")!=BUNDLE_VERSION:
+        raise BundleError("Unsupported lab bundle format or version")
+    topology=bundle.get("topology")
+    if not isinstance(topology,dict) or not isinstance(topology.get("nodes"),list) or not isinstance(topology.get("links"),list):
+        raise BundleError("Bundle topology must contain node and link lists")
+    if not isinstance(topology.get("annotations",[]),list): raise BundleError("Bundle annotations must be a list")
+    if len(topology["nodes"])>250 or len(topology["links"])>1000: raise BundleError("Bundle exceeds workspace topology limits")
+    source_ids=set();names=set();interfaces=set();templates=set();images=set();configured=0
+    for item in topology["nodes"]:
+        if not isinstance(item,dict): raise BundleError("Every node must be an object")
+        source_id=str(_uuid(item.get("id"),"node"))
+        if source_id in source_ids: raise BundleError("Node IDs must be unique")
+        source_ids.add(source_id);name=str(item.get("name","")).strip()
+        if not name or len(name)>63 or name in names: raise BundleError("Node names must be unique and 1-63 characters")
+        names.add(name);descriptor=item.get("template") or {}
+        template=DeviceTemplateVersion.objects.filter(template__name=descriptor.get("name"),version=descriptor.get("version"),containerlab_kind=descriptor.get("kind")).first()
+        if not template: raise BundleError(f"Template is unavailable for {name}")
+        templates.add(f"{template.template.name} v{template.version}")
+        digest=item.get("imageDigest")
+        if digest:
+            if not PublishedImage.objects.filter(artifact__project=lab.project,registry_digest=digest).exists(): raise BundleError(f"Image {digest} is unavailable in the destination project")
+            images.add(digest)
+        content=item.get("startupConfiguration","")
+        if not isinstance(content,str): raise BundleError(f"Startup configuration must be text for {name}")
+        if content: configured+=1
+        allowed={str(value) for value in item.get("interfaces",[])}
+        expected={f"{template.interface_rules.get('prefix','eth')}{number}" for number in range(int(template.interface_rules.get('start',1)),int(template.interface_rules.get('start',1))+min(int(template.interface_rules.get('count',4)),64))}
+        if allowed!=expected: raise BundleError(f"Interface inventory does not match the template for {name}")
+        interfaces.update((source_id,interface) for interface in expected)
+    used=set();link_ids=set()
+    for item in topology["links"]:
+        if not isinstance(item,dict): raise BundleError("Every link must be an object")
+        link_id=_uuid(item.get("id"),"link")
+        if link_id in link_ids: raise BundleError("Link IDs must be unique")
+        link_ids.add(link_id)
+        a=(str(_uuid(item.get("sourceNode"),"source node")),str(item.get("sourceInterface","")))
+        b=(str(_uuid(item.get("targetNode"),"target node")),str(item.get("targetInterface","")))
+        if a==b or a in used or b in used or a not in interfaces or b not in interfaces: raise BundleError("A link contains an invalid or reused interface")
+        used.update((a,b))
+    canonical=json.dumps(bundle,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()
+    source_lab=bundle.get("lab") if isinstance(bundle.get("lab"),dict) else {}
+    preview={"format":BUNDLE_FORMAT,"version":BUNDLE_VERSION,"checksum":hashlib.sha256(canonical).hexdigest(),
+        "source_lab":str(source_lab.get("name","")).strip() or "Unnamed lab","destination_lab":lab.name,
+        "node_count":len(topology["nodes"]),"link_count":len(topology["links"]),"configured_node_count":configured,
+        "template_count":len(templates),"image_count":len(images),"templates":sorted(templates),
+        "will_replace_draft":bool(lab.current_draft_id),"preserved_published_revisions":lab.revisions.filter(immutable=True).count(),
+        "running_deployments_unchanged":lab.revisions.filter(deployments__observed_state__in=("pending","deploying","running","degraded")).distinct().count()}
+    return bundle,preview
+
+
 @transaction.atomic
 def import_lab_bundle(lab, user, raw):
-    if isinstance(raw, bytes):
-        if len(raw) > MAX_BUNDLE_BYTES:
-            raise BundleError("Bundle exceeds the 4 MiB limit")
-        try:
-            bundle = json.loads(raw)
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise BundleError("Bundle is not valid UTF-8 JSON") from exc
-    else:
-        bundle = raw
-    if not isinstance(bundle, dict) or bundle.get("format") != BUNDLE_FORMAT or bundle.get("version") != BUNDLE_VERSION:
-        raise BundleError("Unsupported lab bundle format or version")
+    bundle,_=inspect_lab_bundle(lab,raw)
     topology = bundle.get("topology")
-    if not isinstance(topology, dict) or not isinstance(topology.get("nodes"), list) or not isinstance(topology.get("links"), list):
-        raise BundleError("Bundle topology must contain node and link lists")
-    if len(topology["nodes"]) > 250 or len(topology["links"]) > 1000:
-        raise BundleError("Bundle exceeds workspace topology limits")
 
     lab = type(lab).objects.select_for_update().get(pk=lab.pk)
     if lab.current_draft and lab.current_draft.immutable:

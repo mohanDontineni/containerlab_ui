@@ -19,7 +19,7 @@ from .permissions import ProjectAccess, project_role
 from .runtime import ClabernetesAdapter
 from .tasks import execute_operation, reconcile_deployment
 from .uploads import UploadError, append_chunk, finalize
-from .bundles import BundleError, LabBundleParser, export_lab_bundle, import_lab_bundle
+from .bundles import BundleError, LabBundleParser, export_lab_bundle, import_lab_bundle, inspect_lab_bundle
 from .configurations import decrypt_configuration
 from .quotas import ProjectQuotaExceeded,normalized_quotas,project_usage,quota_exceeded,validate_quotas
 
@@ -209,18 +209,50 @@ class LabViewSet(viewsets.ModelViewSet):
         response["Content-Disposition"]=f'attachment; filename="{slugify(lab.name)[:80] or "lab"}.clabstudio.json"'
         response["X-Content-Type-Options"]="nosniff"
         return response
+    @action(detail=True,methods=["post"],url_path="import-preview",parser_classes=[LabBundleParser,JSONParser])
+    def import_preview(self,request,pk=None):
+        lab=self.get_object()
+        if project_role(request.user,lab.project) not in (models.ProjectMembership.Role.ADMIN,models.ProjectMembership.Role.EDITOR):
+            from rest_framework.exceptions import PermissionDenied; raise PermissionDenied()
+        try: _,preview=inspect_lab_bundle(lab,request.data)
+        except BundleError as exc: return Response({"error":{"code":"invalid_lab_bundle","details":str(exc)}},status=422)
+        preview["expected_current_draft"]=str(lab.current_draft_id) if lab.current_draft_id else None
+        models.AuditEvent.objects.create(actor=request.user,project=lab.project,action="lab.import_previewed",target_type="Lab",target_id=lab.id,
+            correlation_id=getattr(request,"correlation_id",""),metadata={key:preview[key] for key in ("checksum","node_count","link_count","configured_node_count")})
+        response=Response(preview);response["Cache-Control"]="no-store";response["X-Content-Type-Options"]="nosniff";return response
     @action(detail=True,methods=["post"],url_path="import",parser_classes=[LabBundleParser,JSONParser])
     def import_bundle(self,request,pk=None):
         lab=self.get_object()
         if project_role(request.user,lab.project) not in (models.ProjectMembership.Role.ADMIN,models.ProjectMembership.Role.EDITOR):
             from rest_framework.exceptions import PermissionDenied; raise PermissionDenied()
+        key=request.headers.get("Idempotency-Key")
+        if not key: return Response({"error":{"code":"idempotency_key_required"}},status=400)
+        expected_header=request.headers.get("X-Expected-Draft")
+        if expected_header is None: return Response({"error":{"code":"expected_draft_required"}},status=400)
+        expected=None if expected_header.lower()=="none" else expected_header
+        if expected:
+            try: expected=str(uuid.UUID(expected))
+            except (ValueError,TypeError,AttributeError): return Response({"error":{"code":"invalid_expected_draft"}},status=422)
+        existing=models.OperationJob.objects.filter(owner=request.user,idempotency_key=key).first()
+        if existing:
+            if existing.operation_type!="import_lab" or existing.target_id!=lab.id: return Response({"error":{"code":"idempotency_conflict"}},status=409)
+            return Response(existing.result_payload,status=200)
         raw=request.data
-        try: revision=import_lab_bundle(lab,request.user,raw)
+        try:
+            with transaction.atomic():
+                locked=models.Lab.objects.select_for_update().get(pk=lab.id);actual=str(locked.current_draft_id) if locked.current_draft_id else None
+                if actual!=expected: return Response({"error":{"code":"draft_changed","details":"The active draft changed after the backup preview.","current_draft":actual}},status=409)
+                _,preview=inspect_lab_bundle(locked,raw)
+                job=models.OperationJob.objects.create(owner=request.user,operation_type="import_lab",target_id=lab.id,idempotency_key=key,state="started",progress=25,
+                    request_payload={"lab_id":str(lab.id),"expected_current_draft":expected,"bundle_checksum":preview["checksum"]})
+                revision=import_lab_bundle(locked,request.user,raw)
+                result={"revision_id":str(revision.id),"revision_number":revision.revision_number,"edit_version":revision.edit_version,
+                    "node_count":revision.nodes.count(),"link_count":revision.links.count(),"operation_id":str(job.id),"bundle_checksum":preview["checksum"]}
+                job.state="succeeded";job.progress=100;job.result_payload=result;job.save(update_fields=["state","progress","result_payload","updated_at"])
         except BundleError as exc: return Response({"error":{"code":"invalid_lab_bundle","details":str(exc)}},status=422)
         models.AuditEvent.objects.create(actor=request.user,project=lab.project,action="lab.imported",target_type="Lab",target_id=lab.id,
-            correlation_id=getattr(request,"correlation_id",""),metadata={"revision":str(revision.id),"bytes":len(raw)})
-        return Response({"revision_id":str(revision.id),"revision_number":revision.revision_number,"edit_version":revision.edit_version,
-                         "node_count":revision.nodes.count(),"link_count":revision.links.count()},status=201)
+            correlation_id=getattr(request,"correlation_id",""),metadata={"revision":str(revision.id),"bytes":len(raw),"checksum":preview["checksum"],"operation":str(job.id)})
+        return Response(result,status=201)
     @action(detail=True,methods=["post"])
     def deploy(self,request,pk=None):
         lab=self.get_object()

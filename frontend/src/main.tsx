@@ -87,6 +87,9 @@ type Snapshot = { nodes: Node<DeviceData>[]; edges: Edge[] };
 type PublishedImage = { id: string; name: string; digest: string; architecture: string; status: string };
 type RevisionSummary = { id:string; revision_number:number; edit_version:number; immutable:boolean; topology_checksum:string;
   node_count:number; link_count:number; deployment_count:number; created_at:string; is_current_draft:boolean };
+type BundlePreview = { checksum:string; source_lab:string; destination_lab:string; node_count:number; link_count:number;
+  configured_node_count:number; template_count:number; image_count:number; templates:string[]; will_replace_draft:boolean;
+  preserved_published_revisions:number; running_deployments_unchanged:number; expected_current_draft:string|null };
 const params = new URLSearchParams(location.search);
 const labId = params.get("lab") || "";
 const labName = params.get("name") || "Topology Workspace";
@@ -169,6 +172,8 @@ function Workspace() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [restoring, setRestoring] = useState<string | null>(null);
+  const [bundleRestore, setBundleRestore] = useState<{file:File;preview:BundlePreview}|null>(null);
+  const [bundleRestoring, setBundleRestoring] = useState(false);
   const [revisions, setRevisions] = useState<RevisionSummary[]>([]);
   const [currentDraftId, setCurrentDraftId] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
@@ -467,17 +472,24 @@ function Workspace() {
   };
   const importBundle = async (file?: File) => {
     if (!file) return;
-    if (dirty && !confirm("Importing replaces this unsaved draft. Continue?")) return;
-    setNotice("Validating and restoring lab backup…");
+    setNotice("Validating lab backup without changing the workspace…");
     try {
-      const response = await fetch(`/api/v1/labs/${labId}/import/`, {method:"POST",credentials:"same-origin",
+      const response = await fetch(`/api/v1/labs/${labId}/import-preview/`, {method:"POST",credentials:"same-origin",
         headers:{"Content-Type":"application/vnd.containerlab.studio.lab+json","X-CSRFToken":csrf()},body:file});
       const data=await response.json();
-      if (!response.ok) throw new Error(data.error?.details || "Import failed");
-      setNotice(`Restored ${data.node_count} devices and ${data.link_count} links from backup`);
-      location.reload();
+      if (!response.ok) throw new Error(data.error?.details || "Backup validation failed");
+      setBundleRestore({file,preview:data});setNotice("Backup validated — review the restore impact");
     } catch (error) { setNotice(error instanceof Error ? error.message : "Backup restore failed"); }
     finally { if (importInput.current) importInput.current.value=""; }
+  };
+  const confirmBundleRestore=async()=>{
+    if (!bundleRestore)return;setBundleRestoring(true);setNotice("Restoring validated lab backup…");
+    try {const response=await fetch(`/api/v1/labs/${labId}/import/`,{method:"POST",credentials:"same-origin",headers:{
+      "Content-Type":"application/vnd.containerlab.studio.lab+json","X-CSRFToken":csrf(),"Idempotency-Key":crypto.randomUUID(),
+      "X-Expected-Draft":bundleRestore.preview.expected_current_draft||"none"},body:bundleRestore.file});const data=await response.json();
+      if(!response.ok)throw new Error(data.error?.details||data.error?.code||"Restore failed");
+      setNotice(`Restored ${data.node_count} devices and ${data.link_count} links from verified backup`);location.reload();
+    }catch(error){setNotice(error instanceof Error?error.message:"Backup restore failed");setBundleRestoring(false)}
   };
   const deploy = async () => {
     if (dirty) { setNotice("Save the draft before deployment"); return; }
@@ -615,6 +627,15 @@ function Workspace() {
           <p>Create an independent editable copy with the same devices, links, pinned images, annotations, and startup configurations.</p>
           <label>New lab name<input autoFocus maxLength={120} value={cloneName} onChange={(event)=>setCloneName(event.target.value)} onKeyDown={(event)=>event.key==="Enter"&&cloneLab()}/></label>
           <div><button onClick={()=>setCloneOpen(false)} disabled={cloning}>Cancel</button><button className="primary" onClick={cloneLab} disabled={cloning||!cloneName.trim()}>{cloning?"Creating…":"Create lab copy"}</button></div>
+        </section>
+      </div>}
+      {bundleRestore&&<div className="modal-backdrop" role="presentation" onMouseDown={()=>!bundleRestoring&&setBundleRestore(null)}>
+        <section className="bundle-dialog" role="dialog" aria-modal="true" aria-labelledby="bundle-title" onMouseDown={event=>event.stopPropagation()}>
+          <header><div><p className="dialog-eyebrow">VERIFIED BACKUP</p><h2 id="bundle-title">Restore topology backup</h2><p>Review the server-validated contents and impact before replacing the editable draft.</p></div><button aria-label="Close backup preview" onClick={()=>setBundleRestore(null)} disabled={bundleRestoring}>×</button></header>
+          <div className="bundle-source"><span>Source lab</span><strong>{bundleRestore.preview.source_lab}</strong><code>SHA-256 {bundleRestore.preview.checksum}</code></div>
+          <div className="bundle-facts"><article><span>Devices</span><strong>{bundleRestore.preview.node_count}</strong></article><article><span>Links</span><strong>{bundleRestore.preview.link_count}</strong></article><article><span>Configurations</span><strong>{bundleRestore.preview.configured_node_count}</strong></article><article><span>Images</span><strong>{bundleRestore.preview.image_count}</strong></article></div>
+          <div className="bundle-impact"><strong>Restore impact</strong><ul><li>{bundleRestore.preview.will_replace_draft?"The current editable draft will be replaced.":"A new editable draft will be created."}</li>{dirty&&<li>Unsaved browser changes will be discarded.</li>}<li>{bundleRestore.preview.preserved_published_revisions} published revision(s) remain immutable.</li><li>{bundleRestore.preview.running_deployments_unchanged} active deployment revision(s) remain unchanged.</li></ul><small>{bundleRestore.preview.templates.join(" · ")}</small></div>
+          <footer><button onClick={()=>setBundleRestore(null)} disabled={bundleRestoring}>Cancel</button><button className="primary" onClick={confirmBundleRestore} disabled={bundleRestoring}>{bundleRestoring?"Restoring…":"Restore verified backup"}</button></footer>
         </section>
       </div>}
       {historyOpen && <div className="modal-backdrop" role="presentation" onMouseDown={()=>!restoring&&setHistoryOpen(false)}>
