@@ -19,7 +19,7 @@ def execute_operation(self,job_id):
         if job.state=="succeeded": return str(job.id)
         job.state="started"; job.attempts+=1; job.heartbeat=timezone.now(); job.progress=10; job.save()
     adapter=ClabernetesAdapter()
-    device_operations=("restart_device","stop_device","start_device","suspend_device","resume_device","collect_configuration")
+    device_operations=("restart_device","stop_device","start_device","suspend_device","resume_device","collect_configuration","get_device_logs")
     try:
         if job.operation_type=="publish_image":
             artifact=ImageArtifact.objects.get(pk=job.target_id)
@@ -57,7 +57,8 @@ def execute_operation(self,job_id):
             deployment.save(update_fields=["resource_identities","updated_at"])
         elif job.operation_type in device_operations:
             device=DeviceInstance.objects.select_related("lab_node").get(pk=job.target_id,deployment=job.deployment)
-            result=getattr(adapter,job.operation_type)(job.deployment,device)
+            if job.operation_type=="get_device_logs": result=adapter.get_device_logs(job.deployment,device,job.request_payload["source"],job.request_payload["tail"])
+            else: result=getattr(adapter,job.operation_type)(job.deployment,device)
             if job.operation_type in ("restart_device","stop_device","start_device","suspend_device","resume_device"):
                 device.observed_readiness=result["readiness"]
                 resources={**device.runtime_resources,"manual_lifecycle":job.operation_type,"manual_lifecycle_at":timezone.now().isoformat()}
@@ -67,7 +68,7 @@ def execute_operation(self,job_id):
                 elif job.operation_type in ("start_device","resume_device","restart_device"): resources.pop("manual_desired_state",None)
                 device.runtime_resources=resources
                 device.save(update_fields=["observed_readiness","runtime_resources","updated_at"])
-            else:
+            elif job.operation_type=="collect_configuration":
                 content=result.pop("content");checksum=hashlib.sha256(content.encode("utf-8")).hexdigest()
                 project_id=job.deployment.revision.lab.project_id
                 name=f"{job.deployment.revision.lab.name}/{device.lab_node.name}/collected"[:120]

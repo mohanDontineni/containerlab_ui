@@ -358,27 +358,32 @@ def test_redeploy_worker_replaces_runtime_and_marks_deploying(monkeypatch):
     assert deployment.resource_identities["topology"]["name"]=="topology" and deployment.resource_identities["last_redeploy_at"]
 
 @pytest.mark.django_db
-def test_device_logs_are_operator_only_bounded_no_store_and_audited(monkeypatch):
+def test_device_logs_are_operator_only_bounded_async_no_store_and_audited(monkeypatch):
+    monkeypatch.setattr("studio.api.execute_operation.delay",lambda *_:None)
     owner=User.objects.create_user("logs-owner",password="long-enough-password");viewer=User.objects.create_user("logs-viewer",password="long-enough-password")
     project=Project.objects.create(owner=owner,name="logs-project");ProjectMembership.objects.create(project=project,user=viewer,role="viewer")
     lab=Lab.objects.create(project=project,name="logs-lab");revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="b"*64,immutable=True)
     node=LabNode.objects.create(revision=revision,name="r1",template_version=DeviceTemplateVersion.objects.get(template__name="FRR Router"))
     deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-logs",runtime_version="0.8.0",observed_state="running")
     device=DeviceInstance.objects.create(deployment=deployment,lab_node=node,observed_readiness="ready",runtime_resources={"pod":"r1-pod"})
+    client=APIClient();client.force_authenticate(viewer)
+    url=f"/api/v1/deployments/{deployment.id}/device-operations/";payload={"device_id":str(device.id),"operation":"get_device_logs","source":"launcher","tail":500}
+    assert client.post(url,payload,format="json",HTTP_IDEMPOTENCY_KEY="viewer-logs").status_code==403
+    client.force_authenticate(owner);response=client.post(url,payload,format="json",HTTP_IDEMPOTENCY_KEY="owner-logs")
+    replay=client.post(url,payload,format="json",HTTP_IDEMPOTENCY_KEY="owner-logs")
+    assert response.status_code==replay.status_code==202 and response.data["id"]==replay.data["id"]
+    assert AuditEvent.objects.filter(action="device.logs_requested",target_id=device.id).count()==1
+    invalid=client.post(url,{**payload,"tail":50000},format="json",HTTP_IDEMPOTENCY_KEY="invalid-logs")
+    assert invalid.status_code==422 and invalid.data["error"]["code"]=="invalid_log_request"
+    job=OperationJob.objects.get(id=response.data["id"])
     class Adapter:
         def get_device_logs(self,received_deployment,received_device,source,tail):
             assert received_deployment.id==deployment.id and received_device.id==device.id and source=="launcher" and tail==500
             return {"device_id":str(device.id),"device":"r1","source":source,"tail":tail,"output":"launcher ready\n","truncated":False}
-    monkeypatch.setattr("studio.api.ClabernetesAdapter",Adapter)
-    client=APIClient();client.force_authenticate(viewer)
-    url=f"/api/v1/deployments/{deployment.id}/devices/{device.id}/logs/?source=launcher&tail=500"
-    assert client.get(url).status_code==403
-    client.force_authenticate(owner);response=client.get(url)
-    assert response.status_code==200 and response.data["output"]=="launcher ready\n"
-    assert response["Cache-Control"]=="no-store" and response["X-Content-Type-Options"]=="nosniff"
-    assert AuditEvent.objects.filter(action="device.logs_viewed",target_id=device.id).exists()
-    invalid=client.get(f"/api/v1/deployments/{deployment.id}/devices/{device.id}/logs/?source=appliance&tail=50000")
-    assert invalid.status_code==422 and invalid.data["error"]["code"]=="invalid_log_request"
+    monkeypatch.setattr("studio.tasks.ClabernetesAdapter",Adapter);execute_operation.run(str(job.id));job.refresh_from_db()
+    assert job.state=="succeeded" and job.result_payload["output"]=="launcher ready\n"
+    runtime=client.get(f"/api/v1/deployments/{deployment.id}/runtime/")
+    assert runtime["Cache-Control"]=="no-store" and runtime["X-Content-Type-Options"]=="nosniff"
 
 @pytest.mark.django_db
 def test_console_authorization_is_session_bound_and_viewer_read_only():

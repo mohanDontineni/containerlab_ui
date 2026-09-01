@@ -361,12 +361,13 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
         deployment=self.get_object()
         conditions=deployment.resource_identities.get("link_conditions",{})
         links=deployment.revision.links.select_related("endpoint_a__node","endpoint_b__node")
-        return Response({"deployment":serializers.DeploymentSerializer(deployment).data,
+        response=Response({"deployment":serializers.DeploymentSerializer(deployment).data,
             "devices":serializers.DeviceInstanceSerializer(deployment.devices.select_related("lab_node__template_version").prefetch_related("lab_node__interfaces"),many=True).data,
             "links":[{"id":str(link.id),"label":link.label,"endpoint_a":{"node":link.endpoint_a.node.name,"interface":link.endpoint_a.name},
                 "endpoint_b":{"node":link.endpoint_b.node.name,"interface":link.endpoint_b.name},"condition":conditions.get(str(link.id),{"active":False,
                     "disabled":False,"latency_ms":0,"jitter_ms":0,"loss_percent":0,"corruption_percent":0,"rate_kbps":0})} for link in links],
             "operations":serializers.OperationSerializer(deployment.operations.order_by("-created_at")[:20],many=True).data})
+        response["Cache-Control"]="no-store";response["X-Content-Type-Options"]="nosniff";return response
     @action(detail=True,methods=["get"],url_path="redeploy-preview")
     def redeploy_preview(self,request,pk=None):
         deployment=self.get_object()
@@ -381,25 +382,6 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
             "impact":["Recreate runtime resources from the pinned immutable revision",
                 "Preserve the project, lab, revision, startup configurations, and collected history",
                 "End active consoles and packet captures while device compute is replaced"]})
-    @action(detail=True,methods=["get"],url_path=r"devices/(?P<device_id>[^/.]+)/logs")
-    def device_logs(self,request,pk=None,device_id=None):
-        deployment=self.get_object();self._require_operator(deployment)
-        try: device_uuid=uuid.UUID(str(device_id))
-        except (ValueError,TypeError,AttributeError): return Response({"error":{"code":"invalid_device"}},status=422)
-        device=deployment.devices.select_related("lab_node").filter(id=device_uuid).first()
-        if not device: return Response({"error":{"code":"invalid_device"}},status=422)
-        source=str(request.query_params.get("source","appliance"));raw_tail=request.query_params.get("tail","200")
-        try: tail=int(raw_tail)
-        except (TypeError,ValueError): return Response({"error":{"code":"invalid_log_bounds","details":"Tail must be an integer between 20 and 1000."}},status=422)
-        if source not in ("appliance","launcher") or not 20<=tail<=1000:
-            return Response({"error":{"code":"invalid_log_request","details":"Choose appliance or launcher and request 20-1000 lines."}},status=422)
-        if not device.runtime_resources.get("pod"): return Response({"error":{"code":"device_runtime_unavailable"}},status=409)
-        try: result=ClabernetesAdapter().get_device_logs(deployment,device,source,tail)
-        except Exception as exc: return Response({"error":{"code":"runtime_logs_unavailable","details":str(exc)[:500]}},status=502)
-        models.AuditEvent.objects.create(actor=request.user,project=deployment.revision.lab.project,action="device.logs_viewed",
-            target_type="DeviceInstance",target_id=device.id,correlation_id=getattr(request,"correlation_id",""),
-            metadata={"deployment":str(deployment.id),"source":source,"tail":tail,"truncated":result["truncated"]})
-        response=Response({**result,"collected_at":timezone.now()});response["Cache-Control"]="no-store";response["X-Content-Type-Options"]="nosniff";return response
     @action(detail=True,methods=["post"])
     def refresh(self,request,pk=None):
         deployment=self.get_object()
@@ -428,15 +410,21 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
     def device_operations(self,request,pk=None):
         deployment=self.get_object(); self._require_operator(deployment)
         operation=str(request.data.get("operation",""))
-        if operation not in ("restart_device","stop_device","start_device","suspend_device","resume_device","collect_configuration"):
-            return Response({"error":{"code":"unsupported_operation","details":"Supported device operations are start, stop, restart, suspend, resume, and configuration collection."}},status=422)
+        if operation not in ("restart_device","stop_device","start_device","suspend_device","resume_device","collect_configuration","get_device_logs"):
+            return Response({"error":{"code":"unsupported_operation","details":"Supported device operations are start, stop, restart, suspend, resume, configuration collection, and bounded runtime logs."}},status=422)
         try: device_id=uuid.UUID(str(request.data.get("device_id")))
         except (ValueError,TypeError,AttributeError): return Response({"error":{"code":"invalid_device"}},status=422)
+        operation_payload={"device_id":str(device_id)}
+        if operation=="get_device_logs":
+            source=str(request.data.get("source","appliance"));tail=request.data.get("tail",200)
+            if source not in ("appliance","launcher") or not isinstance(tail,int) or isinstance(tail,bool) or not 20<=tail<=1000:
+                return Response({"error":{"code":"invalid_log_request","details":"Choose appliance or launcher and request 20-1000 lines."}},status=422)
+            operation_payload.update({"source":source,"tail":tail})
         key=request.headers.get("Idempotency-Key")
         if not key: return Response({"error":{"code":"idempotency_key_required"}},status=400)
         existing=models.OperationJob.objects.filter(owner=request.user,idempotency_key=key).first()
         if existing:
-            if existing.target_id!=device_id or existing.operation_type!=operation: return Response({"error":{"code":"idempotency_conflict"}},status=409)
+            if existing.target_id!=device_id or existing.operation_type!=operation or existing.request_payload!=operation_payload: return Response({"error":{"code":"idempotency_conflict"}},status=409)
             if existing.state in ("accepted","scheduled"): execute_operation.delay(str(existing.id))
             return Response(serializers.OperationSerializer(existing).data,status=202)
         with transaction.atomic():
@@ -450,6 +438,8 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
                 if not desired_stopped: return Response({"error":{"code":"device_not_stopped"}},status=409)
             elif desired_stopped:
                 return Response({"error":{"code":"device_stopped","details":"Start the device before running another operation."}},status=409)
+            elif operation=="get_device_logs":
+                if not device.runtime_resources.get("pod"): return Response({"error":{"code":"device_runtime_unavailable"}},status=409)
             elif device.observed_readiness!="ready" or not device.runtime_resources.get("pod"):
                 return Response({"error":{"code":"device_not_ready"}},status=409)
             if operation=="collect_configuration" and not device.lab_node.template_version.launch_profile.get("configuration_collect_command"):
@@ -457,9 +447,12 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
             if models.OperationJob.objects.filter(target_id=device.id,state__in=("accepted","scheduled","started")).exists():
                 return Response({"error":{"code":"device_operation_in_progress"}},status=409)
             job=models.OperationJob.objects.create(deployment=deployment,owner=request.user,operation_type=operation,
-                target_id=device.id,idempotency_key=key,state="scheduled",request_payload={"device_id":str(device.id)})
-            models.AuditEvent.objects.create(actor=request.user,project=deployment.revision.lab.project,action=f"device.{operation.removesuffix('_device')}",
-                target_type="DeviceInstance",target_id=device.id,correlation_id=getattr(request,"correlation_id",""),metadata={"operation_job":str(job.id),"node":device.lab_node.name})
+                target_id=device.id,idempotency_key=key,state="scheduled",request_payload=operation_payload)
+            audit_action="device.logs_requested" if operation=="get_device_logs" else f"device.{operation.removesuffix('_device')}"
+            metadata={"operation_job":str(job.id),"node":device.lab_node.name}
+            if operation=="get_device_logs": metadata.update({"source":source,"tail":tail})
+            models.AuditEvent.objects.create(actor=request.user,project=deployment.revision.lab.project,action=audit_action,
+                target_type="DeviceInstance",target_id=device.id,correlation_id=getattr(request,"correlation_id",""),metadata=metadata)
             transaction.on_commit(lambda: execute_operation.delay(str(job.id)))
         return Response(serializers.OperationSerializer(job).data,status=202)
     @action(detail=True,methods=["post"])
