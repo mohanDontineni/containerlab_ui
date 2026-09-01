@@ -115,6 +115,9 @@ class DeploymentSerializer(serializers.ModelSerializer):
     class Meta: model=models.LabDeployment; fields="__all__"; read_only_fields=("observed_state","resource_identities","error_details")
 class OperationSerializer(serializers.ModelSerializer):
     class Meta: model=models.OperationJob; fields="__all__"
+class DeploymentScheduleSerializer(serializers.ModelSerializer):
+    created_by_username=serializers.CharField(source="created_by.username",read_only=True)
+    class Meta: model=models.DeploymentSchedule; fields=("id","deployment","created_by_username","action","execute_at","status","operation","cancelled_at","created_at","updated_at");read_only_fields=fields
 
 class DeviceInstanceSerializer(serializers.ModelSerializer):
     name=serializers.CharField(source="lab_node.name",read_only=True)

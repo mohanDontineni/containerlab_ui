@@ -7,7 +7,7 @@ from django.db import transaction
 from django.db.models import Max
 from django.utils import timezone
 from .configurations import encrypt_configuration
-from .models import AuditEvent, CaptureSession, ConfigurationVersion, ConsoleSession, DeviceInstance, ImageArtifact, ImageBuild, LabArtifact, LabDeployment, LabLink, LabNode, OperationJob, Project, PublishedImage
+from .models import AuditEvent, CaptureSession, ConfigurationVersion, ConsoleSession, DeploymentSchedule, DeviceInstance, ImageArtifact, ImageBuild, LabArtifact, LabDeployment, LabLink, LabNode, OperationJob, Project, PublishedImage
 from .runtime import ClabernetesAdapter
 
 @shared_task(bind=True,autoretry_for=(ConnectionError,),retry_backoff=True,max_retries=5)
@@ -193,3 +193,26 @@ def reconcile_active_deployments():
     deployment_ids=list(LabDeployment.objects.filter(observed_state__in=active).values_list("id",flat=True))
     for deployment_id in deployment_ids: reconcile_deployment.delay(str(deployment_id))
     return len(deployment_ids)
+
+@shared_task
+def dispatch_due_schedules():
+    dispatched=0
+    for schedule_id in list(DeploymentSchedule.objects.filter(status=DeploymentSchedule.Status.PENDING,execute_at__lte=timezone.now()).order_by("execute_at","created_at","id").values_list("id",flat=True)[:100]):
+        with transaction.atomic():
+            schedule=DeploymentSchedule.objects.select_for_update().select_related("deployment__revision__lab__project","created_by").get(pk=schedule_id)
+            if schedule.status!=DeploymentSchedule.Status.PENDING: continue
+            deployment=schedule.deployment;reason=None
+            if deployment.removed_at: reason="runtime_removed"
+            elif deployment.operations.filter(state__in=("accepted","scheduled","started")).exists(): reason="operation_in_progress"
+            elif schedule.action==DeploymentSchedule.Action.START and deployment.observed_state not in (LabDeployment.State.STOPPED,LabDeployment.State.FAILED): reason=f"state_{deployment.observed_state}"
+            elif schedule.action==DeploymentSchedule.Action.STOP and deployment.observed_state not in (LabDeployment.State.RUNNING,LabDeployment.State.DEGRADED,LabDeployment.State.DEPLOYING): reason=f"state_{deployment.observed_state}"
+            if reason:
+                schedule.status=DeploymentSchedule.Status.SKIPPED;schedule.save(update_fields=["status","updated_at"])
+                AuditEvent.objects.create(actor=schedule.created_by,project=deployment.revision.lab.project,action="deployment.schedule_skipped",target_type="DeploymentSchedule",target_id=schedule.id,correlation_id=str(schedule.id),metadata={"action":schedule.action,"reason":reason,"execute_at":schedule.execute_at.isoformat()})
+                continue
+            operation_type="deploy_lab" if schedule.action==DeploymentSchedule.Action.START else "stop_lab"
+            job=OperationJob.objects.create(deployment=deployment,owner=schedule.created_by,operation_type=operation_type,target_id=deployment.id,idempotency_key=f"deployment-schedule:{schedule.id}",state="scheduled",request_payload={"deployment_schedule":str(schedule.id)})
+            schedule.operation=job;schedule.status=DeploymentSchedule.Status.DISPATCHED;schedule.save(update_fields=["operation","status","updated_at"])
+            AuditEvent.objects.create(actor=schedule.created_by,project=deployment.revision.lab.project,action="deployment.schedule_dispatched",target_type="DeploymentSchedule",target_id=schedule.id,correlation_id=str(schedule.id),metadata={"action":schedule.action,"operation":str(job.id),"execute_at":schedule.execute_at.isoformat()})
+            transaction.on_commit(lambda job_id=str(job.id):execute_operation.delay(job_id));dispatched+=1
+    return dispatched

@@ -9,6 +9,7 @@ from django.db import IntegrityError, transaction
 from django.db.models import Count,Max,Q
 from django.http import FileResponse, HttpResponse
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from django.utils.text import slugify
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -875,7 +876,8 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
             "links":[{"id":str(link.id),"label":link.label,"endpoint_a":{"node":link.endpoint_a.node.name,"interface":link.endpoint_a.name},
                 "endpoint_b":{"node":link.endpoint_b.node.name,"interface":link.endpoint_b.name},"condition":conditions.get(str(link.id),{"active":False,
                     "disabled":False,"latency_ms":0,"jitter_ms":0,"loss_percent":0,"corruption_percent":0,"rate_kbps":0})} for link in links],
-            "operations":serializers.OperationSerializer(deployment.operations.order_by("-created_at")[:20],many=True).data})
+            "operations":serializers.OperationSerializer(deployment.operations.order_by("-created_at")[:20],many=True).data,
+            "schedules":serializers.DeploymentScheduleSerializer(deployment.schedules.select_related("created_by","operation").order_by("-created_at")[:50],many=True).data})
         response["Cache-Control"]="no-store";response["X-Content-Type-Options"]="nosniff";return response
     @action(detail=True,methods=["get"],url_path="redeploy-preview")
     def redeploy_preview(self,request,pk=None):
@@ -968,6 +970,43 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
         models.AuditEvent.objects.create(actor=request.user,project=deployment.revision.lab.project,action=f"deployment.{op.removesuffix('_lab')}_scheduled",
             target_type="LabDeployment",target_id=deployment.id,correlation_id=getattr(request,"correlation_id",""),metadata={"revision":deployment.revision.revision_number,"namespace":deployment.namespace})
         execute_operation.delay(str(job.id)); return Response(serializers.OperationSerializer(job).data,status=202)
+    @action(detail=True,methods=["get","post"],url_path="schedules")
+    def schedules(self,request,pk=None):
+        deployment=self.get_object()
+        if request.method=="GET":
+            response=Response(serializers.DeploymentScheduleSerializer(deployment.schedules.select_related("created_by","operation").order_by("-created_at")[:100],many=True).data);response["Cache-Control"]="no-store";return response
+        self._require_operator(deployment)
+        if deployment.removed_at: return Response({"error":{"code":"runtime_removed"}},status=409)
+        action_name=str(request.data.get("action",""))
+        if action_name not in models.DeploymentSchedule.Action.values: return Response({"error":{"code":"unsupported_schedule_action"}},status=422)
+        execute_at=parse_datetime(str(request.data.get("execute_at","")))
+        if not execute_at or timezone.is_naive(execute_at): return Response({"error":{"code":"invalid_execute_at","details":"Provide an ISO-8601 time with a timezone."}},status=422)
+        now=timezone.now()
+        if execute_at<now+timezone.timedelta(seconds=30) or execute_at>now+timezone.timedelta(days=365):
+            return Response({"error":{"code":"execute_at_out_of_range","details":"Choose a time from 30 seconds to 365 days in the future."}},status=422)
+        if deployment.schedules.filter(status=models.DeploymentSchedule.Status.PENDING).count()>=20:
+            return Response({"error":{"code":"schedule_limit","details":"This runtime already has 20 pending schedules."}},status=409)
+        try:
+            with transaction.atomic():
+                schedule=models.DeploymentSchedule.objects.create(deployment=deployment,created_by=request.user,action=action_name,execute_at=execute_at)
+                models.AuditEvent.objects.create(actor=request.user,project=deployment.revision.lab.project,action="deployment.schedule_created",target_type="DeploymentSchedule",target_id=schedule.id,correlation_id=getattr(request,"correlation_id",""),metadata={"action":action_name,"execute_at":execute_at.isoformat()})
+        except IntegrityError: return Response({"error":{"code":"duplicate_schedule"}},status=409)
+        return Response(serializers.DeploymentScheduleSerializer(schedule).data,status=201)
+    @action(detail=True,methods=["post"],url_path=r"schedules/(?P<schedule_id>[^/.]+)/cancel")
+    def cancel_schedule(self,request,pk=None,schedule_id=None):
+        deployment=self.get_object();self._require_operator(deployment)
+        try: schedule_uuid=uuid.UUID(str(schedule_id))
+        except (TypeError,ValueError): return Response({"error":{"code":"schedule_not_found"}},status=404)
+        expected=request.headers.get("X-Expected-Updated-At")
+        if not expected: return Response({"error":{"code":"expected_updated_at_required"}},status=400)
+        with transaction.atomic():
+            schedule=models.DeploymentSchedule.objects.select_for_update().filter(pk=schedule_uuid,deployment=deployment).first()
+            if not schedule: return Response({"error":{"code":"schedule_not_found"}},status=404)
+            if schedule.updated_at.isoformat()!=expected: return Response({"error":{"code":"schedule_changed","updated_at":schedule.updated_at.isoformat()}},status=409)
+            if schedule.status!=models.DeploymentSchedule.Status.PENDING: return Response({"error":{"code":"schedule_not_pending","status":schedule.status}},status=409)
+            schedule.status=models.DeploymentSchedule.Status.CANCELLED;schedule.cancelled_at=timezone.now();schedule.save(update_fields=["status","cancelled_at","updated_at"])
+            models.AuditEvent.objects.create(actor=request.user,project=deployment.revision.lab.project,action="deployment.schedule_cancelled",target_type="DeploymentSchedule",target_id=schedule.id,correlation_id=getattr(request,"correlation_id",""),metadata={"action":schedule.action,"execute_at":schedule.execute_at.isoformat()})
+        return Response(serializers.DeploymentScheduleSerializer(schedule).data)
     @action(detail=True,methods=["post"],url_path="device-operations")
     def device_operations(self,request,pk=None):
         deployment=self.get_object(); self._require_operator(deployment)

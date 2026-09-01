@@ -68,6 +68,7 @@ CELERY_BEAT_SCHEDULE = {
         "task": "studio.tasks.reconcile_active_deployments",
         "schedule": 30.0,
     },
+    "dispatch-due-deployment-schedules": {"task":"studio.tasks.dispatch_due_schedules","schedule":15.0},
 }
 MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(50 * 1024**3)))
 UPLOAD_CHUNK_BYTES = int(os.environ.get("UPLOAD_CHUNK_BYTES", str(16 * 1024**2)))

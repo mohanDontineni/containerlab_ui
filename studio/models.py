@@ -239,6 +239,19 @@ class OperationJob(UUIDModel):
         constraints=[models.UniqueConstraint(fields=["owner", "idempotency_key"], name="unique_owner_idempotency"),
             models.UniqueConstraint(fields=["target_id", "operation_type"], condition=Q(state__in=["accepted","scheduled","started"]), name="one_active_target_operation")]
 
+class DeploymentSchedule(UUIDModel):
+    class Action(models.TextChoices): START="start_lab"; STOP="stop_lab"
+    class Status(models.TextChoices): PENDING="pending"; DISPATCHED="dispatched"; CANCELLED="cancelled"; SKIPPED="skipped"
+    deployment = models.ForeignKey(LabDeployment, on_delete=models.PROTECT, related_name="schedules")
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="deployment_schedules")
+    action = models.CharField(max_length=16, choices=Action.choices)
+    execute_at = models.DateTimeField(db_index=True)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING, db_index=True)
+    operation = models.OneToOneField(OperationJob, on_delete=models.PROTECT, null=True, blank=True, related_name="deployment_schedule")
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    class Meta:
+        constraints=[models.UniqueConstraint(fields=["deployment","action","execute_at"],condition=Q(status="pending"),name="unique_pending_deployment_schedule")]
+
 class ConsoleSession(UUIDModel):
     device = models.ForeignKey(DeviceInstance, on_delete=models.CASCADE)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)

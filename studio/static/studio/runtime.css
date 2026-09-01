@@ -27,3 +27,4 @@
 .secondary-button.danger { color:#ff9b9b; border-color:#58343c; }
 @media(max-width:1050px) { .link-control-list article { grid-template-columns:1fr; } .link-actions { justify-content:flex-end; } }
 @media(max-width:620px) { .link-fields { grid-template-columns:1fr 1fr; } }
+.runtime-schedules{grid-column:1/-1}.schedule-form{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:18px 0}.schedule-form label{display:grid;gap:7px;color:#8295aa;font-size:10px}.schedule-form select,.schedule-form input{height:40px;border:1px solid #23394f;border-radius:7px;background:#091623;color:#ecf4fc;padding:0 11px;color-scheme:dark}.runtime-schedules .runtime-operation-list article{grid-template-columns:34px minmax(220px,1fr) 110px auto}@media(max-width:620px){.schedule-form{grid-template-columns:1fr}}

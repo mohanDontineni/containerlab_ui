@@ -6,14 +6,15 @@ from django.conf import settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 from studio.configurations import decrypt_configuration, encrypt_configuration
-from studio.models import (AuditEvent, CaptureSession, ConsoleSession, DeviceInstance, DeviceTemplate, DeviceTemplateVersion, ImageArtifact, Lab, LabDeployment,
+from studio.models import (AuditEvent, CaptureSession, ConsoleSession, DeploymentSchedule, DeviceInstance, DeviceTemplate, DeviceTemplateVersion, ImageArtifact, Lab, LabDeployment,
     ConfigurationVersion, LabArtifact, LabInterface, LabLink, LabNode, LabRevision, OperationJob, Project, ProjectMembership, PublishedImage, UploadSession, User)
-from studio.tasks import execute_operation, reconcile_active_deployments, reconcile_deployment
+from studio.tasks import dispatch_due_schedules, execute_operation, reconcile_active_deployments, reconcile_deployment
 from studio.quotas import project_usage
 
 def test_web_process_uses_configured_celery_broker():
     assert execute_operation.app.conf.broker_url == settings.CELERY_BROKER_URL
     assert settings.CELERY_BEAT_SCHEDULE["reconcile-active-deployments"]["schedule"]==30.0
+    assert settings.CELERY_BEAT_SCHEDULE["dispatch-due-deployment-schedules"]["schedule"]==15.0
 
 def managed_template_payload(**changes):
     payload={"name":"Managed Router","description":"Safe platform-managed launch profile","privileged":False,
@@ -73,6 +74,40 @@ def test_periodic_reconciler_queues_only_active_deployments(monkeypatch):
         lab=Lab.objects.create(project=project,name=f"lab-{index}");revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum=str(index)*64,immutable=True)
         LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace=f"clab-scheduler-{index}",runtime_version="0.8.0",observed_state=state)
     assert reconcile_active_deployments.run()==4 and len(queued)==4
+
+@pytest.mark.django_db
+def test_deployment_schedules_are_authorized_bounded_cancellable_and_audited():
+    owner=User.objects.create_user("schedule-owner",password="long-enough-password");viewer=User.objects.create_user("schedule-viewer",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="scheduled-project");ProjectMembership.objects.create(project=project,user=viewer,role="viewer")
+    lab=Lab.objects.create(project=project,name="scheduled-lab");revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="a"*64,immutable=True)
+    deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-schedule-api",runtime_version="0.8.0",observed_state="running")
+    endpoint=f"/api/v1/deployments/{deployment.id}/schedules/";execute_at=timezone.now()+timezone.timedelta(minutes=5)
+    client=APIClient();client.force_authenticate(viewer)
+    assert client.get(endpoint).status_code==200 and client.post(endpoint,{"action":"stop_lab","execute_at":execute_at.isoformat()},format="json").status_code==403
+    client.force_authenticate(owner)
+    assert client.post(endpoint,{"action":"stop_lab","execute_at":timezone.now().isoformat()},format="json").status_code==422
+    created=client.post(endpoint,{"action":"stop_lab","execute_at":execute_at.isoformat()},format="json")
+    schedule=DeploymentSchedule.objects.get(pk=created.data["id"]);assert created.status_code==201 and schedule.status=="pending"
+    cancel=f"/api/v1/deployments/{deployment.id}/schedules/{schedule.id}/cancel/"
+    assert client.post(cancel,{},format="json").status_code==400
+    stale=client.post(cancel,{},format="json",HTTP_X_EXPECTED_UPDATED_AT=timezone.now().isoformat());assert stale.status_code==409
+    cancelled=client.post(cancel,{},format="json",HTTP_X_EXPECTED_UPDATED_AT=schedule.updated_at.isoformat())
+    schedule.refresh_from_db();assert cancelled.status_code==200 and schedule.status=="cancelled" and schedule.cancelled_at
+    assert AuditEvent.objects.filter(action="deployment.schedule_created",target_id=schedule.id).exists()
+    assert AuditEvent.objects.filter(action="deployment.schedule_cancelled",target_id=schedule.id).exists()
+
+@pytest.mark.django_db
+def test_due_schedule_dispatches_normal_operation_and_skips_ineligible_state(monkeypatch,django_capture_on_commit_callbacks):
+    owner=User.objects.create_user("due-owner",password="long-enough-password");project=Project.objects.create(owner=owner,name="due-project")
+    lab=Lab.objects.create(project=project,name="due-lab");revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="b"*64,immutable=True)
+    deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-due",runtime_version="0.8.0",observed_state="running")
+    due=timezone.now()-timezone.timedelta(seconds=1)
+    stop=DeploymentSchedule.objects.create(deployment=deployment,created_by=owner,action="stop_lab",execute_at=due)
+    start=DeploymentSchedule.objects.create(deployment=deployment,created_by=owner,action="start_lab",execute_at=due)
+    queued=[];monkeypatch.setattr("studio.tasks.execute_operation.delay",lambda job_id:queued.append(job_id))
+    with django_capture_on_commit_callbacks(execute=True): assert dispatch_due_schedules.run()==1
+    stop.refresh_from_db();start.refresh_from_db();assert stop.status=="dispatched" and stop.operation.operation_type=="stop_lab" and queued==[str(stop.operation_id)]
+    assert start.status=="skipped" and AuditEvent.objects.filter(action="deployment.schedule_skipped",target_id=start.id,metadata__reason="operation_in_progress").exists()
 
 @pytest.mark.django_db
 def test_guessed_project_uuid_is_not_visible():
