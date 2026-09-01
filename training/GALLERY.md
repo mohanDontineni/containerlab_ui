@@ -223,3 +223,9 @@ The designer adds, moves, resizes, colors, and layers notes and regions directly
 ![Enforced device resources](37-enforced-device-resources.png)
 
 The operator sees the CPU and memory profile pinned to each live device beside its Clabernetes pod and worker placement. Values configured through versioned device-template forms become matching Kubernetes requests and limits, so scheduling and isolation reflect the reviewed GUI policy without YAML or cluster access.
+
+## 38 — Multi-device subgraph duplication
+
+![Subgraph duplication](38-subgraph-duplication.png)
+
+The designer selects several devices and duplicates the complete internal subgraph in one action. Studio creates collision-free device and link identities, offsets the copy, preserves pinned templates, images, interface bindings, and encrypted startup configurations, excludes links leaving the selection, and supports undo/redo plus keyboard duplication and deletion.

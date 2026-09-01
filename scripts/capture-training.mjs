@@ -90,6 +90,8 @@ try {
   const acceptanceHref = (await acceptanceRow.count()) ? await acceptanceRow.locator('a[href*="/workspace/"]').first().getAttribute("href") : null;
   const canvasObjectsRow = page.locator(".catalog-row").filter({ hasText: /Canvas Objects Acceptance/i }).first();
   const canvasObjectsHref = (await canvasObjectsRow.count()) ? await canvasObjectsRow.locator('a[href*="/workspace/"]').first().getAttribute("href") : null;
+  const subgraphRow = page.locator(".catalog-row").filter({ hasText: /Subgraph Duplication Acceptance/i }).first();
+  const subgraphHref = (await subgraphRow.count()) ? await subgraphRow.locator('a[href*="/workspace/"]').first().getAttribute("href") : null;
   let workspaceHref = workspaceHrefs[0] || null;
   for (const candidate of workspaceHrefs) {
     await page.goto(`${baseUrl}${candidate}`, { waitUntil: "networkidle" });
@@ -140,6 +142,17 @@ try {
       await editor.locator(".topology-annotation.note").first().click();
     });
   } else console.warn("36-topology-canvas-objects.png retained: Canvas Objects Acceptance fixture is unavailable");
+  if (subgraphHref) {
+    await capture("38-subgraph-duplication.png", subgraphHref, async (p) => {
+      const editor = p.frameLocator('iframe[title^="Topology workspace"]');
+      await editor.getByText("Draft loaded", { exact: true }).waitFor();
+      const nodes = editor.locator(".react-flow__node");
+      await nodes.nth(3).waitFor();
+      await nodes.nth(2).click();
+      await nodes.nth(3).click({ modifiers: ["Meta"] });
+      await editor.getByText("2 devices selected", { exact: true }).waitFor();
+    });
+  } else console.warn("38-subgraph-duplication.png retained: Subgraph Duplication Acceptance fixture is unavailable");
 
   await capture("10-image-library.png", "/images/");
   await page.goto(`${baseUrl}/images/`, { waitUntil: "networkidle" });
