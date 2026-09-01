@@ -56,6 +56,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 | `44-guarded-password-recovery.png` | Guarded password recovery | Issues a policy-compliant temporary password, previews active browser and console revocation, signs the operator out, and requires personal password rotation at next login. |
 | `45-live-device-network-state.png` | Live device network state | Collects bounded interface, address, route, and neighbor data from a ready appliance and presents it as structured GUI tables. |
 | `46-guarded-selected-device-reset.png` | Guarded selected-device reset | Preflights several devices together, reports saved baselines and session impact, then resets every eligible selection through independently tracked jobs. |
+| `47-topology-revision-comparison.png` | Topology revision comparison | Selects two saved revisions and reviews structured device, link, canvas, object, image, template, and configuration-checksum changes before restore or deployment. |
 
 ## No-YAML operating model
 
@@ -78,6 +79,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 17. Reset an operator credential through the guarded preview; Studio revokes active sessions and requires the temporary password to be replaced before any other operation.
 18. Inspect a ready device's live interfaces, addresses, forwarding routes, and neighbor cache through structured tables without opening a shell.
 19. Select two or more ready devices and review the reset-to-saved-revision impact before Studio discards ephemeral state, revokes consoles, and replaces each launcher.
+20. Select any two saved topology revisions and compare their structural changes before choosing whether to restore or deploy; configuration content remains encrypted.
 
 Containerlab/Kubernetes YAML is an internal adapter concern. It may be inspected by platform administrators for troubleshooting, but it is not part of the normal user workflow.
 

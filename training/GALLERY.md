@@ -277,3 +277,9 @@ The operator opens a ready FRR device's live network-state inspector directly fr
 ![Guarded selected-device reset](46-guarded-selected-device-reset.png)
 
 The operator selects both live BGP routers and opens one guarded reset preview. Studio rechecks readiness, active captures, saved startup baselines, console impact, and an optimistic version for every selected device before scheduling anything. Confirmation creates an independent audited reset job per router, revokes its console sessions, replaces each launcher, and restores the immutable deployed configuration without changing topology wiring or history. Firefox verified both launcher UIDs changed, both routers returned ready, and routed reachability recovered to 3/3 packets with 0% loss.
+
+## 47 — Topology revision comparison
+
+![Topology revision comparison](47-topology-revision-comparison.png)
+
+The designer selects two saved revisions inside the visual workspace and opens a read-only structural comparison. Studio matches devices by topology name and links by canonical node/interface endpoints, then reports added, removed, and modified devices and links plus canvas and annotation changes. Template versions, immutable image references, interface sets, and startup-configuration checksums participate without decrypting configuration content. Firefox compared Alpine Connectivity QA revisions 1 and 2, correctly isolated the `client-a` startup-configuration change, and left both revisions, the active draft, and every runtime unchanged.
