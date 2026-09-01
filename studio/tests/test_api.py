@@ -856,6 +856,8 @@ def test_topology_traffic_snapshot_is_atomic_authorized_idempotent_and_observati
     job=OperationJob.objects.get(id=first.data["id"]);deployment.refresh_from_db()
     assert job.state=="succeeded" and job.result_payload["links"][0]["endpoint_a"]["statistics"]["rx"]["packets"]==12
     assert deployment.observed_state=="running"
+    observations=client.get(f"/api/v1/deployments/{deployment.id}/runtime/").data["observations"]
+    assert observations["traffic"]["id"]==str(job.id) and observations["reachability"] is None
 
 @pytest.mark.django_db
 def test_reachability_matrix_is_bounded_authorized_idempotent_and_normalized(monkeypatch):
@@ -888,6 +890,8 @@ def test_reachability_matrix_is_bounded_authorized_idempotent_and_normalized(mon
     job=OperationJob.objects.get(id=first.data["id"]);deployment.refresh_from_db()
     assert job.state=="succeeded" and job.result_payload["successful"]==2 and "output" not in json.dumps(job.result_payload)
     assert deployment.observed_state=="running"
+    observations=client.get(f"/api/v1/deployments/{deployment.id}/runtime/").data["observations"]
+    assert observations["reachability"]["id"]==str(job.id) and observations["traffic"] is None
 
 @pytest.mark.django_db
 def test_runtime_device_contract_exposes_logical_node_identity():
