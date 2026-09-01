@@ -4,6 +4,12 @@ The web ServiceAccount has token automount disabled. The worker/reconciler gets 
 
 The current home-lab certificate is self-signed. Kubernetes Secrets are not described as encrypted at rest; enable Kubernetes encryption-at-rest separately. Namespaces do not strongly isolate privileged network devices.
 
+## Registry credentials
+
+Private-registry passwords and access tokens are project-scoped and encrypted with authenticated Fernet encryption before PostgreSQL persistence. Browser and API responses expose only credential type, optional username, registry host, active state, reference count, and the first 16 hexadecimal characters of a one-way SHA-256 fingerprint. The current secret, encrypted bytes, and optional legacy Kubernetes Secret name are never serialized, prefilled into edit forms, included in audit metadata, written into image records, or exported with topology bundles. Rotation replaces the encrypted value and fingerprint; deactivation preserves referenced-image provenance.
+
+The encryption key is derived from the installation's Django `SECRET_KEY`, so database backup recovery requires preserving that application Secret. Losing or changing the key makes encrypted registry credentials and saved configurations unreadable. Kubernetes Secret references remain supported for externally managed installations, but Kubernetes encryption at rest is still a separate cluster responsibility. Credential storage does not by itself prove launcher-internal registry authentication: trust, reachability, and pull behavior must be verified for the pinned Clabernetes runtime before a private image is marked ready.
+
 ## Account security
 
 The native account page requires an authenticated same-origin session and CSRF token. Profile changes accept only IANA time zones and record changed field names rather than profile values. Password replacement requires the current credential and applies similarity, 12-character minimum, common-password, and numeric-only validators. Django rotates the session authentication hash after a successful change so the verified current browser stays signed in; no password value or derivative is written to an operation result or audit event. Legacy Django password-change URLs redirect to the native workflow instead of exposing an unstyled secondary surface.

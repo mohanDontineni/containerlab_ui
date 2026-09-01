@@ -21,7 +21,8 @@ Kubernetes 1.36.3/amd64 was verified. Native Linux containers work. VM-backed de
 | Launcher Kubernetes events | Supported | UID-scoped, 200-record-bounded lifecycle and warning evidence is rendered in the device diagnostics GUI. |
 | Shared Linux bridge network | Unsupported here | Containerlab requires a pre-existing host bridge; Clabernetes workloads are namespace-isolated and Studio does not mutate worker host networking. |
 | VM-backed vendor devices | Unsupported here | KVM missing; licensed images not supplied. |
-| Private registry credentials | Unverified | Launcher-internal pull trust must be configured independently of pod pull secrets. |
+| Protected private-registry references | Supported | Project-scoped create/rotate/deactivate, encrypted persistence, redacted API/UI, host matching, and digest-pinned image linkage are verified. |
+| Launcher private-registry pull | Unverified | Launcher-internal authentication and CA trust must be configured and tested independently of pod pull secrets. |
 
 Examples: a digest-pinned Alpine Linux node is within the native supported subset. A Cisco IOS-XRv disk is not accepted merely because it is qcow2; it needs licensing, an approved vrnetlab recipe, KVM, and a verified template.
 

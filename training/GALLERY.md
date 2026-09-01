@@ -361,3 +361,9 @@ The image library now combines free-text search with working validation, archite
 ![Image catalog metadata](60-image-metadata-management.png)
 
 Project administrators and editors can give uploaded device software a searchable vendor, category, and version without renaming or mutating its archive, checksum, inspection, or immutable publication. The dialog reads a fresh safe metadata projection before editing, rejects controls and overlong values, uses an exact optimistic timestamp to prevent stale overwrites, and records field-level before/after audit evidence. Firefox assigned `FRRouting / Router / 10.4.1` to the real production archive, found it through the combined catalog search, reopened the persisted values, and verified both image list and detail APIs omit internal storage paths. Production routers `r1` and `r2` remained ready.
+
+## 61 — Protected registry credentials
+
+![Protected registry credentials](61-protected-registry-credentials.png)
+
+Project administrators and editors manage private OCI access in a dedicated no-YAML workspace. Studio encrypts passwords and tokens before persistence, displays only a short one-way fingerprint, never prepopulates the edit secret, prevents cross-project and registry-host mismatches, and retains image references when access is deactivated. Firefox created a disposable token reference for `registry.example.invalid`, confirmed neither the DOM nor redacted API contained either secret, rotated it to a different fingerprint, captured the active record, and deactivated it. The non-routable host deliberately validates credential lifecycle without claiming a private image pull; launcher authentication remains unverified until real registry reachability and CA trust are supplied. Both production BGP routers remained ready.

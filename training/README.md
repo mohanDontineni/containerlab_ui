@@ -70,6 +70,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 | `58-kubernetes-device-events.png` | Kubernetes device events | Shows launcher scheduling, image, creation, start, warning, and retry evidence without cluster access. |
 | `59-image-supply-chain-evidence.png` | Image supply-chain evidence | Filters validated device software and shows inspection, immutable publication compatibility, build history, and retained bounded build output. |
 | `60-image-metadata-management.png` | Image catalog metadata | Assigns searchable vendor, category, and version details without changing immutable archive or publication identity. |
+| `61-protected-registry-credentials.png` | Protected registry credentials | Creates and rotates an encrypted project credential while displaying only its fingerprint, references, and lifecycle state. |
 
 ## No-YAML operating model
 
@@ -104,6 +105,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 28. Select Kubernetes events in a device's runtime-evidence dialog to diagnose launcher scheduling, image pulls, container starts, probes, and controller warnings without `kubectl`.
 29. Filter the image library by validation, architecture, and size; open supply-chain evidence to review checksums, safe inspection, immutable node publication, compatibility, and retained bounded build output.
 30. Edit a device image's vendor, category, and version in the catalog; Studio protects against stale saves, audits the change, and keeps checksums and publication digests immutable.
+31. Add, rotate, and deactivate project-scoped private-registry access; verify the browser and API expose only a one-way fingerprint and never return the password or token.
 
 Containerlab/Kubernetes YAML is an internal adapter concern. It may be inspected by platform administrators for troubleshooting, but it is not part of the normal user workflow.
 
