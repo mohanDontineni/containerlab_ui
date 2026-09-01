@@ -1327,6 +1327,39 @@ def test_configuration_archive_requires_collected_configuration():
     assert response.status_code==409 and response.data["error"]["code"]=="configuration_export_empty"
 
 @pytest.mark.django_db
+def test_whole_lab_configuration_collection_is_atomic_idempotent_and_operator_only(monkeypatch):
+    scheduled=[];monkeypatch.setattr("studio.api.execute_operation.delay",lambda job_id:scheduled.append(job_id))
+    owner=User.objects.create_user("collect-all-owner",password="long-enough-password")
+    viewer=User.objects.create_user("collect-all-viewer",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="collect-all-project");ProjectMembership.objects.create(project=project,user=viewer,role="viewer")
+    lab=Lab.objects.create(project=project,name="collect-all-lab");revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="9"*64,immutable=True)
+    template=DeviceTemplateVersion.objects.get(template__name="FRR Router")
+    deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-collect-all",runtime_version="0.8.0",observed_state="running")
+    devices=[]
+    for name in ("r1","r2"):
+        node=LabNode.objects.create(revision=revision,name=name,template_version=template)
+        devices.append(DeviceInstance.objects.create(deployment=deployment,lab_node=node,observed_readiness="ready",runtime_resources={"pod":f"{name}-pod"}))
+    endpoint=f"/api/v1/deployments/{deployment.id}/configurations/collect/";client=APIClient();client.force_authenticate(viewer)
+    assert client.post(endpoint,{},format="json",HTTP_IDEMPOTENCY_KEY="viewer-collect-all").status_code==403
+    client.force_authenticate(owner)
+    blocked=devices[1];blocked.observed_readiness="starting";blocked.save(update_fields=["observed_readiness","updated_at"])
+    response=client.post(endpoint,{},format="json",HTTP_IDEMPOTENCY_KEY="blocked-collect-all")
+    assert response.status_code==409 and response.data["error"]["code"]=="configuration_collection_blocked"
+    assert response.data["error"]["devices"]==[{"device":"r2","reason":"Device must be ready with active compute."}]
+    assert not OperationJob.objects.exists()
+    blocked.observed_readiness="ready";blocked.save(update_fields=["observed_readiness","updated_at"])
+    created=client.post(endpoint,{},format="json",HTTP_IDEMPOTENCY_KEY="collect-all-once")
+    replay=client.post(endpoint,{},format="json",HTTP_IDEMPOTENCY_KEY="collect-all-once")
+    assert created.status_code==replay.status_code==202 and created.data["count"]==2
+    assert {job["id"] for job in created.data["jobs"]}=={job["id"] for job in replay.data["jobs"]}
+    jobs=OperationJob.objects.filter(operation_type="collect_configuration").order_by("target_id")
+    assert jobs.count()==2 and all(job.request_payload=={"device_id":str(job.target_id)} for job in jobs)
+    assert len(scheduled)==2 and set(scheduled)=={str(job.id) for job in jobs}
+    summary=AuditEvent.objects.get(action="configuration.collection_scheduled",target_id=deployment.id)
+    assert summary.metadata["devices"]==["r1","r2"] and "content" not in summary.metadata
+    assert AuditEvent.objects.filter(action="device.collect_configuration",metadata__whole_lab=True).count()==2
+
+@pytest.mark.django_db
 def test_configuration_compare_and_restore_creates_concurrency_safe_draft_without_touching_runtime():
     owner=User.objects.create_user("restore-config-owner",password="long-enough-password")
     viewer=User.objects.create_user("restore-config-viewer",password="long-enough-password")

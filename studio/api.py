@@ -1051,6 +1051,59 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
         response["Cache-Control"]="no-store";response["Pragma"]="no-cache";response["X-Content-Type-Options"]="nosniff"
         return response
 
+    @action(detail=True,methods=["post"],url_path="configurations/collect")
+    def collect_configurations(self,request,pk=None):
+        deployment=self.get_object();self._require_operator(deployment)
+        key=request.headers.get("Idempotency-Key")
+        if not key:return Response({"error":{"code":"idempotency_key_required"}},status=400)
+        devices=list(deployment.devices.select_related("lab_node__template_version").order_by("lab_node__name"))
+        supported=[device for device in devices if device.lab_node.template_version.launch_profile.get("configuration_collect_command")]
+        if not supported:
+            return Response({"error":{"code":"configuration_collection_unsupported","details":"This lab has no devices with a verified configuration collector."}},status=409)
+        if len(supported)>200:
+            return Response({"error":{"code":"configuration_collection_limit","details":"Whole-lab collection supports at most 200 devices."}},status=422)
+        prefix=f"collect-all-{hashlib.sha256(key.encode()).hexdigest()[:20]}-"
+        derived={device.id:f"{prefix}{device.id.hex[:16]}" for device in supported}
+        existing=list(models.OperationJob.objects.filter(owner=request.user,idempotency_key__in=derived.values()))
+        if existing:
+            expected={device.id:{"device_id":str(device.id)} for device in supported}
+            if len(existing)!=len(supported) or any(job.operation_type!="collect_configuration" or job.target_id not in expected or
+                job.request_payload!=expected[job.target_id] or job.idempotency_key!=derived[job.target_id] for job in existing):
+                return Response({"error":{"code":"idempotency_conflict"}},status=409)
+            for job in existing:
+                if job.state in ("accepted","scheduled"):execute_operation.delay(str(job.id))
+            return Response({"count":len(existing),"jobs":serializers.OperationSerializer(existing,many=True).data},status=202)
+        with transaction.atomic():
+            locked=list(deployment.devices.select_for_update().select_related("lab_node__template_version").filter(id__in=[device.id for device in supported]))
+            locked.sort(key=lambda device:device.lab_node.name)
+            active={row.target_id:row.operation_type for row in models.OperationJob.objects.filter(target_id__in=[device.id for device in locked],
+                state__in=("accepted","scheduled","started"))}
+            selected={str(device.id):device.id for device in locked}
+            for sequence in deployment.operations.filter(operation_type="staged_start_devices",state__in=("accepted","scheduled","started")):
+                for device_id in sequence.request_payload.get("device_ids",[]):
+                    if device_id in selected:active[selected[device_id]]=sequence.operation_type
+            blockers=[]
+            for device in locked:
+                reason=(f"{active[device.id].replace('_',' ')} is already in progress." if device.id in active else
+                    "Device must be ready with active compute." if device.observed_readiness!="ready" or not device.runtime_resources.get("pod") else "")
+                if reason:blockers.append({"device":device.lab_node.name,"reason":reason})
+            if blockers:
+                return Response({"error":{"code":"configuration_collection_blocked","details":"Every supported device must be ready before whole-lab collection.",
+                    "devices":blockers}},status=409)
+            jobs=[]
+            for device in locked:
+                payload={"device_id":str(device.id)}
+                job=models.OperationJob.objects.create(deployment=deployment,owner=request.user,operation_type="collect_configuration",
+                    target_id=device.id,idempotency_key=derived[device.id],state="scheduled",request_payload=payload);jobs.append(job)
+                models.AuditEvent.objects.create(actor=request.user,project=deployment.revision.lab.project,action="device.collect_configuration",
+                    target_type="DeviceInstance",target_id=device.id,correlation_id=getattr(request,"correlation_id",""),
+                    metadata={"operation_job":str(job.id),"node":device.lab_node.name,"whole_lab":True})
+            models.AuditEvent.objects.create(actor=request.user,project=deployment.revision.lab.project,action="configuration.collection_scheduled",
+                target_type="LabDeployment",target_id=deployment.id,correlation_id=getattr(request,"correlation_id",""),
+                metadata={"devices":[device.lab_node.name for device in locked],"jobs":[str(job.id) for job in jobs]})
+            transaction.on_commit(lambda job_ids=[job.id for job in jobs]:[execute_operation.delay(str(job_id)) for job_id in job_ids])
+        return Response({"count":len(jobs),"jobs":serializers.OperationSerializer(jobs,many=True).data},status=202)
+
     @action(detail=True,methods=["post"],url_path="configuration-compare")
     def compare_configurations(self,request,pk=None):
         deployment=self.get_object();self._require_operator(deployment)
