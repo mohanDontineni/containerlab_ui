@@ -22,5 +22,5 @@
     <footer><small>Changing your password keeps this verified browser session active.</small><button class="primary-button" type="submit">Update password</button></footer>
   </form>
 </div>
-<section class="panel account-runtime"><div><p class="eyebrow">SESSION & PLATFORM</p><h2>Security posture</h2></div><dl><div><dt>Session protection</dt><dd>Secure · HTTP-only · SameSite</dd></div><div><dt>Request forgery protection</dt><dd>CSRF enforced</dd></div><div><dt>Runtime</dt><dd>Kubernetes · Clabernetes 0.8.0</dd></div><div><dt>API identity</dt><dd>Session scoped</dd></div></dl>{% if request.user.is_superuser %}<a class="secondary-button" href="/admin/">Maintenance administration</a>{% endif %}</section>
+<section class="panel account-runtime"><div><p class="eyebrow">SESSION & PLATFORM</p><h2>Security posture</h2></div><dl><div><dt>Session protection</dt><dd>Secure · HTTP-only · SameSite</dd></div><div><dt>Request forgery protection</dt><dd>CSRF enforced</dd></div><div><dt>Runtime</dt><dd>Kubernetes · Clabernetes 0.8.0</dd></div><div><dt>API identity</dt><dd>Session scoped</dd></div></dl>{% if request.user.is_staff %}<a class="secondary-button" href="/users/">Manage Studio accounts</a>{% endif %}</section>
 {% endblock %}

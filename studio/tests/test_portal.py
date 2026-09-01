@@ -38,6 +38,7 @@ def test_product_navigation_never_links_to_model_admin(client):
     assert 'href="/projects/"' in html
     assert 'href="/labs/"' in html
     assert '/admin/studio/' not in html
+    assert 'href="/admin/"' not in client.get("/settings/").content.decode()
 
 @pytest.mark.django_db
 def test_native_platform_user_administration_is_staff_only_and_audited(client):
