@@ -1,0 +1,28 @@
+{% extends "studio/base.html" %}
+{% block title %}Audit trail · ContainerLab Studio{% endblock %}
+{% block breadcrumb %}Audit trail{% endblock %}
+{% block content %}
+<section class="page-heading audit-heading"><div><p class="eyebrow">SECURITY &amp; COMPLIANCE</p><h1>Audit trail</h1><p>Trace project and platform actions without exposing configuration or credential content.</p></div>{% if can_export %}<a class="secondary-button" href="?{% if query_string %}{{ query_string }}&amp;{% endif %}format=csv">⇩ Export filtered CSV</a>{% endif %}</section>
+<form class="audit-filters" method="get">
+  <label><span>Project</span><select name="project"><option value="">All accessible projects</option>{% for project in projects %}<option value="{{ project.id }}" {% if filters.project == project.id|stringformat:"s" %}selected{% endif %}>{{ project.name }}{% if project.deleted_at %} (retired){% endif %}</option>{% endfor %}</select></label>
+  <label><span>Action contains</span><input name="action" value="{{ filters.action }}" maxlength="80" placeholder="e.g. deployment"></label>
+  <label><span>Actor contains</span><input name="actor" value="{{ filters.actor }}" maxlength="150" placeholder="Username"></label>
+  <label><span>Target type</span><select name="target_type"><option value="">All target types</option>{% for value in target_types %}<option value="{{ value }}" {% if filters.target_type == value %}selected{% endif %}>{{ value }}</option>{% endfor %}</select></label>
+  <label><span>Correlation ID</span><input name="correlation" value="{{ filters.correlation }}" maxlength="128" placeholder="Request trace"></label>
+  <label><span>Time window</span><select name="days">{% for value,label in day_options %}<option value="{{ value }}" {% if days == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+  <div class="audit-filter-actions"><a class="secondary-button compact" href="/audit/">Clear</a><button class="primary-button compact" type="submit">Apply filters</button></div>
+</form>
+<section class="panel audit-panel">
+  <div class="panel-header"><div><p class="eyebrow">IMMUTABLE ACTIVITY</p><h2>{{ events.paginator.count }} matching event{{ events.paginator.count|pluralize }}</h2></div><span class="audit-page-count">Page {{ events.number }} of {{ events.paginator.num_pages }}</span></div>
+  {% if events %}<div class="audit-table"><div class="audit-table-head"><span>Time / actor</span><span>Action / project</span><span>Target</span><span>Trace</span><span>Evidence</span></div>
+  {% for event in events %}<article class="audit-row" data-action="{{ event.action }}">
+    <div><strong>{{ event.occurred_at|date:"Y-m-d H:i:s T" }}</strong><small>{{ event.actor.username|default:"system" }}</small></div>
+    <div><code>{{ event.action }}</code><small>{{ event.project.name|default:"Platform" }}</small></div>
+    <div><strong>{{ event.target_type }}</strong><small class="mono-text">{{ event.target_id|default:"—" }}</small></div>
+    <div><code title="{{ event.correlation_id }}">{{ event.correlation_id|truncatechars:18|default:"—" }}</code></div>
+    <details><summary>View metadata</summary><pre>{{ event.metadata_display }}</pre></details>
+  </article>{% endfor %}</div>
+  {% else %}<div class="catalog-empty audit-empty"><span class="entity-icon violet">⌕</span><p class="eyebrow">NO MATCHING EVIDENCE</p><h2>No audit events found</h2><p>Broaden the filters or select a longer time window.</p></div>{% endif %}
+  {% if events.paginator.num_pages > 1 %}<nav class="audit-pagination" aria-label="Audit pages">{% if events.has_previous %}<a class="secondary-button compact" href="?{% if query_string %}{{ query_string }}&amp;{% endif %}page={{ events.previous_page_number }}">← Newer</a>{% endif %}<span>{{ events.start_index }}–{{ events.end_index }} of {{ events.paginator.count }}</span>{% if events.has_next %}<a class="secondary-button compact" href="?{% if query_string %}{{ query_string }}&amp;{% endif %}page={{ events.next_page_number }}">Older →</a>{% endif %}</nav>{% endif %}
+</section>
+{% endblock %}

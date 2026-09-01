@@ -3,11 +3,16 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.auth import update_session_auth_hash
 from django.core.exceptions import PermissionDenied
 import hashlib
+import csv
+import io
 import json
 import uuid
+from datetime import timedelta
+from urllib.parse import urlencode
 from django.db import transaction
 from django.db.models import Count, F, Max, Q
-from django.http import Http404, JsonResponse
+from django.core.paginator import Paginator
+from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.csrf import ensure_csrf_cookie
@@ -487,6 +492,59 @@ def operations(request):
     queryset = OperationJob.objects.filter(owner=request.user).select_related("deployment__revision__lab").order_by("-created_at")
     return render(request, "studio/catalog.html", {"section": "operations", "title": "Jobs & events", "eyebrow": "OPERATIONS", "items": queryset,
         "description": "Inspect accepted, scheduled, running, completed, and failed background work."})
+
+def _audit_scope(user):
+    queryset=AuditEvent.objects.select_related("actor","project")
+    if user.is_staff: return queryset
+    projects=Project.objects.filter(Q(owner=user)|Q(memberships__user=user)).distinct()
+    return queryset.filter(Q(project__in=projects)|Q(project__isnull=True,actor=user)).distinct()
+
+def _csv_safe(value):
+    text="" if value is None else str(value)
+    return f"'{text}" if text[:1] in ("=","+","-","@","\t","\r") else text
+
+def _audit_metadata(metadata):
+    value=json.dumps(metadata,sort_keys=True,separators=(",",":"))
+    return value if len(value)<=8192 else f"{value[:8189]}..."
+
+@login_required
+def audit_trail(request):
+    queryset=_audit_scope(request.user).order_by("-occurred_at","-id")
+    project_options=Project.objects.filter(Q(owner=request.user)|Q(memberships__user=request.user)).distinct().order_by("name") if not request.user.is_staff else Project.objects.all().order_by("name")
+    filters={key:request.GET.get(key,"").strip()[:limit] for key,limit in (("project",36),("action",80),("actor",150),("target_type",80),("correlation",128))}
+    selected_project=None
+    if filters["project"]:
+        try: project_id=uuid.UUID(filters["project"])
+        except ValueError: raise Http404("Project not found")
+        selected_project=get_object_or_404(project_options,id=project_id);queryset=queryset.filter(project=selected_project)
+    if filters["action"]: queryset=queryset.filter(action__icontains=filters["action"])
+    if filters["actor"]: queryset=queryset.filter(actor__username__icontains=filters["actor"])
+    if filters["target_type"]: queryset=queryset.filter(target_type=filters["target_type"])
+    if filters["correlation"]: queryset=queryset.filter(correlation_id__icontains=filters["correlation"])
+    days=request.GET.get("days","30")
+    if days not in ("1","7","30","90","365","all"): days="30"
+    if days!="all": queryset=queryset.filter(occurred_at__gte=timezone.now()-timedelta(days=int(days)))
+    can_export=request.user.is_staff or bool(selected_project and project_role(request.user,selected_project)==ProjectMembership.Role.ADMIN)
+    if request.GET.get("format")=="csv":
+        if not can_export: raise PermissionDenied("Select a project you administer before exporting its audit trail.")
+        rows=list(queryset[:5001]);truncated=len(rows)>5000;rows=rows[:5000]
+        output=io.StringIO();writer=csv.writer(output);writer.writerow(("occurred_at","actor","project","action","target_type","target_id","correlation_id","metadata"))
+        for event in rows:
+            writer.writerow(_csv_safe(value) for value in (event.occurred_at.isoformat(),event.actor.username if event.actor else "system",
+                event.project.name if event.project else "platform",event.action,event.target_type,event.target_id,event.correlation_id,
+                _audit_metadata(event.metadata)))
+        AuditEvent.objects.create(actor=request.user,project=selected_project,action="audit.exported",target_type="Project" if selected_project else "Platform",
+            target_id=selected_project.id if selected_project else None,correlation_id=getattr(request,"correlation_id",""),metadata={"rows":len(rows),"truncated":truncated,"days":days,"filtered":bool(any(filters.values()))})
+        response=HttpResponse(output.getvalue(),content_type="text/csv; charset=utf-8");response["Content-Disposition"]=f'attachment; filename="containerlab-studio-audit-{timezone.localdate().isoformat()}.csv"'
+        response["Cache-Control"]="no-store";response["X-Content-Type-Options"]="nosniff";response["X-Export-Truncated"]="true" if truncated else "false";return response
+    paginator=Paginator(queryset,50);page=paginator.get_page(request.GET.get("page"))
+    for event in page.object_list: event.metadata_display=_audit_metadata(event.metadata)
+    query_params={key:value for key,value in {**filters,"days":days}.items() if value};query_string=urlencode(query_params)
+    response=render(request,"studio/audit.html",{"events":page,"projects":project_options,"filters":filters,"days":days,
+        "target_types":_audit_scope(request.user).exclude(target_type="").values_list("target_type",flat=True).distinct().order_by("target_type"),
+        "selected_project":selected_project,"can_export":can_export,"query_string":query_string,
+        "day_options":(("1","Last 24 hours"),("7","Last 7 days"),("30","Last 30 days"),("90","Last 90 days"),("365","Last year"),("all","All retained events"))})
+    response["Cache-Control"]="no-store";return response
 
 @login_required
 @require_http_methods(["GET","POST"])

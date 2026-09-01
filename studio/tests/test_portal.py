@@ -198,11 +198,63 @@ def test_lab_create_and_edit_assign_active_folder_only(client):
     lab.refresh_from_db();assert edited.status_code==302 and edited.url=="/labs/" and lab.folder_id is None
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("path", ["/projects/", "/labs/", "/deployments/", "/images/", "/images/upload/", "/device-templates/", "/operations/", "/settings/"])
+@pytest.mark.parametrize("path", ["/projects/", "/labs/", "/deployments/", "/images/", "/images/upload/", "/device-templates/", "/operations/", "/audit/", "/settings/"])
 def test_native_portal_pages_render(client, path):
     user = User.objects.create_user(f"user-{path.strip('/').replace('/', '-') or 'home'}", password="long-enough-password")
     client.force_login(user)
     assert client.get(path).status_code == 200
+
+@pytest.mark.django_db
+def test_native_audit_trail_is_project_scoped_filterable_and_content_safe(client):
+    owner=User.objects.create_user("audit-owner",password="long-enough-password")
+    viewer=User.objects.create_user("audit-viewer",password="long-enough-password")
+    outsider=User.objects.create_user("audit-outsider",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="Shared audit")
+    private=Project.objects.create(owner=outsider,name="Private audit")
+    ProjectMembership.objects.create(project=project,user=viewer,role=ProjectMembership.Role.VIEWER)
+    visible=AuditEvent.objects.create(actor=owner,project=project,action="deployment.started",target_type="LabDeployment",target_id=project.id,
+        correlation_id="trace-visible",metadata={"safe":"<script>alert(1)</script>"})
+    AuditEvent.objects.create(actor=outsider,project=private,action="deployment.secret",target_type="LabDeployment",target_id=private.id,
+        correlation_id="trace-private",metadata={"secret":"hidden"})
+    AuditEvent.objects.create(actor=viewer,action="account.profile_updated",target_type="User",target_id=viewer.id,correlation_id="trace-own",metadata={})
+    AuditEvent.objects.create(actor=outsider,action="account.profile_updated",target_type="User",target_id=outsider.id,correlation_id="trace-other",metadata={})
+    client.force_login(viewer)
+    page=client.get("/audit/?days=all")
+    html=page.content.decode()
+    assert page.status_code==200 and str(visible.id) not in html and "deployment.started" in html and "trace-own" in html
+    assert "deployment.secret" not in html and "trace-other" not in html and "&lt;script&gt;alert(1)&lt;/script&gt;" in html
+    filtered=client.get(f"/audit/?days=all&project={project.id}&action=started&actor=audit-owner&target_type=LabDeployment&correlation=visible")
+    assert filtered.status_code==200 and b"1 matching event" in filtered.content and b"deployment.started" in filtered.content
+    assert client.get(f"/audit/?days=all&project={private.id}").status_code==404
+    assert client.get(f"/audit/?days=all&project={project.id}&format=csv").status_code==403
+
+@pytest.mark.django_db
+def test_project_admin_audit_export_is_bounded_safe_audited_and_no_store(client):
+    owner=User.objects.create_user("audit-exporter",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="=SUM(1,1)")
+    AuditEvent.objects.create(actor=owner,project=project,action="lab.created",target_type="Lab",target_id=project.id,
+        correlation_id="export-trace",metadata={"count":1})
+    client.force_login(owner)
+    response=client.get(f"/audit/?days=all&project={project.id}&format=csv")
+    body=response.content.decode()
+    assert response.status_code==200 and response["Cache-Control"]=="no-store" and response["X-Content-Type-Options"]=="nosniff"
+    assert response["X-Export-Truncated"]=="false" and response["Content-Disposition"].endswith('.csv"')
+    assert "lab.created" in body and "'=SUM(1,1)" in body and "export-trace" in body
+    event=AuditEvent.objects.get(action="audit.exported",project=project)
+    assert event.actor==owner and event.metadata=={"rows":1,"truncated":False,"days":"all","filtered":True}
+
+@pytest.mark.django_db
+def test_platform_admin_can_page_and_export_global_audit_events(client):
+    admin=User.objects.create_user("audit-platform",password="long-enough-password",is_staff=True)
+    for index in range(51):
+        AuditEvent.objects.create(actor=admin,action=f"platform.test_{index:02d}",target_type="Platform",target_id=admin.id,
+            correlation_id=f"page-{index}",metadata={"index":index})
+    client.force_login(admin)
+    first=client.get("/audit/?days=all");second=client.get("/audit/?days=all&page=2")
+    assert first.status_code==200 and b"51 matching events" in first.content and b"Older" in first.content
+    assert second.status_code==200 and b"51 matching events" in second.content and b"Newer" in second.content
+    exported=client.get("/audit/?days=all&format=csv")
+    assert exported.status_code==200 and exported.content.count(b"\n")>=52
 
 @pytest.mark.django_db
 def test_native_account_profile_update_validates_timezone_and_is_audited(client):
