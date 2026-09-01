@@ -59,6 +59,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 | `47-topology-revision-comparison.png` | Topology revision comparison | Selects two saved revisions and reviews structured device, link, canvas, object, image, template, and configuration-checksum changes before restore or deployment. |
 | `48-hierarchical-lab-folders.png` | Hierarchical lab folders | Organizes a real lab into project-scoped nested folders and demonstrates guarded deletion while the folder still contains a lab. |
 | `49-navigable-lab-folder-browser.png` | Navigable lab folder browser | Opens nested folder levels with breadcrumbs, contextual creation actions, project-aware preselection, and a catalog scoped to the current folder. |
+| `50-native-security-audit-trail.png` | Native security audit trail | Filters real project activity by action, actor, target, correlation ID, and retention window, expands bounded metadata, and exports an authorized CSV. |
 
 ## No-YAML operating model
 

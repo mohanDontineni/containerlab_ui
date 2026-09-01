@@ -295,3 +295,9 @@ The operator creates a project-scoped parent folder and nested child folder enti
 ![Navigable lab folder browser](49-navigable-lab-folder-browser.png)
 
 The operator drills from the project-wide lab root into `Navigable Evidence 49 / Routing Validation` using folder cards and linked breadcrumbs. Contextual actions create subfolders and labs with the project and parent already selected, while the catalog shows only the current folder's direct labs instead of repeating the entire library. Firefox moved the real Alpine Connectivity QA design into the nested folder, verified the exact one-item scope and folder-preserving redirect, captured this view without console or request failures, restored the lab to root, and deleted both disposable folders through the GUI.
+
+## 50 — Native security audit trail
+
+![Native security audit trail](50-native-security-audit-trail.png)
+
+An authorized administrator filters immutable project activity by project, action fragment, actor, target type, correlation ID, and bounded time window without opening Django administration or querying PostgreSQL. Each row exposes its actor, project, exact target, request trace, and an escaped, size-bounded metadata record; viewers see only accessible-project events and their own platform events. Firefox rendered eight real lab-folder events, expanded the deletion evidence, and downloaded the same filtered set as a nine-line, 1,804-byte CSV. The export neutralizes spreadsheet formulas, uses no-store/nosniff headers, caps output at 5,000 records, and emits its own content-free `audit.exported` event.
