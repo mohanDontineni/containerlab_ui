@@ -489,3 +489,15 @@ Project administrators receive a server-authoritative impact preview before an e
 ![Immediate live console revocation](92-live-console-access-revoked.png)
 
 Confirmation row-locks the membership, changes or removes the role, marks affected console sessions revoked, releases every owned project topology lease, records exact counts in the audit event, and emits a post-commit Channels signal to each connected WebSocket. Every console also revalidates authorization every two seconds, so a transient channel-layer failure cannot preserve access. Firefox changed the disposable editor to Viewer and the real FRR r1 terminal immediately printed `[access-revoked]`; the post-action API reported viewer role, zero active consoles, and zero editing leases. The disposable membership was then removed and its account disabled through Studio's guarded GUI. Exact release `e76cd67` ran on all four services while both production routers remained Running/Ready.
+
+## 93 — Saved topology link performance profile
+
+![Saved topology link performance profile](93-saved-link-performance-profile.png)
+
+The visual link inspector persists the complete deployment profile: administrative state, latency, jitter, loss, corruption, and rate. Values are bounded and server-validated, participate in revision checksums, and remain part of native backup/restore and Save As workflows. Firefox restored the latest two-router BGP revision, selected `r1:eth1 ↔ r2:eth1`, entered 120 ms latency, 10 ms jitter, zero loss/corruption, and 10,000 Kbit/s rate, then saved the amber dashed impaired edge without YAML.
+
+## 94 — Applied saved link performance profile
+
+![Applied saved link performance profile](94-applied-saved-link-performance.png)
+
+Deployment seeds the saved profile before reconciliation, waits until both launchers are ready, applies it bidirectionally, and records the exact pod identities so replacement launchers trigger automatic replay. Firefox published revision 5 into isolated namespace `clab-e08261bdc1044b8d86a6`; both routers reached Ready, the operational map and live controls showed the exact saved values, and the native r1-to-`10.0.12.2` diagnostic returned 3/3 packets, 0% loss, and 243.805 ms average RTT. Exact release `91c3373` ran on web, worker, scheduler, and console while the pre-existing revision-3 production runtime remained unchanged.

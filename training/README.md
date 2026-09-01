@@ -102,6 +102,8 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 | `90-saved-link-shutdown-runtime.png` | Applied saved link shutdown | Verifies the published runtime automatically applies the saved bidirectional shutdown and proves it with a bounded 100% packet-loss diagnostic. |
 | `91-live-membership-revocation-preview.png` | Guarded live-access revocation | Reviews the exact active-console and topology-editing-lease impact before demoting an editor to viewer. |
 | `92-live-console-access-revoked.png` | Immediate console revocation | Shows a real router terminal receiving the server-pushed access-revoked state after its project role loses write access. |
+| `93-saved-link-performance-profile.png` | Saved topology link performance | Selects a visual link and saves latency, jitter, loss, corruption, and rate as deployment intent without authoring YAML. |
+| `94-applied-saved-link-performance.png` | Applied saved link performance | Shows the running two-router topology, exact seeded live controls, and a native ping whose measured round-trip time proves the saved bidirectional delay. |
 
 ## No-YAML operating model
 
@@ -163,6 +165,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 55. Review the visual topology's recent lab-scoped jobs and audit events directly in the inspector; refresh the bounded panel, inspect progress or redacted failure evidence, and open the full job center without leaving payloads or unrelated project records on the canvas.
 56. Select a topology link and save it as enabled or shut down; every new runtime applies that state after both launchers are ready, replays it after launcher replacement, and exposes the resulting impairment plus bounded reachability evidence in the GUI.
 57. Preview a member demotion or removal to see active consoles and editing leases; confirmation atomically revokes writable device sessions, releases topology ownership, and preserves project history and read-only viewer access where applicable.
+58. Select a topology link and save bounded latency, jitter, loss, corruption, and rate values; every new runtime seeds and applies that profile after both endpoints are ready, then replays it after launcher replacement without YAML or CLI input.
 
 Containerlab/Kubernetes YAML is an internal adapter concern. It may be inspected by platform administrators for troubleshooting, but it is not part of the normal user workflow.
 
