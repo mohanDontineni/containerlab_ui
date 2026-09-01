@@ -9,7 +9,18 @@ class MembershipSerializer(serializers.ModelSerializer):
     def get_display_name(self,obj): return obj.user.get_full_name() or obj.user.username
     class Meta: model=models.ProjectMembership; fields=("id","project","user","username","display_name","role","created_at","updated_at"); read_only_fields=("project","user")
 class LabSerializer(serializers.ModelSerializer):
-    class Meta: model=models.Lab; fields="__all__"
+    class Meta: model=models.Lab; fields="__all__"; read_only_fields=("current_draft","deleted_at"); validators=[]
+    def validate_project(self,value):
+        if self.instance and value.id!=self.instance.project_id:
+            raise serializers.ValidationError("A lab cannot be moved between projects.")
+        return value
+    def validate(self,attrs):
+        project=attrs.get("project",self.instance.project if self.instance else None);name=attrs.get("name",self.instance.name if self.instance else None)
+        if project and name:
+            matches=models.Lab.objects.filter(project=project,name=name,deleted_at__isnull=True)
+            if self.instance: matches=matches.exclude(pk=self.instance.pk)
+            if matches.exists(): raise serializers.ValidationError({"name":"An active lab with this name already exists in the project."})
+        return attrs
 class LabRevisionSerializer(serializers.ModelSerializer):
     class Meta: model=models.LabRevision; fields="__all__"; read_only_fields=("topology_checksum",)
 class LabNodeSerializer(serializers.ModelSerializer):

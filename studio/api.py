@@ -110,15 +110,78 @@ class MembershipViewSet(viewsets.ModelViewSet):
 
 class LabViewSet(viewsets.ModelViewSet):
     serializer_class=serializers.LabSerializer; permission_classes=[ProjectAccess]
-    def get_queryset(self): return models.Lab.objects.filter(project__in=visible_projects(self.request.user)).select_related("project")
+    def get_queryset(self): return models.Lab.objects.filter(project__in=visible_projects(self.request.user),deleted_at__isnull=True).select_related("project")
     def perform_create(self,serializer):
         project=serializer.validated_data["project"]
         if project_role(self.request.user,project) not in ("administrator","editor"): from rest_framework.exceptions import PermissionDenied; raise PermissionDenied()
         with transaction.atomic():
             project=models.Project.objects.select_for_update().get(pk=project.pk)
-            used=project.labs.count();limit=normalized_quotas(project)["max_labs"]
+            used=project.labs.filter(deleted_at__isnull=True).count();limit=normalized_quotas(project)["max_labs"]
             if used>=limit: raise ProjectQuotaExceeded("labs",limit,used)
             serializer.save(project=project)
+    def perform_update(self,serializer):
+        lab=serializer.instance
+        if project_role(self.request.user,lab.project) not in (models.ProjectMembership.Role.ADMIN,models.ProjectMembership.Role.EDITOR):
+            from rest_framework.exceptions import PermissionDenied; raise PermissionDenied()
+        before={key:getattr(lab,key) for key in ("name","description","tags")};updated=serializer.save()
+        changed=[key for key,value in before.items() if value!=getattr(updated,key)]
+        models.AuditEvent.objects.create(actor=self.request.user,project=updated.project,action="lab.metadata_updated",target_type="Lab",target_id=updated.id,
+            correlation_id=getattr(self.request,"correlation_id",""),metadata={"changed_fields":changed})
+    def destroy(self,request,*args,**kwargs):
+        return Response({"error":{"code":"guarded_delete_required","details":"Preview and confirm lab deletion using the guarded delete operation."}},status=405)
+    def _deletion_preview(self,lab):
+        deployments=models.LabDeployment.objects.filter(revision__lab=lab)
+        active_states=(models.LabDeployment.State.PENDING,models.LabDeployment.State.DEPLOYING,models.LabDeployment.State.RUNNING,
+            models.LabDeployment.State.DEGRADED,models.LabDeployment.State.DELETING)
+        active_deployments=deployments.filter(observed_state__in=active_states).count()
+        active_operations=models.OperationJob.objects.filter(deployment__revision__lab=lab,state__in=("accepted","scheduled","started")).count()
+        blockers=[]
+        if active_deployments: blockers.append(f"{active_deployments} active deployment{'s' if active_deployments!=1 else ''}")
+        if active_operations: blockers.append(f"{active_operations} active operation{'s' if active_operations!=1 else ''}")
+        return {"lab_id":str(lab.id),"name":lab.name,"project_id":str(lab.project_id),"updated_at":lab.updated_at.isoformat(),
+            "references":{"revisions":lab.revisions.count(),"deployments":deployments.count(),"active_deployments":active_deployments,
+                "active_operations":active_operations},"can_delete":not blockers,"blockers":blockers,
+            "impact":["Remove the lab from the library and topology workspace.","Release one lab from the project quota.",
+                "Preserve immutable revisions, deployment records, operations, and audit history.","Allow this lab name to be reused in the project."]}
+    @action(detail=True,methods=["get"],url_path="delete-preview")
+    def delete_preview(self,request,pk=None):
+        lab=self.get_object()
+        if project_role(request.user,lab.project) not in (models.ProjectMembership.Role.ADMIN,models.ProjectMembership.Role.EDITOR):
+            from rest_framework.exceptions import PermissionDenied; raise PermissionDenied()
+        response=Response(self._deletion_preview(lab));response["Cache-Control"]="no-store";return response
+    @action(detail=True,methods=["post"],url_path="delete")
+    def delete_lab(self,request,pk=None):
+        lab=models.Lab.objects.filter(pk=pk,project__in=visible_projects(request.user)).select_related("project").first()
+        if not lab: return Response({"error":{"code":"not_found"}},status=404)
+        if project_role(request.user,lab.project) not in (models.ProjectMembership.Role.ADMIN,models.ProjectMembership.Role.EDITOR):
+            from rest_framework.exceptions import PermissionDenied; raise PermissionDenied()
+        key=request.headers.get("Idempotency-Key")
+        if not key: return Response({"error":{"code":"idempotency_key_required"}},status=400)
+        existing=models.OperationJob.objects.filter(owner=request.user,idempotency_key=key).first()
+        if existing:
+            if existing.operation_type!="delete_lab_record" or existing.target_id!=lab.id: return Response({"error":{"code":"idempotency_conflict"}},status=409)
+            return Response(existing.result_payload)
+        expected=request.headers.get("X-Expected-Updated-At")
+        if not expected: return Response({"error":{"code":"expected_updated_at_required"}},status=400)
+        if lab.deleted_at: return Response({"error":{"code":"lab_already_deleted"}},status=410)
+        try:
+            with transaction.atomic():
+                locked=models.Lab.objects.select_for_update().get(pk=lab.pk)
+                if locked.updated_at.isoformat()!=expected:
+                    return Response({"error":{"code":"lab_changed","details":"The lab changed after deletion was previewed.","updated_at":locked.updated_at.isoformat()}},status=409)
+                preview=self._deletion_preview(locked)
+                if not preview["can_delete"]: return Response({"error":{"code":"lab_delete_blocked","details":preview["blockers"],"references":preview["references"]}},status=409)
+                locked.deleted_at=timezone.now();locked.save(update_fields=["deleted_at","updated_at"])
+                result={"lab_id":str(locked.id),"deleted_at":locked.deleted_at.isoformat(),"released_quota":{"labs":1},
+                    "preserved":{"revisions":preview["references"]["revisions"],"deployments":preview["references"]["deployments"]}}
+                job=models.OperationJob.objects.create(owner=request.user,operation_type="delete_lab_record",target_id=locked.id,idempotency_key=key,
+                    state="succeeded",progress=100,request_payload={"expected_updated_at":expected},result_payload=result)
+                result["operation_id"]=str(job.id);job.result_payload=result;job.save(update_fields=["result_payload","updated_at"])
+                models.AuditEvent.objects.create(actor=request.user,project=locked.project,action="lab.deleted",target_type="Lab",target_id=locked.id,
+                    correlation_id=getattr(request,"correlation_id",""),metadata={"operation":str(job.id),"revisions":preview["references"]["revisions"],
+                        "deployments":preview["references"]["deployments"],"released_lab_quota":1})
+        except IntegrityError: return Response({"error":{"code":"operation_conflict"}},status=409)
+        return Response(result)
     @action(detail=True,methods=["post"],url_path="clone")
     def clone_lab(self,request,pk=None):
         source=self.get_object()
@@ -130,9 +193,9 @@ class LabViewSet(viewsets.ModelViewSet):
         bundle=export_lab_bundle(source)
         with transaction.atomic():
             project=models.Project.objects.select_for_update().get(pk=source.project_id)
-            used=project.labs.count();limit=normalized_quotas(project)["max_labs"]
+            used=project.labs.filter(deleted_at__isnull=True).count();limit=normalized_quotas(project)["max_labs"]
             if used>=limit: return Response(quota_exceeded("labs",limit,used),status=409)
-            if project.labs.filter(name=name).exists():
+            if project.labs.filter(name=name,deleted_at__isnull=True).exists():
                 return Response({"error":{"code":"lab_name_conflict","details":"A lab with this name already exists in the project."}},status=409)
             clone=models.Lab.objects.create(project=project,name=name,description=source.description,tags=source.tags)
             try: revision=import_lab_bundle(clone,request.user,bundle)

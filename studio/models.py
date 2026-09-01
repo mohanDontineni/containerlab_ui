@@ -122,7 +122,8 @@ class Lab(UUIDModel):
     description = models.TextField(blank=True)
     tags = models.JSONField(default=list, blank=True)
     current_draft = models.ForeignKey("LabRevision", on_delete=models.SET_NULL, null=True, blank=True, related_name="draft_for_labs")
-    class Meta: constraints=[models.UniqueConstraint(fields=["project", "name"], name="unique_lab_name_per_project")]
+    deleted_at = models.DateTimeField(null=True, blank=True)
+    class Meta: constraints=[models.UniqueConstraint(fields=["project", "name"], condition=Q(deleted_at__isnull=True), name="unique_active_lab_name_per_project")]
 
 class LabRevision(UUIDModel):
     lab = models.ForeignKey(Lab, on_delete=models.PROTECT, related_name="revisions")

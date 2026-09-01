@@ -37,10 +37,10 @@ def validate_quotas(payload,current=None):
 def project_usage(project):
     image_bytes=ImageArtifact.objects.filter(project=project,deleted_at__isnull=True).aggregate(total=Sum("byte_size"))["total"] or 0
     reserved_upload_bytes=UploadSession.objects.filter(project=project,status=UploadSession.Status.ACTIVE,expires_at__gt=timezone.now()).aggregate(total=Sum("expected_size"))["total"] or 0
-    largest_draft_nodes=LabNode.objects.filter(revision__draft_for_labs__project=project).values("revision_id").annotate(total=Count("id")).aggregate(maximum=Max("total"))["maximum"] or 0
+    largest_draft_nodes=LabNode.objects.filter(revision__draft_for_labs__project=project,revision__draft_for_labs__deleted_at__isnull=True).values("revision_id").annotate(total=Count("id")).aggregate(maximum=Max("total"))["maximum"] or 0
     running=LabDeployment.objects.filter(revision__lab__project=project,observed_state__in=(
         LabDeployment.State.PENDING,LabDeployment.State.DEPLOYING,LabDeployment.State.RUNNING,LabDeployment.State.DEGRADED)).count()
-    return {"labs":project.labs.count(),"members":ProjectMembership.objects.filter(project=project).count()+1,
+    return {"labs":project.labs.filter(deleted_at__isnull=True).count(),"members":ProjectMembership.objects.filter(project=project).count()+1,
         "running_deployments":running,"image_bytes":image_bytes,"reserved_upload_bytes":reserved_upload_bytes,"largest_draft_nodes":largest_draft_nodes}
 
 def quota_exceeded(code,limit,used,requested=1):

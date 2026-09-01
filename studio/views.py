@@ -12,7 +12,7 @@ def dashboard(request):
         "active": all_deployments.filter(observed_state="running").count(),
         "deploying": all_deployments.filter(observed_state__in=("pending", "deploying")).count(),
         "attention": all_deployments.filter(observed_state__in=("failed", "degraded")).count(),
-        "labs": Lab.objects.filter(project__in=visible_projects).count(),
+        "labs": Lab.objects.filter(project__in=visible_projects,deleted_at__isnull=True).count(),
         "projects": visible_projects.count(),
     }
     return render(request, "studio/dashboard.html", {

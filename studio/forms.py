@@ -46,6 +46,13 @@ class LabForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         self.fields["project"].queryset = Project.objects.filter(Q(owner=user) | Q(memberships__user=user, memberships__role__in=("administrator", "editor"))).distinct()
 
+class LabEditForm(forms.ModelForm):
+    class Meta:
+        model=Lab
+        fields=("name","description","tags")
+        widgets={"name":forms.TextInput(),"description":forms.Textarea(attrs={"rows":4}),
+            "tags":forms.TextInput(attrs={"placeholder":'["bgp", "edge"]'})}
+
 class RegistryImageForm(forms.Form):
     project = forms.ModelChoiceField(queryset=Project.objects.none())
     name = forms.CharField(max_length=120, help_text="A recognizable device image name")

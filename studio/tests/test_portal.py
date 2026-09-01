@@ -131,6 +131,19 @@ def test_project_access_ui_is_available_only_to_administrators(client):
     assert viewer_page.status_code==200 and b"Add member" not in viewer_page.content and b"member-role" not in viewer_page.content
 
 @pytest.mark.django_db
+def test_native_lab_edit_is_operator_only_and_audited(client):
+    owner=User.objects.create_user("portal-lab-owner",password="long-enough-password")
+    viewer=User.objects.create_user("portal-lab-viewer",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="Portal lab project");lab=Lab.objects.create(project=project,name="Before")
+    ProjectMembership.objects.create(project=project,user=viewer,role="viewer")
+    client.force_login(viewer);assert client.post(f"/labs/{lab.id}/edit/",{"name":"Denied","description":"","tags":"[]"}).status_code==403
+    client.force_login(owner)
+    page=client.get("/labs/").content.decode();assert f'/labs/{lab.id}/edit/' in page and f'data-delete-lab="{lab.id}"' in page
+    response=client.post(f"/labs/{lab.id}/edit/",{"name":"After","description":"Purpose","tags":'["training"]'},follow=True)
+    assert response.status_code==200 and b"updated" in response.content
+    lab.refresh_from_db();assert lab.name=="After" and AuditEvent.objects.filter(action="lab.metadata_updated",target_id=lab.id).exists()
+
+@pytest.mark.django_db
 def test_project_node_quota_is_visible_and_enforced_in_topology_workspace(client):
     owner=User.objects.create_user("node-quota-owner",password="long-enough-password")
     project=Project.objects.create(owner=owner,name="Node quota",quotas={"max_nodes_per_lab":1})

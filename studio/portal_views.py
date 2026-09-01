@@ -10,7 +10,7 @@ from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_http_methods
-from .forms import LabForm, ProfileForm, ProjectForm, RegistryImageForm, StudioPasswordChangeForm
+from .forms import LabEditForm, LabForm, ProfileForm, ProjectForm, RegistryImageForm, StudioPasswordChangeForm
 from .models import (AuditEvent, ConfigurationVersion, DeviceTemplate, DeviceTemplateVersion, ImageArtifact, Lab, LabDeployment,
                      LabInterface, LabLink, LabNode, LabRevision, OperationJob, Project,
                      ProjectMembership, PublishedImage)
@@ -23,7 +23,7 @@ def visible_projects(user):
 
 @login_required
 def projects(request):
-    queryset = visible_projects(request.user).annotate(lab_count=Count("labs", distinct=True), member_count=Count("memberships", distinct=True)).order_by("name")
+    queryset = visible_projects(request.user).annotate(lab_count=Count("labs",filter=Q(labs__deleted_at__isnull=True),distinct=True), member_count=Count("memberships", distinct=True)).order_by("name")
     return render(request, "studio/catalog.html", {"section": "projects", "title": "Projects", "eyebrow": "WORKSPACES", "items": queryset,
         "description": "Organize labs, images, access, and quotas around engineering teams.", "create_url": "/projects/new/", "create_label": "New project"})
 
@@ -39,13 +39,14 @@ def project_create(request):
 @login_required
 def project_detail(request, project_id):
     project = get_object_or_404(visible_projects(request.user), id=project_id)
-    return render(request, "studio/project_detail.html", {"project": project, "labs": project.labs.order_by("name"),
+    return render(request, "studio/project_detail.html", {"project": project, "labs": project.labs.filter(deleted_at__isnull=True).order_by("name"),
         "members": project.memberships.select_related("user").order_by("user__username"),"can_manage_access":project_role(request.user,project)==ProjectMembership.Role.ADMIN,
         "quota_limits":normalized_quotas(project),"quota_usage":project_usage(project)})
 
 @login_required
 def labs(request):
-    queryset = Lab.objects.filter(project__in=visible_projects(request.user)).select_related("project").annotate(revision_count=Count("revisions")).order_by("name")
+    queryset = Lab.objects.filter(project__in=visible_projects(request.user),deleted_at__isnull=True).select_related("project").annotate(revision_count=Count("revisions")).order_by("name")
+    for lab in queryset: lab.can_manage=project_role(request.user,lab.project) in (ProjectMembership.Role.ADMIN,ProjectMembership.Role.EDITOR)
     return render(request, "studio/catalog.html", {"section": "labs", "title": "Lab library", "eyebrow": "TOPOLOGY DESIGNS", "items": queryset,
         "description": "Create, organize, and publish reusable network topology designs.", "create_url": "/labs/new/", "create_label": "New lab"})
 
@@ -55,7 +56,7 @@ def lab_create(request):
     if request.method == "POST" and form.is_valid():
         project=form.cleaned_data["project"]
         with transaction.atomic():
-            project=Project.objects.select_for_update().get(pk=project.pk);used=project.labs.count();limit=normalized_quotas(project)["max_labs"]
+            project=Project.objects.select_for_update().get(pk=project.pk);used=project.labs.filter(deleted_at__isnull=True).count();limit=normalized_quotas(project)["max_labs"]
             if used>=limit: form.add_error("project",f"This project has reached its {limit}-lab quota.")
             else:
                 lab=form.save(commit=False);lab.project=project;lab.save();messages.success(request,f'Lab “{lab.name}” created.')
@@ -63,9 +64,26 @@ def lab_create(request):
     return render(request, "studio/form.html", {"form": form, "title": "Create lab", "eyebrow": "NEW TOPOLOGY", "cancel_url": "/labs/", "submit_label": "Create lab"})
 
 @login_required
+def lab_edit(request,lab_id):
+    lab=get_object_or_404(Lab.objects.filter(project__in=visible_projects(request.user),deleted_at__isnull=True),id=lab_id)
+    if project_role(request.user,lab.project) not in (ProjectMembership.Role.ADMIN,ProjectMembership.Role.EDITOR):
+        return JsonResponse({"error":"Editor access is required to edit this lab"},status=403)
+    form=LabEditForm(request.POST or None,instance=lab)
+    if request.method=="POST" and form.is_valid():
+        with transaction.atomic():
+            locked=Lab.objects.select_for_update().get(pk=lab.pk);before={key:getattr(locked,key) for key in ("name","description","tags")}
+            locked.name=form.cleaned_data["name"];locked.description=form.cleaned_data["description"];locked.tags=form.cleaned_data["tags"]
+            locked.save(update_fields=["name","description","tags","updated_at"])
+            changed=[key for key,value in before.items() if value!=getattr(locked,key)]
+            AuditEvent.objects.create(actor=request.user,project=locked.project,action="lab.metadata_updated",target_type="Lab",target_id=locked.id,
+                correlation_id=getattr(request,"correlation_id",""),metadata={"changed_fields":changed})
+        messages.success(request,f'Lab “{locked.name}” updated.');return redirect("portal-labs")
+    return render(request,"studio/form.html",{"form":form,"title":f"Edit {lab.name}","eyebrow":"LAB SETTINGS","cancel_url":"/labs/","submit_label":"Save changes"})
+
+@login_required
 @ensure_csrf_cookie
 def topology_workspace(request, lab_id):
-    lab = get_object_or_404(Lab.objects.filter(project__in=visible_projects(request.user)), id=lab_id)
+    lab = get_object_or_404(Lab.objects.filter(project__in=visible_projects(request.user),deleted_at__isnull=True), id=lab_id)
     return render(request, "studio/workspace.html", {"lab": lab})
 
 def _interfaces(rules):
@@ -89,7 +107,7 @@ def topology_catalog(request):
 @login_required
 @require_http_methods(["GET"])
 def topology_images(request, lab_id):
-    lab=get_object_or_404(Lab.objects.filter(project__in=visible_projects(request.user)),id=lab_id)
+    lab=get_object_or_404(Lab.objects.filter(project__in=visible_projects(request.user),deleted_at__isnull=True),id=lab_id)
     rows=PublishedImage.objects.filter(artifact__project=lab.project,artifact__deleted_at__isnull=True,lifecycle_status__in=("ready","verified","unverified")).select_related("artifact").order_by("artifact__vendor","artifact__version")
     return JsonResponse({"images":[{"id":str(row.id),"name":f"{row.artifact.vendor or row.artifact.category or 'Image'} {row.artifact.version}".strip(),
         "digest":row.registry_digest,"architecture":row.architecture,"status":row.lifecycle_status,"compatibility":row.compatibility_result} for row in rows]})
@@ -97,7 +115,7 @@ def topology_images(request, lab_id):
 @login_required
 @require_http_methods(["GET", "PUT"])
 def topology_document(request, lab_id):
-    lab = get_object_or_404(Lab.objects.filter(project__in=visible_projects(request.user)), id=lab_id)
+    lab = get_object_or_404(Lab.objects.filter(project__in=visible_projects(request.user),deleted_at__isnull=True), id=lab_id)
     if request.method == "GET":
         revision = lab.current_draft
         if not revision:

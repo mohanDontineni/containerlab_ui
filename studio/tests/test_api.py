@@ -110,6 +110,65 @@ def test_quota_cannot_be_lowered_below_current_usage():
     assert response.status_code==409 and response.data["error"]["code"]=="quota_below_current_usage"
 
 @pytest.mark.django_db
+def test_lab_metadata_update_is_scoped_audited_and_cannot_move_projects():
+    owner=User.objects.create_user("lab-edit-owner",password="long-enough-password")
+    viewer=User.objects.create_user("lab-edit-viewer",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="edit-project");other=Project.objects.create(owner=owner,name="other-project")
+    ProjectMembership.objects.create(project=project,user=viewer,role="viewer")
+    lab=Lab.objects.create(project=project,name="before",description="old",tags=["old"])
+    client=APIClient();client.force_authenticate(viewer)
+    assert client.patch(f"/api/v1/labs/{lab.id}/",{"name":"forbidden"},format="json").status_code==403
+    client.force_authenticate(owner)
+    moved=client.patch(f"/api/v1/labs/{lab.id}/",{"project":str(other.id)},format="json")
+    assert moved.status_code==400
+    changed=client.patch(f"/api/v1/labs/{lab.id}/",{"name":"after","description":"new","tags":["bgp"]},format="json")
+    assert changed.status_code==200
+    lab.refresh_from_db();assert lab.project==project and (lab.name,lab.description,lab.tags)==("after","new",["bgp"])
+    event=AuditEvent.objects.get(action="lab.metadata_updated",target_id=lab.id)
+    assert set(event.metadata["changed_fields"])=={"name","description","tags"} and "new" not in str(event.metadata)
+
+@pytest.mark.django_db
+def test_guarded_lab_deletion_blocks_runtime_then_preserves_history_releases_quota_and_is_idempotent():
+    owner=User.objects.create_user("lab-delete-owner",password="long-enough-password")
+    viewer=User.objects.create_user("lab-delete-viewer",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="delete-project",quotas={"max_labs":1})
+    ProjectMembership.objects.create(project=project,user=viewer,role="viewer")
+    lab=Lab.objects.create(project=project,name="Reusable lab")
+    revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="a"*64,immutable=True)
+    deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-delete-test",runtime_version="0.8.0",observed_state="running")
+    client=APIClient();client.force_authenticate(viewer)
+    assert client.get(f"/api/v1/labs/{lab.id}/delete-preview/").status_code==403
+    client.force_authenticate(owner)
+    blocked=client.get(f"/api/v1/labs/{lab.id}/delete-preview/")
+    assert blocked.status_code==200 and not blocked.data["can_delete"] and blocked.data["references"]["active_deployments"]==1
+    rejected=client.post(f"/api/v1/labs/{lab.id}/delete/",{},format="json",HTTP_IDEMPOTENCY_KEY="blocked-delete",
+        HTTP_X_EXPECTED_UPDATED_AT=blocked.data["updated_at"])
+    assert rejected.status_code==409 and rejected.data["error"]["code"]=="lab_delete_blocked"
+    deployment.observed_state="stopped";deployment.save(update_fields=["observed_state","updated_at"])
+    preview=client.get(f"/api/v1/labs/{lab.id}/delete-preview/");key="safe-delete"
+    deleted=client.post(f"/api/v1/labs/{lab.id}/delete/",{},format="json",HTTP_IDEMPOTENCY_KEY=key,
+        HTTP_X_EXPECTED_UPDATED_AT=preview.data["updated_at"])
+    replay=client.post(f"/api/v1/labs/{lab.id}/delete/",{},format="json",HTTP_IDEMPOTENCY_KEY=key,
+        HTTP_X_EXPECTED_UPDATED_AT=preview.data["updated_at"])
+    assert deleted.status_code==replay.status_code==200 and deleted.data==replay.data
+    lab.refresh_from_db();assert lab.deleted_at and project_usage(project)["labs"]==0
+    assert client.get(f"/api/v1/labs/{lab.id}/").status_code==404
+    assert LabRevision.objects.filter(id=revision.id).exists() and LabDeployment.objects.filter(id=deployment.id).exists()
+    replacement=client.post("/api/v1/labs/",{"project":str(project.id),"name":"Reusable lab","tags":[]},format="json")
+    assert replacement.status_code==201
+    assert AuditEvent.objects.filter(action="lab.deleted",target_id=lab.id).count()==1
+
+@pytest.mark.django_db
+def test_lab_deletion_rejects_stale_preview_and_normal_destroy():
+    owner=User.objects.create_user("lab-delete-stale",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="stale-project");lab=Lab.objects.create(project=project,name="stale-lab")
+    client=APIClient();client.force_authenticate(owner);endpoint=f"/api/v1/labs/{lab.id}/"
+    assert client.delete(endpoint).status_code==405
+    preview=client.get(endpoint+"delete-preview/");lab.description="changed";lab.save(update_fields=["description","updated_at"])
+    response=client.post(endpoint+"delete/",{},format="json",HTTP_IDEMPOTENCY_KEY="stale-delete",HTTP_X_EXPECTED_UPDATED_AT=preview.data["updated_at"])
+    assert response.status_code==409 and response.data["error"]["code"]=="lab_changed"
+
+@pytest.mark.django_db
 def test_lab_clone_is_deep_project_scoped_audited_and_quota_enforced():
     owner=User.objects.create_user("clone-owner",password="long-enough-password")
     viewer=User.objects.create_user("clone-viewer",password="long-enough-password")
