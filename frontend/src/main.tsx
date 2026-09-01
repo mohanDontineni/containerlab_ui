@@ -183,6 +183,7 @@ function Workspace() {
   const [revisions, setRevisions] = useState<RevisionSummary[]>([]);
   const [currentDraftId, setCurrentDraftId] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
+  const [workspaceReady,setWorkspaceReady]=useState(false);
   const [notice, setNotice] = useState("Ready");
   const [history, setHistory] = useState<Snapshot[]>([]);
   const [future, setFuture] = useState<Snapshot[]>([]);
@@ -249,6 +250,7 @@ function Workspace() {
         setAnnotations(Array.isArray(doc.annotations)?doc.annotations:[]);
         setEditVersion(doc.editVersion);
         counter.current = doc.nodes.length + 1;
+        setWorkspaceReady(true);
         setNotice("Draft loaded");
       })
       .catch(() => setNotice("Unable to load workspace"));
@@ -349,7 +351,7 @@ function Workspace() {
       event.preventDefault();
       const id = event.dataTransfer.getData("template");
       const template = templates.find((t) => t.id === id);
-      if (!template || !rf) return;
+      if (!template || !rf || !workspaceReady) return;
       snapshot();
       const position = rf.screenToFlowPosition({
         x: event.clientX,
@@ -389,10 +391,10 @@ function Workspace() {
       setDirty(true);
       setNotice(`${template.name} added`);
     },
-    [templates, rf, nodes, snapshot],
+    [templates, rf, nodes, snapshot,workspaceReady],
   );
   const addAnnotation=(type:"note"|"region")=>{
-    if(!rf)return;snapshot();const center=rf.screenToFlowPosition({x:window.innerWidth/2,y:window.innerHeight/2});
+    if(!rf||!workspaceReady)return;snapshot();const center=rf.screenToFlowPosition({x:window.innerWidth/2,y:window.innerHeight/2});
     const annotation:TopologyAnnotation={id:crypto.randomUUID(),type,x:center.x-(type==="region"?180:120),y:center.y-(type==="region"?100:45),
       width:type==="region"?360:240,height:type==="region"?200:90,text:type==="region"?"Network zone":"Add an operator note",
       color:type==="region"?"blue":"amber",fontSize:type==="region"?16:14,zIndex:type==="region"?-10:10};
@@ -632,8 +634,8 @@ function Workspace() {
           </button>
           <i></i>
           <button onClick={() => rf?.fitView({ padding: 0.2 })}>Fit</button>
-          <button onClick={()=>addAnnotation("note")} title="Add a movable text note">＋ Note</button>
-          <button onClick={()=>addAnnotation("region")} title="Add a colored topology region">▧ Region</button>
+          <button onClick={()=>addAnnotation("note")} disabled={!workspaceReady} title="Add a movable text note">＋ Note</button>
+          <button onClick={()=>addAnnotation("region")} disabled={!workspaceReady} title="Add a colored topology region">▧ Region</button>
           <button onClick={exportBundle} disabled={dirty} title="Download a product-native lab backup. No YAML editing is required.">Backup</button>
           <button onClick={() => setCloneOpen(true)} disabled={dirty}>Save as</button>
           <button onClick={openHistory} disabled={dirty}>History</button>
@@ -648,7 +650,7 @@ function Workspace() {
           <button className="deploy" onClick={deploy} disabled={errors.length > 0 || dirty || deploying}>
             {deploying ? "Deploying…" : "▶ Deploy"}
           </button>
-          <button className="save" onClick={save} disabled={saving || !dirty}>
+          <button className="save" onClick={save} disabled={!workspaceReady || saving || !dirty}>
             {saving ? "Saving…" : dirty ? "Save draft" : "Saved ✓"}
           </button>
         </div>
@@ -766,7 +768,7 @@ function Workspace() {
               maskColor="rgba(5,13,23,.72)"
             />
             <Panel position="top-left" className="canvas-hint">
-              {nodes.length
+              {!workspaceReady?"Loading saved topology…":nodes.length
                 ? `${nodes.length} devices · ${edges.length} links · ${annotations.length} canvas objects`
                 : annotations.length?`${annotations.length} canvas objects · Drag a device here to continue`:"Drag a device here to begin"}
             </Panel>
