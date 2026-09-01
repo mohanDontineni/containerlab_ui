@@ -33,7 +33,7 @@ import "./clone.css";
 import "./configuration.css";
 import "./annotations.css";
 import "./bulk-selection.css";
-import { duplicateSubgraph, interfaceFromHandle } from "./topology-utils";
+import { alignSelectedNodes, arrangeTopology, duplicateSubgraph, interfaceFromHandle } from "./topology-utils";
 
 type Template = {
   id: string;
@@ -185,6 +185,7 @@ function Workspace() {
   const [currentDraftId, setCurrentDraftId] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [workspaceReady,setWorkspaceReady]=useState(false);
+  const [templateQuery,setTemplateQuery]=useState("");
   const [notice, setNotice] = useState("Ready");
   const [history, setHistory] = useState<Snapshot[]>([]);
   const [future, setFuture] = useState<Snapshot[]>([]);
@@ -280,6 +281,7 @@ function Workspace() {
   const selectedEdge = edges.find((e) => e.id === selected);
   const selectedAnnotation=annotations.find((annotation)=>`annotation:${annotation.id}`===selected);
   const selectedDeviceNodes=nodes.filter(node=>node.selected);
+  const filteredTemplates=templates.filter(template=>`${template.name} ${template.kind} ${template.category}`.toLowerCase().includes(templateQuery.trim().toLowerCase()));
   const onNodesChange = useCallback(
     (changes: NodeChange<Node<DeviceData>>[]) => {
       setNodes((n) => applyNodeChanges(changes, n));
@@ -606,6 +608,15 @@ function Workspace() {
     setSelected(result.nodes.length===1?result.nodes[0].id:null);setDirty(true);
     setNotice(`Duplicated ${result.nodes.length} device${result.nodes.length===1?"":"s"} and ${result.edges.length} internal link${result.edges.length===1?"":"s"}`);
   };
+  const arrangeAll = () => {
+    if(nodes.length<2||!workspaceReady)return;snapshot();setNodes(arrangeTopology(nodes,edges));setDirty(true);setSelected(null);
+    setNotice(`Arranged ${nodes.length} devices into linked groups`);requestAnimationFrame(()=>rf?.fitView({padding:.2,duration:350}));
+  };
+  const alignSelection = (axis:"row"|"column") => {
+    if(selectedDeviceNodes.length<2)return;snapshot();
+    setNodes(current=>alignSelectedNodes(current,new Set(selectedDeviceNodes.map(node=>node.id)),axis));setDirty(true);
+    setNotice(`Aligned ${selectedDeviceNodes.length} devices into a ${axis}`);
+  };
   useEffect(()=>{
     const keyboard=(event:KeyboardEvent)=>{
       const target=event.target as HTMLElement|null;
@@ -659,6 +670,7 @@ function Workspace() {
           </button>
           <i></i>
           <button onClick={() => rf?.fitView({ padding: 0.2 })}>Fit</button>
+          <button onClick={arrangeAll} disabled={!workspaceReady||nodes.length<2} title="Automatically arrange linked device groups (undoable)">⌘ Arrange</button>
           <button onClick={duplicateSelected} disabled={!workspaceReady||(!selectedDeviceNodes.length&&!selectedNode)} title="Duplicate selected devices and their internal links (Ctrl/Cmd+D)">⧉ Duplicate{selectedDeviceNodes.length>1?` ${selectedDeviceNodes.length}`:""}</button>
           <button onClick={()=>addAnnotation("note")} disabled={!workspaceReady} title="Add a movable text note">＋ Note</button>
           <button onClick={()=>addAnnotation("region")} disabled={!workspaceReady} title="Add a colored topology region">▧ Region</button>
@@ -716,13 +728,13 @@ function Workspace() {
               <strong>Devices</strong>
               <small>Drag onto canvas</small>
             </p>
-            <button>⌕</button>
+            <button onClick={()=>setTemplateQuery("")} title={templateQuery?"Clear device filter":"Search device templates"}>{templateQuery?"×":"⌕"}</button>
           </div>
-          <input className="palette-search" placeholder="Filter devices…" />
-          {[...new Set(templates.map((t) => t.category))].map((category) => (
+          <input className="palette-search" placeholder="Filter devices…" value={templateQuery} onChange={event=>setTemplateQuery(event.target.value)} />
+          {[...new Set(filteredTemplates.map((t) => t.category))].map((category) => (
             <section key={category}>
               <h3>{category}</h3>
-              {templates
+              {filteredTemplates
                 .filter((t) => t.category === category)
                 .map((t) => (
                   <div
@@ -750,6 +762,7 @@ function Workspace() {
                 ))}
             </section>
           ))}
+          {!filteredTemplates.length&&<div className="palette-empty"><span>⌕</span><strong>No matching devices</strong><small>Search by name, kind, or category.</small></div>}
         </aside>
         <main
           className="canvas"
@@ -824,6 +837,7 @@ function Workspace() {
             <div className="properties bulk-properties">
               <div className="bulk-selection-summary"><strong>{selectedDeviceNodes.length} devices selected</strong><span>{edges.filter(edge=>selectedDeviceNodes.some(node=>node.id===edge.source)&&selectedDeviceNodes.some(node=>node.id===edge.target)).length} internal links</span></div>
               <p>Drag the selection together, duplicate the complete subgraph, or remove it. Pinned templates, images, startup configurations, and internal interface links are preserved in each copy.</p>
+              <div className="bulk-align"><button onClick={()=>alignSelection("row")}>Align row</button><button onClick={()=>alignSelection("column")}>Align column</button></div>
               <button className="bulk-primary" onClick={duplicateSelected}>⧉ Duplicate selected subgraph</button>
               <button className="danger" onClick={removeSelected}>Remove selected devices</button>
               <small className="keyboard-help">Shift-click to adjust selection · Ctrl/Cmd+D to duplicate · Delete to remove</small>

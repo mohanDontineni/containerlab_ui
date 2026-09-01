@@ -5,4 +5,11 @@
 .bulk-properties > p { margin: 0; color: #6f879b; font-size: 9px; line-height: 1.6; }
 .bulk-primary { height: 36px; border: 1px solid #27758a; border-radius: 6px; background: rgba(38,198,218,.1); color: #8be4ee; font-size: 9px; cursor: pointer; }
 .bulk-primary:hover { background: rgba(38,198,218,.16); }
+.bulk-align { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+.bulk-align button { height: 32px; border: 1px solid #234257; border-radius: 6px; background: #0a1928; color: #7f98aa; font-size: 9px; cursor: pointer; }
+.bulk-align button:hover { border-color: #2b8093; color: #d8edf5; }
 .keyboard-help { color: #4f687e; font-size: 8px; line-height: 1.55; text-align: center; }
+.palette-empty { margin: 28px 14px; padding: 22px 10px; border: 1px dashed #20384d; border-radius: 8px; display: flex; align-items: center; flex-direction: column; text-align: center; color: #4f687e; }
+.palette-empty span { font-size: 22px; }
+.palette-empty strong { margin-top: 8px; color: #7890a4; font-size: 10px; }
+.palette-empty small { margin-top: 5px; font-size: 8px; }

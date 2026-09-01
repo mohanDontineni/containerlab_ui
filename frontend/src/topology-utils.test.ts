@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { duplicateSubgraph, interfaceFromHandle, interfaceIsAvailable } from "./topology-utils";
+import { alignSelectedNodes, arrangeTopology, duplicateSubgraph, interfaceFromHandle, interfaceIsAvailable } from "./topology-utils";
 
 describe("topology interface helpers", () => {
   it("maps React Flow endpoint handles to device interface names", () => {
@@ -34,5 +34,23 @@ describe("topology interface helpers", () => {
     expect(result.nodes[0].data.startupConfig).toBe("hostname r1");
     expect(result.edges).toHaveLength(1);
     expect(result.edges[0]).toMatchObject({ id: "new-3", source: "new-1", target: "new-2", sourceHandle: "s:eth1", targetHandle: "t:eth1" });
+  });
+
+  it("arranges linked components deterministically and separates disconnected groups", () => {
+    const nodes=["d","b","a","c"].map((id)=>({id,position:{x:999,y:999},data:{label:id}}));
+    const edges=[{source:"a",target:"b"},{source:"c",target:"d"}];
+    const first=arrangeTopology(nodes,edges);const second=arrangeTopology([...nodes].reverse(),edges);
+    expect(Object.fromEntries(first.map((node)=>[node.id,node.position]))).toEqual(Object.fromEntries(second.map((node)=>[node.id,node.position])));
+    const positions=Object.fromEntries(first.map((node)=>[node.id,node.position]));
+    expect(positions.a.x).not.toBe(positions.b.x);
+    expect(Math.min(positions.c.y,positions.d.y)).toBeGreaterThan(Math.max(positions.a.y,positions.b.y));
+  });
+
+  it("aligns only selected devices into a row or column", () => {
+    const nodes=[{id:"a",position:{x:0,y:10}},{id:"b",position:{x:100,y:30}},{id:"c",position:{x:200,y:90}}];
+    const row=alignSelectedNodes(nodes,new Set(["a","b"]),"row");
+    expect(row.map((node)=>node.position)).toEqual([{x:0,y:20},{x:100,y:20},{x:200,y:90}]);
+    const column=alignSelectedNodes(nodes,new Set(["a","b"]),"column");
+    expect(column.map((node)=>node.position)).toEqual([{x:50,y:10},{x:50,y:30},{x:200,y:90}]);
   });
 });
