@@ -24,7 +24,8 @@ Kubernetes 1.36.3/amd64 was verified. Native Linux containers work. VM-backed de
 | VM-backed vendor devices | Unsupported here | KVM missing; licensed images not supplied. |
 | Protected private-registry references | Supported | Project-scoped create/rotate/deactivate, encrypted persistence, redacted API/UI, host matching, and digest-pinned image linkage are verified. |
 | Namespace-local OCI registry service | Supported | Distribution 3.1.1 runs behind an internal ClusterIP with retained local storage, restricted same-namespace ingress, Kubernetes probes, and expiring worker health evidence. |
-| Uploaded-image registry mirroring | Unverified | Current verified publication imports into the selected node's containerd store; registry mirroring and multi-node pull validation are not yet claimed. |
+| Uploaded-image registry mirroring | Supported | The publication job checksum-verifies and imports the archive, retains the node-local runtime reference, pushes its manifest and layers to the internal registry, then verifies and records the registry's returned manifest digest. |
+| Multi-node launcher pull from internal registry | Unverified | Node trust, registry routing, and Clabernetes launcher resolution must be verified on every worker before this is claimed. |
 | Launcher private-registry pull | Unverified | Launcher-internal authentication and CA trust must be configured and tested independently of pod pull secrets. |
 
 Examples: a digest-pinned Alpine Linux node is within the native supported subset. A Cisco IOS-XRv disk is not accepted merely because it is qcow2; it needs licensing, an approved vrnetlab recipe, KVM, and a verified template.

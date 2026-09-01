@@ -79,6 +79,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 | `67-server-topology-preflight.png` | Server topology preflight | Runs pinned adapter validation and presents platform checks plus per-device image, interface, configuration, and resource evidence. |
 | `68-containerlab-interoperability.png` | Containerlab interoperability | Exports a saved visual graph and previews a guarded re-import with explicit active-template and immutable-image mapping. |
 | `69-kubernetes-oci-registry.png` | Persistent Kubernetes OCI registry | Shows the worker-verified internal Distribution registry, retained filesystem storage mode, and Ready state on the platform dashboard. |
+| `70-verified-image-registry-mirror.png` | Verified image registry mirror | Repairs a validated upload through the GUI and shows its successful v2 build, internal registry reference, independently addressable manifest digest, and verified state. |
 
 ## No-YAML operating model
 
@@ -122,6 +123,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 37. Run Validate on a saved draft to inspect a server-authoritative readiness report; resolve blocking device, image, configuration, interface, or adapter findings before opening the deployment plan.
 38. Use the optional Interop workspace to export a saved visual graph or import an existing supported `.clab.yml`; Studio rejects unsafe fields, requires explicit mappings, omits untrusted external configuration paths, and leaves normal design and operation GUI-only.
 39. Confirm the namespace-local OCI registry is reachable and its persistent storage mode is healthy from the platform dashboard; this health evidence expires when worker probes stop.
+40. Publish or repair a validated uploaded image from the catalog; Studio retains the node-local runtime tag, mirrors the manifest and layers into the internal registry, verifies the returned digest, and shows the proof without requiring registry CLI access.
 
 Containerlab/Kubernetes YAML is an internal adapter concern. It may be inspected by platform administrators for troubleshooting, but it is not part of the normal user workflow.
 
