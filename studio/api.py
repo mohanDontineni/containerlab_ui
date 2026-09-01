@@ -19,7 +19,7 @@ from rest_framework.views import exception_handler as drf_exception_handler
 from . import models, serializers
 from .permissions import ProjectAccess, project_role
 from .runtime import ClabernetesAdapter
-from .tasks import execute_operation, reconcile_deployment
+from .tasks import execute_operation, execute_staged_start, reconcile_deployment
 from .uploads import UploadError, append_chunk, finalize
 from .bundles import BundleError, LabBundleParser, export_lab_bundle, import_lab_bundle, inspect_lab_bundle
 from .configurations import decrypt_configuration
@@ -1059,6 +1059,9 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
                 return Response({"error":{"code":"device_not_ready"}},status=409)
             if operation=="collect_configuration" and not device.lab_node.template_version.launch_profile.get("configuration_collect_command"):
                 return Response({"error":{"code":"configuration_collection_unsupported","details":"This device template has no verified runtime collector."}},status=422)
+            active_sequence=deployment.operations.filter(operation_type="staged_start_devices",state__in=("accepted","scheduled","started")).first()
+            if active_sequence and str(device.id) in active_sequence.request_payload.get("device_ids",[]):
+                return Response({"error":{"code":"device_operation_in_progress","details":"This device belongs to an active staged-start sequence."}},status=409)
             if models.OperationJob.objects.filter(target_id=device.id,state__in=("accepted","scheduled","started")).exists():
                 return Response({"error":{"code":"device_operation_in_progress"}},status=409)
             job=models.OperationJob.objects.create(deployment=deployment,owner=request.user,operation_type=operation,
@@ -1118,6 +1121,10 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
     def _bulk_device_preview_data(self,deployment,devices,operation):
         active={row.target_id:row.operation_type for row in models.OperationJob.objects.filter(target_id__in=[device.id for device in devices],
             state__in=("accepted","scheduled","started"))}
+        selected_ids={str(device.id):device.id for device in devices}
+        for sequence in deployment.operations.filter(operation_type="staged_start_devices",state__in=("accepted","scheduled","started")):
+            for device_id in sequence.request_payload.get("device_ids",[]):
+                if device_id in selected_ids:active[selected_ids[device_id]]=sequence.operation_type
         node_ids=[device.lab_node_id for device in devices]
         captures=dict(models.CaptureSession.objects.filter(deployment=deployment,interface__node_id__in=node_ids,
             status__in=("scheduled","capturing")).values("interface__node_id").annotate(count=Count("id")).values_list("interface__node_id","count")) if operation=="reset_device" else {}
@@ -1192,6 +1199,68 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
                 metadata={"operation":operation,"devices":[device.lab_node.name for device in locked],"jobs":[str(job.id) for job in jobs]})
             transaction.on_commit(lambda job_ids=[job.id for job in jobs]:[execute_operation.delay(str(job_id)) for job_id in job_ids])
         return Response({"operation":operation,"count":len(jobs),"jobs":serializers.OperationSerializer(jobs,many=True).data},status=202)
+    def _staged_start_preview_data(self,deployment,devices,interval_seconds):
+        preview=self._bulk_device_preview_data(deployment,devices,"start_device")
+        deployment_operation=deployment.operations.filter(state__in=("accepted","scheduled","started")).first()
+        if deployment_operation:
+            for row in preview["devices"]:
+                row["eligible"]=False;row["blocker"]=f"{deployment_operation.operation_type.replace('_',' ')} is already in progress."
+        preview.update({"operation":"staged_start_devices","operation_label":"Staged start","interval_seconds":interval_seconds,
+            "total_delay_seconds":interval_seconds*(len(devices)-1),"can_schedule":all(row["eligible"] for row in preview["devices"]),
+            "impact":[f"Studio will start {len(devices)} devices in the displayed order.",
+                f"Each launcher is enabled {interval_seconds} second(s) after the previous device; the final start occurs after {interval_seconds*(len(devices)-1)} second(s).",
+                "The worker records one durable parent job with per-device progress; topology wiring, saved configurations, and the immutable revision remain unchanged."]})
+        return preview
+    def _staged_start_request(self,deployment,data):
+        devices,error=self._bulk_device_candidates(deployment,data)
+        if error:return None,None,error
+        if len(devices)>20:return None,None,Response({"error":{"code":"invalid_device_selection","details":"Staged start supports at most 20 devices."}},status=422)
+        interval=data.get("interval_seconds",5)
+        if isinstance(interval,bool) or not isinstance(interval,int) or not 0<=interval<=60:
+            return None,None,Response({"error":{"code":"invalid_start_interval","details":"Choose an interval from 0 to 60 seconds."}},status=422)
+        if interval*(len(devices)-1)>300:
+            return None,None,Response({"error":{"code":"start_sequence_too_long","details":"The complete staged-start interval may not exceed 300 seconds."}},status=422)
+        return devices,interval,None
+    @action(detail=True,methods=["post"],url_path="device-staged-start-preview")
+    def device_staged_start_preview(self,request,pk=None):
+        deployment=self.get_object();self._require_operator(deployment)
+        devices,interval,error=self._staged_start_request(deployment,request.data)
+        if error:return error
+        response=Response(self._staged_start_preview_data(deployment,devices,interval));response["Cache-Control"]="no-store";return response
+    @action(detail=True,methods=["post"],url_path="device-staged-start")
+    def device_staged_start(self,request,pk=None):
+        deployment=self.get_object();self._require_operator(deployment)
+        devices,interval,error=self._staged_start_request(deployment,request.data)
+        if error:return error
+        expected=request.data.get("expected_devices")
+        if not isinstance(expected,dict) or set(expected)!={str(device.id) for device in devices} or any(not isinstance(value,str) for value in expected.values()):
+            return Response({"error":{"code":"expected_devices_required","details":"Confirmation must include the previewed version of every ordered device."}},status=400)
+        key=request.headers.get("Idempotency-Key")
+        if not key:return Response({"error":{"code":"idempotency_key_required"}},status=400)
+        payload={"device_ids":[str(device.id) for device in devices],"interval_seconds":interval,"expected_devices":expected}
+        existing=models.OperationJob.objects.filter(owner=request.user,idempotency_key=key).first()
+        if existing:
+            if existing.deployment_id!=deployment.id or existing.operation_type!="staged_start_devices" or existing.request_payload!=payload:
+                return Response({"error":{"code":"idempotency_conflict"}},status=409)
+            return Response(serializers.OperationSerializer(existing).data,status=202)
+        with transaction.atomic():
+            locked=list(deployment.devices.select_for_update().select_related("lab_node").filter(id__in=[device.id for device in devices]))
+            by_id={device.id:device for device in locked};locked=[by_id[device.id] for device in devices]
+            preview=self._staged_start_preview_data(deployment,locked,interval)
+            if not preview["can_schedule"]:
+                return Response({"error":{"code":"staged_start_blocked","details":"Every ordered device must still be stopped and operation-free.","devices":preview["devices"]}},status=409)
+            changed=[]
+            for device in locked:
+                expected_at=parse_datetime(expected[str(device.id)])
+                if not expected_at or timezone.is_naive(expected_at) or device.updated_at!=expected_at:changed.append(device.lab_node.name)
+            if changed:return Response({"error":{"code":"device_changed","details":"Ordered device state changed after preview.","devices":changed}},status=409)
+            job=models.OperationJob.objects.create(deployment=deployment,owner=request.user,operation_type="staged_start_devices",
+                target_id=deployment.id,idempotency_key=key,state="scheduled",request_payload=payload)
+            models.AuditEvent.objects.create(actor=request.user,project=deployment.revision.lab.project,action="device.staged_start_scheduled",
+                target_type="LabDeployment",target_id=deployment.id,correlation_id=getattr(request,"correlation_id",""),
+                metadata={"operation":str(job.id),"devices":[device.lab_node.name for device in locked],"interval_seconds":interval})
+            transaction.on_commit(lambda:execute_staged_start.delay(str(job.id)))
+        return Response(serializers.OperationSerializer(job).data,status=202)
     @action(detail=True,methods=["post"])
     def diagnostics(self,request,pk=None):
         deployment=self.get_object(); self._require_operator(deployment)

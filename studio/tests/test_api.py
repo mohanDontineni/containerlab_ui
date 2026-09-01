@@ -8,7 +8,7 @@ from rest_framework.test import APIClient
 from studio.configurations import decrypt_configuration, encrypt_configuration
 from studio.models import (AuditEvent, CaptureSession, ConsoleSession, DeploymentSchedule, DeviceInstance, DeviceTemplate, DeviceTemplateVersion, ImageArtifact, Lab, LabDeployment,
     ConfigurationVersion, LabArtifact, LabInterface, LabLink, LabNode, LabRevision, OperationJob, Project, ProjectMembership, PublishedImage, UploadSession, User)
-from studio.tasks import dispatch_due_schedules, execute_operation, reconcile_active_deployments, reconcile_deployment
+from studio.tasks import dispatch_due_schedules, execute_operation, execute_staged_start, reconcile_active_deployments, reconcile_deployment
 from studio.quotas import project_usage
 
 def test_web_process_uses_configured_celery_broker():
@@ -531,7 +531,8 @@ def test_active_deployment_quota_blocks_new_runtime_without_consuming_draft():
     lab=Lab.objects.create(project=project,name="new-runtime")
     revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="8"*64)
     lab.current_draft=revision;lab.save(update_fields=["current_draft"])
-    template=DeviceTemplateVersion.objects.filter(containerlab_kind="linux").first()
+    catalog=DeviceTemplate.objects.create(name="Quota Linux")
+    template=DeviceTemplateVersion.objects.create(template=catalog,version=1,containerlab_kind="linux",interface_rules={"prefix":"eth","start":1,"count":2})
     artifact=ImageArtifact.objects.create(project=project,owner=owner,source_type="registry",original_filename="alpine",detected_format="oci-registry",
         byte_size=0,checksum="9"*64,architecture="amd64",storage_reference="docker.io/alpine",validation_status="validated")
     image=PublishedImage.objects.create(artifact=artifact,registry_digest="docker.io/alpine@sha256:"+"9"*64,repository="docker.io/alpine",architecture="amd64")
@@ -867,6 +868,53 @@ def test_bulk_device_lifecycle_is_authorized_preflighted_atomic_idempotent_and_a
     assert conflict.status_code==409 and conflict.data["error"]["code"]=="bulk_device_operation_blocked"
     duplicate={"operation":"restart_device","device_ids":[str(devices[0].id),str(devices[0].id)]}
     assert client.post(preview_url,duplicate,format="json").status_code==422
+
+@pytest.mark.django_db(transaction=True)
+def test_staged_device_start_is_ordered_bounded_concurrent_idempotent_and_audited(monkeypatch):
+    queued=[];monkeypatch.setattr("studio.api.execute_staged_start.delay",lambda job_id:queued.append(job_id))
+    owner=User.objects.create_user("staged-owner",password="long-enough-password");viewer=User.objects.create_user("staged-viewer",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="staged-project");ProjectMembership.objects.create(project=project,user=viewer,role="viewer")
+    lab=Lab.objects.create(project=project,name="staged-lab");revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="d"*64,immutable=True)
+    catalog=DeviceTemplate.objects.create(name="Staged Linux")
+    template=DeviceTemplateVersion.objects.create(template=catalog,version=1,containerlab_kind="linux",interface_rules={"prefix":"eth","start":1,"count":2})
+    nodes=[LabNode.objects.create(revision=revision,name=name,template_version=template) for name in ("core","firewall","edge")]
+    deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-staged-test",runtime_version="0.8.0",observed_state="running")
+    devices=[DeviceInstance.objects.create(deployment=deployment,lab_node=node,observed_readiness="stopped",
+        runtime_resources={"manual_desired_state":"stopped","pod":None}) for node in nodes]
+    order=[devices[1],devices[0],devices[2]];base={"device_ids":[str(device.id) for device in order],"interval_seconds":4}
+    preview_url=f"/api/v1/deployments/{deployment.id}/device-staged-start-preview/";operation_url=f"/api/v1/deployments/{deployment.id}/device-staged-start/"
+    client=APIClient();client.force_authenticate(viewer);assert client.post(preview_url,base,format="json").status_code==403
+    client.force_authenticate(owner)
+    assert client.post(preview_url,{**base,"interval_seconds":61},format="json").status_code==422
+    preview=client.post(preview_url,base,format="json")
+    assert preview.status_code==200 and preview.data["can_schedule"] is True and preview.data["total_delay_seconds"]==8
+    assert [row["name"] for row in preview.data["devices"]]==["firewall","core","edge"]
+    expected={row["id"]:row["updated_at"] for row in preview.data["devices"]};payload={**base,"expected_devices":expected}
+    assert client.post(operation_url,base,format="json",HTTP_IDEMPOTENCY_KEY="missing-preview").status_code==400
+    first=client.post(operation_url,payload,format="json",HTTP_IDEMPOTENCY_KEY="ordered-start")
+    replay=client.post(operation_url,payload,format="json",HTTP_IDEMPOTENCY_KEY="ordered-start")
+    assert first.status_code==replay.status_code==202 and first.data["id"]==replay.data["id"] and queued==[first.data["id"]]
+    assert AuditEvent.objects.filter(action="device.staged_start_scheduled",target_id=deployment.id).count()==1
+    conflicting=client.post(f"/api/v1/deployments/{deployment.id}/device-operations/",
+        {"device_id":str(order[0].id),"operation":"start_device"},format="json",HTTP_IDEMPOTENCY_KEY="conflicting-start")
+    assert conflicting.status_code==409 and conflicting.data["error"]["code"]=="device_operation_in_progress"
+    blocked_bulk=client.post(f"/api/v1/deployments/{deployment.id}/device-bulk-preview/",
+        {"operation":"start_device","device_ids":[str(order[0].id),str(order[1].id)]},format="json")
+    assert blocked_bulk.status_code==200 and blocked_bulk.data["can_schedule"] is False
+    calls=[];next_steps=[]
+    class Adapter:
+        def start_device(self,_deployment,device):
+            calls.append(device.lab_node.name);return {"device":device.lab_node.name,"operation":"start","desired_state":"running","readiness":"starting"}
+    monkeypatch.setattr("studio.tasks.ClabernetesAdapter",Adapter)
+    monkeypatch.setattr("studio.tasks.execute_staged_start.apply_async",lambda **kwargs:next_steps.append(kwargs["countdown"]))
+    monkeypatch.setattr("studio.tasks.reconcile_deployment.apply_async",lambda **_:None)
+    execute_staged_start.run(first.data["id"]);execute_staged_start.run(first.data["id"]);execute_staged_start.run(first.data["id"])
+    job=OperationJob.objects.get(pk=first.data["id"])
+    assert calls==["firewall","core","edge"] and next_steps==[4,4] and job.state=="succeeded" and job.progress==100
+    assert [row["device"] for row in job.result_payload["devices"]]==calls
+    assert set(DeviceInstance.objects.filter(id__in=[device.id for device in devices]).values_list("observed_readiness",flat=True))=={"starting"}
+    assert not DeviceInstance.objects.filter(id__in=[device.id for device in devices],runtime_resources__has_key="manual_desired_state").exists()
+    assert AuditEvent.objects.filter(action="device.staged_start_completed",target_id=deployment.id).count()==1
 
 @pytest.mark.django_db(transaction=True)
 def test_bulk_device_reset_is_guarded_concurrent_idempotent_and_revokes_consoles(monkeypatch):

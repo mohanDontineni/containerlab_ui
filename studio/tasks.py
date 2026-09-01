@@ -131,6 +131,46 @@ def execute_operation(self,job_id):
     return result
 
 @shared_task(bind=True,autoretry_for=(ConnectionError,),retry_backoff=True,max_retries=5)
+def execute_staged_start(self,job_id):
+    try:
+        with transaction.atomic():
+            job=OperationJob.objects.select_for_update().select_related("deployment__revision__lab__project","owner").get(pk=job_id)
+            if job.operation_type!="staged_start_devices":raise RuntimeError("Operation is not a staged start")
+            if job.state in ("succeeded","failed"):return job.result_payload
+            ordered_ids=job.request_payload["device_ids"];started=list(job.result_payload.get("devices",[]));index=len(started)
+            if index>=len(ordered_ids):return job.result_payload
+            device=DeviceInstance.objects.select_for_update().select_related("lab_node").get(pk=ordered_ids[index],deployment=job.deployment)
+            if device.runtime_resources.get("manual_desired_state")!="stopped":raise RuntimeError(f"{device.lab_node.name} is no longer stopped")
+            job.state="started";job.attempts+=1;job.heartbeat=timezone.now();job.progress=max(10,job.progress);job.save(
+                update_fields=["state","attempts","heartbeat","progress","updated_at"])
+        step=ClabernetesAdapter().start_device(job.deployment,device)
+        with transaction.atomic():
+            job=OperationJob.objects.select_for_update().select_related("deployment__revision__lab__project","owner").get(pk=job_id)
+            device=DeviceInstance.objects.select_for_update().select_related("lab_node").get(pk=ordered_ids[index],deployment=job.deployment)
+            device.observed_readiness=step["readiness"]
+            resources={**device.runtime_resources,"manual_lifecycle":"staged_start","manual_lifecycle_at":timezone.now().isoformat()}
+            resources.pop("manual_desired_state",None);device.runtime_resources=resources
+            device.save(update_fields=["observed_readiness","runtime_resources","updated_at"])
+            started=list(job.result_payload.get("devices",[]));started.append({"device_id":str(device.id),"device":device.lab_node.name,
+                "position":index+1,"started_at":timezone.now().isoformat()})
+            result={"devices":started,"interval_seconds":job.request_payload["interval_seconds"],"count":len(started)}
+            job.result_payload=result;job.heartbeat=timezone.now();job.progress=min(100,10+round(90*len(started)/len(ordered_ids)))
+            if len(started)==len(ordered_ids):
+                job.state="succeeded";job.progress=100;job.error_details={}
+                AuditEvent.objects.create(actor=job.owner,project=job.deployment.revision.lab.project,action="device.staged_start_completed",
+                    target_type="LabDeployment",target_id=job.deployment_id,correlation_id=str(job.id),
+                    metadata={"operation":str(job.id),"devices":[row["device"] for row in started],"interval_seconds":job.request_payload["interval_seconds"]})
+                transaction.on_commit(lambda:[reconcile_deployment.apply_async(args=[str(job.deployment_id)],countdown=countdown) for countdown in (3,10,30)])
+            else:
+                interval=job.request_payload["interval_seconds"]
+                transaction.on_commit(lambda:execute_staged_start.apply_async(args=[str(job.id)],countdown=interval))
+            job.save(update_fields=["state","progress","heartbeat","result_payload","error_details","updated_at"])
+        return result
+    except Exception as exc:
+        OperationJob.objects.filter(pk=job_id).update(state="failed",heartbeat=timezone.now(),error_details={"type":type(exc).__name__,"message":str(exc)[:2000]})
+        raise
+
+@shared_task(bind=True,autoretry_for=(ConnectionError,),retry_backoff=True,max_retries=5)
 def reconcile_deployment(self,deployment_id):
     deployment=LabDeployment.objects.get(pk=deployment_id)
     if deployment.removed_at: return LabDeployment.State.REMOVED
