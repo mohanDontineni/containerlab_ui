@@ -634,6 +634,54 @@ def test_owner_can_publish_and_schedule_deployable_lab(django_capture_on_commit_
     assert response.data["deployment"]["namespace"].startswith("clab-")
 
 @pytest.mark.django_db
+def test_topology_validation_report_explains_deployment_readiness_without_configuration_content():
+    owner=User.objects.create_user("preflight-owner",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="preflight-project")
+    lab=Lab.objects.create(project=project,name="preflight-lab")
+    revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="a"*64,edit_version=3)
+    lab.current_draft=revision;lab.save(update_fields=["current_draft"])
+    template=DeviceTemplateVersion.objects.get(template__name="Linux Host")
+    artifact=ImageArtifact.objects.create(project=project,owner=owner,source_type="registry",original_filename="alpine:3.22",
+        detected_format="oci-registry",byte_size=0,checksum="b"*64,architecture="amd64",storage_reference="docker.io/alpine",
+        validation_status="validated")
+    image=PublishedImage.objects.create(artifact=artifact,registry_digest="docker.io/alpine@sha256:"+"b"*64,
+        repository="docker.io/alpine",architecture="amd64",lifecycle_status="ready")
+    node=LabNode.objects.create(revision=revision,name="client",template_version=template,published_image=image)
+    LabInterface.objects.create(node=node,name="eth1")
+    client=APIClient();client.force_authenticate(owner)
+    response=client.get(f"/api/v1/labs/{lab.id}/validation-report/")
+    assert response.status_code==200 and response.data["ready"] is True
+    assert response.data["revision"]=={"id":str(revision.id),"number":1,"edit_version":3,"checksum":"a"*64,"immutable":False}
+    assert response.data["summary"]["passed_checks"]==6 and response.data["adapter"]["clabernetes"]=="0.8.0"
+    device=response.data["devices"][0]
+    assert device["name"]=="client" and device["image"]["status"]=="compatible"
+    assert device["interfaces"]=={"total":1,"linked":0,"free":1,"required":0}
+    serialized=repr(response.data).lower()
+    assert "encrypted_content" not in serialized and "storage_reference" not in serialized and "configuration_content" not in serialized
+
+@pytest.mark.django_db
+def test_topology_validation_report_returns_actionable_device_failures_and_empty_draft_state():
+    owner=User.objects.create_user("preflight-failure-owner",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="preflight-failure-project")
+    empty=Lab.objects.create(project=project,name="empty-preflight")
+    client=APIClient();client.force_authenticate(owner)
+    no_draft=client.get(f"/api/v1/labs/{empty.id}/validation-report/")
+    assert no_draft.status_code==200 and no_draft.data["ready"] is False and no_draft.data["revision"] is None
+    lab=Lab.objects.create(project=project,name="broken-preflight")
+    revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="c"*64)
+    lab.current_draft=revision;lab.save(update_fields=["current_draft"])
+    template=DeviceTemplateVersion.objects.get(template__name="Linux Firewall")
+    node=LabNode.objects.create(revision=revision,name="fw1",template_version=template)
+    LabInterface.objects.create(node=node,name="eth1")
+    report=client.get(f"/api/v1/labs/{lab.id}/validation-report/")
+    assert report.status_code==200 and report.data["ready"] is False
+    assert report.data["devices"][0]["status"]=="failed" and report.data["devices"][0]["image"] is None
+    assert report.data["devices"][0]["configuration"]["state"]=="required"
+    assert any("no immutable published image" in item for item in report.data["errors"])
+    assert any("startup configuration is required" in item for item in report.data["errors"])
+    assert {check["key"]:check["status"] for check in report.data["checks"]}["adapter"]=="failed"
+
+@pytest.mark.django_db
 def test_active_deployment_quota_blocks_new_runtime_without_consuming_draft():
     owner=User.objects.create_user("deployment-quota",password="long-enough-password")
     project=Project.objects.create(owner=owner,name="bounded-runtime",quotas={"max_running_deployments":1})

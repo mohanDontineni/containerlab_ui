@@ -34,6 +34,7 @@ import "./configuration.css";
 import "./annotations.css";
 import "./bulk-selection.css";
 import "./edit-lease.css";
+import "./preflight.css";
 import { alignSelectedNodes, arrangeTopology, duplicateSubgraph, interfaceFromHandle } from "./topology-utils";
 
 type Template = {
@@ -110,6 +111,15 @@ type DeploymentPlan = { strategy:"new_runtime"; lab_id:string; lab:string;
   active_runtimes:{id:string;revision:number;state:string;namespace:string;url:string}[];
   requires_active_runtime_acknowledgement:boolean; can_deploy:boolean; issues:string[];
   capacity:{used:number;limit:number;after:number}; impact:string[] };
+type ValidationReport = {lab_id:string;lab:string;ready:boolean;errors:string[];warnings:string[];
+  revision:{id:string;number:number;edit_version:number;checksum:string;immutable:boolean}|null;
+  summary?:{devices:number;links:number;configured:number;passed_checks:number;total_checks:number};
+  checks:{key:string;label:string;status:"passed"|"failed";detail:string}[];
+  devices:{id:string;name:string;status:"passed"|"warning"|"failed";
+    template:{name:string;version:number;kind:string;verified:boolean};image:{name:string;digest:string;architecture:string;status:string}|null;
+    interfaces:{total:number;linked:number;free:number;required:number};configuration:{state:string;required:boolean;supported:boolean};
+    resources:Record<string,string>;capabilities:{console:boolean;capture:boolean;link_impairment:boolean};errors:string[];warnings:string[]}[];
+  adapter?:{api:string;clabernetes:string;mode:string}};
 type EditLease = {active:boolean;can_edit:boolean;owner:string|null;expires_at:string|null;lease_seconds:number;token?:string};
 const params = new URLSearchParams(location.search);
 const labId = params.get("lab") || "";
@@ -190,6 +200,8 @@ function Workspace() {
   const [deploymentPlan, setDeploymentPlan] = useState<DeploymentPlan|null>(null);
   const [deploymentPlanLoading, setDeploymentPlanLoading] = useState(false);
   const [deploymentAcknowledged, setDeploymentAcknowledged] = useState(false);
+  const [validationReport,setValidationReport]=useState<ValidationReport|null>(null);
+  const [validationLoading,setValidationLoading]=useState(false);
   const [cloneOpen, setCloneOpen] = useState(false);
   const [cloneName, setCloneName] = useState(`${labName} copy`);
   const [cloning, setCloning] = useState(false);
@@ -584,6 +596,14 @@ function Workspace() {
     } catch(error) {setNotice(error instanceof Error?error.message:"Deployment plan failed");}
     finally {setDeploymentPlanLoading(false);}
   };
+  const openValidationReport=async()=>{
+    if(dirty){setNotice("Save the draft before running server validation");return}
+    setValidationLoading(true);setNotice("Running Clabernetes deployment preflight…");
+    try{const response=await fetch(`/api/v1/labs/${labId}/validation-report/`,{credentials:"same-origin",cache:"no-store"});const data=await response.json();
+      if(!response.ok)throw new Error(data.error?.details||data.error?.code||"Validation failed");setValidationReport(data);
+      setNotice(data.ready?"Server preflight passed — topology is deployment-ready":`Server preflight found ${data.errors.length} blocking issue${data.errors.length===1?"":"s"}`)
+    }catch(error){setNotice(error instanceof Error?error.message:"Validation failed")}finally{setValidationLoading(false)}
+  };
   const confirmDeployment = async () => {
     if (!deploymentPlan?.draft) return;
     setDeploying(true); setNotice("Scheduling deployment…");
@@ -738,8 +758,8 @@ function Workspace() {
           <button onClick={openHistory} disabled={dirty}>History</button>
           <button onClick={() => importInput.current?.click()} disabled={!canEdit} title="Restore a ContainerLab Studio backup. This does not require a YAML file.">Restore</button>
           <input ref={importInput} className="file-input" type="file" accept=".json,.clabstudio.json,application/json" onChange={(e)=>importBundle(e.target.files?.[0])}/>
-          <button>
-            Validate{" "}
+          <button onClick={openValidationReport} disabled={dirty||validationLoading} title={dirty?"Save the draft before server validation":"Run server-authoritative deployment preflight"}>
+            {validationLoading?"Validating…":"Validate"}{" "}
             <span className={errors.length ? "warn" : "ok"}>
               {errors.length}
             </span>
@@ -753,6 +773,17 @@ function Workspace() {
         </div>
       </header>
       {editLease&&!canEdit&&<div className="edit-lease-banner" role="status"><strong>Read-only workspace</strong><span>{editLease.owner||"Another operator"} is editing this topology. Your view is protected from overwriting their changes.</span><small>{editLease.expires_at?`Available after ${new Date(editLease.expires_at).toLocaleTimeString()}`:"Waiting for the editing session to be released"}</small></div>}
+      {validationReport&&<div className="modal-backdrop" role="presentation" onMouseDown={()=>setValidationReport(null)}>
+        <section className="preflight-dialog" role="dialog" aria-modal="true" aria-labelledby="preflight-title" onMouseDown={event=>event.stopPropagation()}>
+          <header><div><p className="dialog-eyebrow">SERVER-AUTHORITATIVE PREFLIGHT</p><h2 id="preflight-title">Deployment readiness report</h2><p>Saved draft revision {validationReport.revision?.number??"—"} checked against pinned templates, images, configurations, interfaces, and the Clabernetes adapter.</p></div><button aria-label="Close validation report" onClick={()=>setValidationReport(null)}>×</button></header>
+          <div className={`preflight-verdict ${validationReport.ready?"ready":"blocked"}`}><span>{validationReport.ready?"✓":"!"}</span><div><strong>{validationReport.ready?"Ready to deploy":"Deployment blocked"}</strong><small>{validationReport.ready?"Every required server check passed.":`${validationReport.errors.length} blocking issue${validationReport.errors.length===1?"":"s"} must be resolved and the draft saved again.`}</small></div>{validationReport.summary&&<b>{validationReport.summary.passed_checks} / {validationReport.summary.total_checks} checks</b>}</div>
+          <section className="preflight-checks"><h3>Platform checks</h3><div>{validationReport.checks.map(check=><article key={check.key} className={check.status}><span>{check.status==="passed"?"✓":"!"}</span><p><strong>{check.label}</strong><small>{check.detail}</small></p><em>{check.status}</em></article>)}</div></section>
+          {validationReport.errors.length>0&&<section className="preflight-findings errors"><h3>Blocking findings</h3><ul>{validationReport.errors.map(item=><li key={item}>{item}</li>)}</ul></section>}
+          {validationReport.warnings.length>0&&<section className="preflight-findings warnings"><h3>Advisories</h3><ul>{validationReport.warnings.map(item=><li key={item}>{item}</li>)}</ul></section>}
+          <section className="preflight-devices"><h3>Device evidence</h3>{validationReport.devices.length?validationReport.devices.map(device=><article key={device.id} className={device.status}><div className="preflight-device-heading"><span>{device.status==="passed"?"✓":device.status==="warning"?"△":"!"}</span><p><strong>{device.name}</strong><small>{device.template.name} v{device.template.version} · {device.template.kind}</small></p><em>{device.status}</em></div><dl><div><dt>Image</dt><dd>{device.image?`${device.image.name} · ${device.image.architecture} · ${device.image.status}`:"Not selected"}</dd></div><div><dt>Interfaces</dt><dd>{device.interfaces.linked} linked · {device.interfaces.free} free · {device.interfaces.required} required</dd></div><div><dt>Configuration</dt><dd>{device.configuration.state}</dd></div><div><dt>Resources</dt><dd>{device.resources.cpu||"Policy default"} · {device.resources.memory||"Policy default"}</dd></div></dl>{(device.errors.length>0||device.warnings.length>0)&&<ul>{[...device.errors,...device.warnings].map(item=><li key={item}>{item}</li>)}</ul>}</article>):<p className="preflight-empty">No saved devices are available to validate.</p>}</section>
+          <footer><span>{validationReport.adapter?`${validationReport.adapter.api} · Clabernetes ${validationReport.adapter.clabernetes} · ${validationReport.adapter.mode}`:"Save a draft to load adapter evidence."}</span><button className="primary" onClick={()=>setValidationReport(null)}>Close report</button></footer>
+        </section>
+      </div>}
       {deploymentPlan&&<div className="modal-backdrop" role="presentation" onMouseDown={()=>!deploying&&setDeploymentPlan(null)}>
         <section className="deployment-dialog" role="dialog" aria-modal="true" aria-labelledby="deployment-plan-title" onMouseDown={event=>event.stopPropagation()}>
           <header><div><p className="dialog-eyebrow">SAFE RUNTIME WORKFLOW</p><h2 id="deployment-plan-title">Review deployment plan</h2><p>Publish the saved draft and create a separate Clabernetes runtime. No YAML is required.</p></div><button aria-label="Close deployment plan" onClick={()=>setDeploymentPlan(null)} disabled={deploying}>×</button></header>

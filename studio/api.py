@@ -26,6 +26,7 @@ from .configurations import decrypt_configuration
 from .quotas import ProjectQuotaExceeded,normalized_quotas,project_usage,quota_exceeded,validate_quotas
 from .edit_leases import conflict_payload as edit_lease_conflict, is_active as edit_lease_active, valid_token as valid_edit_lease
 from .pcap import PcapError, analyze_pcap
+from .image_compatibility import evaluate as evaluate_image_compatibility
 
 def require_edit_lease(request,lab):
     if edit_lease_active(lab) and not valid_edit_lease(lab,request.user,request.headers.get("X-Edit-Lease")):
@@ -312,6 +313,56 @@ class LabViewSet(viewsets.ModelViewSet):
             correlation_id=getattr(self.request,"correlation_id",""),metadata={"changed_fields":changed})
     def destroy(self,request,*args,**kwargs):
         return Response({"error":{"code":"guarded_delete_required","details":"Preview and confirm lab deletion using the guarded delete operation."}},status=405)
+    @action(detail=True,methods=["get"],url_path="validation-report")
+    def validation_report(self,request,pk=None):
+        lab=self.get_object();revision=lab.current_draft
+        if not revision:
+            response=Response({"lab_id":str(lab.id),"lab":lab.name,"revision":None,"ready":False,
+                "errors":["Save a topology draft before running deployment validation."],"warnings":[],"checks":[],"devices":[]})
+            response["Cache-Control"]="no-store";response["X-Content-Type-Options"]="nosniff";return response
+        nodes=list(revision.nodes.select_related("template_version__template","published_image__artifact","startup_configuration")
+            .prefetch_related("interfaces__links_as_a","interfaces__links_as_b").order_by("name"))
+        errors=ClabernetesAdapter.validate_topology(revision);warnings=[];devices=[]
+        for node in nodes:
+            template=node.template_version;profile=template.launch_profile if isinstance(template.launch_profile,dict) else {}
+            capabilities=template.capabilities if isinstance(template.capabilities,dict) else {}
+            interfaces=list(node.interfaces.all());linked=sum(bool(iface.links_as_a.all() or iface.links_as_b.all()) for iface in interfaces)
+            compatibility=evaluate_image_compatibility(template,node.published_image) if node.published_image else {
+                "status":"incompatible","reasons":["No immutable published image is selected."],"warnings":[]}
+            node_warnings=list(compatibility["warnings"])
+            if not capabilities.get("verified",profile.get("verified",False)):
+                node_warnings.append("Template runtime behavior is not marked verified.")
+            warnings.extend(f"{node.name}: {item}" for item in node_warnings)
+            node_errors=[item.split(": ",1)[1] for item in errors if item.startswith(f"{node.name}: ")]
+            config_required=bool(profile.get("startup_config_required"));config_supported=bool(profile.get("startup_config_target"))
+            devices.append({"id":str(node.id),"name":node.name,"status":"failed" if node_errors else "warning" if node_warnings else "passed",
+                "template":{"name":template.template.name,"version":template.version,"kind":template.containerlab_kind,
+                    "verified":bool(capabilities.get("verified",profile.get("verified",False)))},
+                "image":{"name":node.published_image.artifact.original_filename,"digest":node.published_image.registry_digest,
+                    "architecture":node.published_image.architecture,"status":compatibility["status"]} if node.published_image else None,
+                "interfaces":{"total":len(interfaces),"linked":linked,"free":len(interfaces)-linked,
+                    "required":int(profile.get("required_interfaces",0))},
+                "configuration":{"state":"present" if node.startup_configuration_id else "required" if config_required else "optional" if config_supported else "unsupported",
+                    "required":config_required,"supported":config_supported},
+                "resources":template.resource_requirements if isinstance(template.resource_requirements,dict) else {},
+                "capabilities":{"console":bool(capabilities.get("console")),"capture":bool(capabilities.get("capture")),
+                    "link_impairment":bool(capabilities.get("link_impairment"))},"errors":node_errors,"warnings":node_warnings})
+        if not nodes and "Save at least one device before deployment." not in errors:errors.append("Save at least one device before deployment.")
+        link_count=revision.links.count();configured=sum(bool(node.startup_configuration_id) for node in nodes)
+        incompatible=sum(device["image"] is None or device["image"]["status"]=="incompatible" for device in devices)
+        checks=[
+            {"key":"draft","label":"Saved draft identity","status":"passed","detail":f"Draft revision {revision.revision_number} · edit {revision.edit_version} · {revision.topology_checksum[:12]}"},
+            {"key":"topology","label":"Topology structure","status":"passed" if nodes else "failed","detail":f"{len(nodes)} devices · {link_count} point-to-point links"},
+            {"key":"images","label":"Immutable device images","status":"failed" if incompatible else "passed","detail":f"{len(nodes)-incompatible} of {len(nodes)} device images are deployment-compatible"},
+            {"key":"configuration","label":"Startup configuration policy","status":"failed" if any("startup configuration" in item for item in errors) else "passed","detail":f"{configured} configured devices · encrypted at rest"},
+            {"key":"interfaces","label":"Interface requirements","status":"failed" if any("interfaces" in item for item in errors) else "passed","detail":f"{sum(len(node.interfaces.all()) for node in nodes)} declared interfaces · {link_count*2} linked endpoints"},
+            {"key":"adapter","label":"Clabernetes adapter preflight","status":"failed" if errors else "passed","detail":"Pinned c9s.run/v1alpha1 topology compiler · Clabernetes 0.8.0"}]
+        response=Response({"lab_id":str(lab.id),"lab":lab.name,"revision":{"id":str(revision.id),"number":revision.revision_number,
+            "edit_version":revision.edit_version,"checksum":revision.topology_checksum,"immutable":revision.immutable},
+            "ready":not errors,"errors":errors,"warnings":warnings,"summary":{"devices":len(nodes),"links":link_count,
+                "configured":configured,"passed_checks":sum(check["status"]=="passed" for check in checks),"total_checks":len(checks)},
+            "checks":checks,"devices":devices,"adapter":{"api":"c9s.run/v1alpha1","clabernetes":"0.8.0","mode":"Topology compilation"}})
+        response["Cache-Control"]="no-store";response["X-Content-Type-Options"]="nosniff";return response
     def _deletion_preview(self,lab):
         deployments=models.LabDeployment.objects.filter(revision__lab=lab)
         active_states=(models.LabDeployment.State.PENDING,models.LabDeployment.State.DEPLOYING,models.LabDeployment.State.RUNNING,
