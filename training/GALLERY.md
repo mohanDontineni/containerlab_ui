@@ -259,3 +259,9 @@ The first editor receives a renewable, token-bound five-minute editing session. 
 ![Native user administration](43-native-user-administration.png)
 
 A platform administrator creates a local operator with policy-validated temporary credentials, normalized profile data, and an explicit time zone entirely inside Studio. The searchable directory shows owned projects, memberships, privilege level, and sign-in state. Before deactivation, the guarded dialog reports dependencies and impact; active project owners and the current administrator are protected, browser consoles are revoked, and memberships plus audit history remain intact. Firefox verified disabled sign-in rejection, reactivation, and restored sign-in without using Django administration.
+
+## 44 — Guarded password recovery
+
+![Guarded password recovery](44-guarded-password-recovery.png)
+
+A platform administrator searches for an operator and opens the credential-recovery preview entirely inside Studio. The dialog reports active browser and console sessions before accepting a policy-compliant temporary password. Confirmation revokes those sessions, invalidates the previous credential, and blocks every non-security page until the operator signs in with the temporary password and replaces it with a personal one. Firefox verified revocation, forced rotation, final access, and content-free audit events without opening Django administration.

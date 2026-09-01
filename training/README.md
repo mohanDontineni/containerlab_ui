@@ -53,6 +53,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 | `41-selected-device-lifecycle.png` | Selected-device lifecycle | Preflights and schedules start, stop, restart, suspend, or resume across several selected devices with independent audited jobs. |
 | `42-topology-edit-lease.png` | Safe concurrent topology editing | Shows the second editor's named, expiring read-only session while another operator owns the topology draft. |
 | `43-native-user-administration.png` | Native user administration | Creates local operators and previews guarded sign-in deactivation while preserving project roles and history. |
+| `44-guarded-password-recovery.png` | Guarded password recovery | Issues a policy-compliant temporary password, previews active browser and console revocation, signs the operator out, and requires personal password rotation at next login. |
 
 ## No-YAML operating model
 
@@ -72,6 +73,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 14. Select several runtime devices and preview a lifecycle action before Studio schedules independently tracked start, stop, restart, suspend, or resume jobs.
 15. Open a topology with one active editor; additional editors receive a clearly labeled read-only view until the renewable five-minute editing session is released or expires.
 16. Create operator accounts, search the directory, and safely activate or deactivate sign-in from the native staff-only user administration page.
+17. Reset an operator credential through the guarded preview; Studio revokes active sessions and requires the temporary password to be replaced before any other operation.
 
 Containerlab/Kubernetes YAML is an internal adapter concern. It may be inspected by platform administrators for troubleshooting, but it is not part of the normal user workflow.
 
