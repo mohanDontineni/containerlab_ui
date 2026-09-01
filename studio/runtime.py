@@ -274,15 +274,24 @@ class ClabernetesAdapter:
             if not isinstance(rows,list): raise CapabilityError("Device returned an invalid network-state document")
             return rows[:limit],len(rows)>limit
         addresses,address_truncated=read_ip(["address","show"],256)
+        links,link_truncated=read_ip(["-s","link","show"],256)
         routes,route_truncated=read_ip(["route","show","table","all"],512)
         neighbors,neighbor_truncated=read_ip(["neighbor","show"],512)
+        link_by_name={str(row.get("ifname","")):row for row in links if isinstance(row,dict)}
+        def counter(value):
+            try:return max(0,int(value))
+            except (TypeError,ValueError):return 0
         interfaces=[]
         for row in addresses:
+            link=link_by_name.get(str(row.get("ifname","")),{});stats=link.get("stats64") or link.get("stats") or {}
+            rx=stats.get("rx",{}) if isinstance(stats,dict) else {};tx=stats.get("tx",{}) if isinstance(stats,dict) else {}
             interfaces.append({"name":str(row.get("ifname", ""))[:64],"state":str(row.get("operstate","UNKNOWN"))[:24],
                 "mtu":row.get("mtu"),"mac":str(row.get("address", ""))[:64],"addresses":[{
                     "family":str(address.get("family", ""))[:16],"local":str(address.get("local", ""))[:128],
                     "prefixlen":address.get("prefixlen"),"scope":str(address.get("scope", ""))[:24]
-                } for address in row.get("addr_info",[])[:32] if isinstance(address,dict)]})
+                } for address in row.get("addr_info",[])[:32] if isinstance(address,dict)],
+                "statistics":{"rx":{"bytes":counter(rx.get("bytes")),"packets":counter(rx.get("packets")),"errors":counter(rx.get("errors")),"dropped":counter(rx.get("dropped"))},
+                    "tx":{"bytes":counter(tx.get("bytes")),"packets":counter(tx.get("packets")),"errors":counter(tx.get("errors")),"dropped":counter(tx.get("dropped"))}}})
         safe_routes=[{"destination":str(row.get("dst","default"))[:128],"gateway":str(row.get("gateway", ""))[:128],
             "device":str(row.get("dev", ""))[:64],"protocol":str(row.get("protocol", ""))[:32],"scope":str(row.get("scope", ""))[:24],
             "source":str(row.get("prefsrc", ""))[:128],"metric":row.get("metric"),"table":row.get("table")}
@@ -292,7 +301,7 @@ class ClabernetesAdapter:
                 if isinstance(row.get("state"),list) else str(row.get("state", ""))[:64]}
             for row in neighbors if isinstance(row,dict)]
         return {"device_id":str(device.id),"device":device.lab_node.name,"interfaces":interfaces,"routes":safe_routes,
-            "neighbors":safe_neighbors,"truncated":{"interfaces":address_truncated,"routes":route_truncated,"neighbors":neighbor_truncated}}
+            "neighbors":safe_neighbors,"truncated":{"interfaces":address_truncated or link_truncated,"routes":route_truncated,"neighbors":neighbor_truncated}}
     def capture_packets(self,deployment,node,interface,duration=10,packet_limit=500):
         if not 1<=duration<=30 or not 1<=packet_limit<=5000: raise CapabilityError("Capture bounds are invalid")
         device=deployment.devices.get(lab_node=node)

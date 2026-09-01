@@ -87,14 +87,16 @@ def test_device_inspection_uses_fixed_bounded_iproute_queries(monkeypatch):
     calls=[]
     outputs=iter([
         "[{'ifname': 'eth1', 'operstate': 'UP', 'mtu': 1500, 'address': 'aa:bb:cc:dd:ee:ff', 'addr_info': [{'family': 'inet', 'local': '10.0.0.1', 'prefixlen': 30, 'scope': 'global'}]}]",
+        '[{"ifname":"eth1","stats64":{"rx":{"bytes":12345,"packets":101,"errors":2,"dropped":3},"tx":{"bytes":67890,"packets":202,"errors":4,"dropped":5}}}]',
         '[{"dst":"default","gateway":"10.0.0.2","dev":"eth1","protocol":"static","metric":20},{"dst":"10.0.0.0/30","dev":"eth1","protocol":"kernel","prefsrc":"10.0.0.1"}]',
         '[{"dst":"10.0.0.2","dev":"eth1","lladdr":"00:11:22:33:44:55","state":["REACHABLE"]}]'])
     monkeypatch.setattr("studio.runtime.stream",lambda method,pod,namespace,**kwargs:calls.append(kwargs["command"]) or next(outputs))
     core=SimpleNamespace(connect_get_namespaced_pod_exec=object());adapter=ClabernetesAdapter(custom_api=SimpleNamespace(),core_api=core)
     node=SimpleNamespace(name="r1");device=SimpleNamespace(id="device-1",deployment_id="deployment",runtime_resources={"pod":"r1-pod"},lab_node=node)
     result=adapter.inspect_device(SimpleNamespace(id="deployment",namespace="lab-one"),device)
-    assert calls==[["docker","exec","r1","ip","-j","address","show"],["docker","exec","r1","ip","-j","route","show","table","all"],["docker","exec","r1","ip","-j","neighbor","show"]]
+    assert calls==[["docker","exec","r1","ip","-j","address","show"],["docker","exec","r1","ip","-j","-s","link","show"],["docker","exec","r1","ip","-j","route","show","table","all"],["docker","exec","r1","ip","-j","neighbor","show"]]
     assert result["interfaces"][0]["addresses"][0]["local"]=="10.0.0.1"
+    assert result["interfaces"][0]["statistics"]=={"rx":{"bytes":12345,"packets":101,"errors":2,"dropped":3},"tx":{"bytes":67890,"packets":202,"errors":4,"dropped":5}}
     assert result["routes"][0]["gateway"]=="10.0.0.2" and result["neighbors"][0]["state"]=="REACHABLE"
     assert result["truncated"]=={"interfaces":False,"routes":False,"neighbors":False}
 
