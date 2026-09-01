@@ -1893,6 +1893,48 @@ def test_link_condition_api_is_bounded_idempotent_audited_and_operator_only(monk
     assert AuditEvent.objects.filter(action="link.condition_changed",target_id=link.id).count()==1
 
 @pytest.mark.django_db
+def test_live_link_conditions_can_be_previewed_and_saved_as_guarded_draft():
+    owner=User.objects.create_user("link-checkpoint-owner",password="long-enough-password")
+    viewer=User.objects.create_user("link-checkpoint-viewer",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="link-checkpoint-project")
+    ProjectMembership.objects.create(project=project,user=viewer,role="viewer")
+    lab=Lab.objects.create(project=project,name="link-checkpoint-lab")
+    revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="a"*64,immutable=True)
+    template=DeviceTemplateVersion.objects.filter(containerlab_kind="linux").first()
+    a=LabNode.objects.create(revision=revision,name="a",template_version=template)
+    b=LabNode.objects.create(revision=revision,name="b",template_version=template)
+    interface_names=[f"{template.interface_rules.get('prefix','eth')}{number}" for number in range(
+        int(template.interface_rules.get("start",1)),int(template.interface_rules.get("start",1))+int(template.interface_rules.get("count",4)))]
+    interfaces={node:{name:LabInterface.objects.create(node=node,name=name) for name in interface_names} for node in (a,b)}
+    ia=interfaces[a]["eth1"];ib=interfaces[b]["eth1"]
+    link=LabLink.objects.create(revision=revision,endpoint_a=ia,endpoint_b=ib,label="acceptance",properties={"latencyMs":50})
+    condition={"active":True,"disabled":False,"latency_ms":120,"jitter_ms":10,"loss_percent":1.5,
+        "corruption_percent":0.2,"rate_kbps":10000}
+    deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-link-checkpoint",
+        runtime_version="0.8.0",observed_state="running",resource_identities={"link_conditions":{str(link.id):condition}})
+    preview_url=f"/api/v1/deployments/{deployment.id}/link-conditions/save-preview/"
+    save_url=f"/api/v1/deployments/{deployment.id}/link-conditions/save/"
+    client=APIClient();client.force_authenticate(viewer)
+    assert client.get(preview_url).status_code==403
+    client.force_authenticate(owner);preview=client.get(preview_url)
+    assert preview.status_code==200 and preview.data["changed_count"]==1 and preview.data["can_save"]
+    assert preview.data["links"][0]["current"]==condition and preview.data["expected_current_draft"] is None
+    stale=client.post(save_url,{"expected_snapshot_checksum":"0"*64},format="json",HTTP_IDEMPOTENCY_KEY="link-checkpoint-stale",HTTP_X_EXPECTED_DRAFT="none")
+    assert stale.status_code==409 and stale.data["error"]["code"]=="link_condition_snapshot_changed"
+    first=client.post(save_url,{"expected_snapshot_checksum":preview.data["snapshot_checksum"]},format="json",
+        HTTP_IDEMPOTENCY_KEY="link-checkpoint-save",HTTP_X_EXPECTED_DRAFT="none")
+    replay=client.post(save_url,{"expected_snapshot_checksum":preview.data["snapshot_checksum"]},format="json",
+        HTTP_IDEMPOTENCY_KEY="link-checkpoint-save",HTTP_X_EXPECTED_DRAFT="none")
+    assert first.status_code==201 and replay.status_code==200 and replay.data==first.data
+    lab.refresh_from_db();deployment.refresh_from_db();revision.refresh_from_db()
+    assert lab.current_draft_id==uuid.UUID(first.data["revision_id"]) and revision.immutable and deployment.observed_state=="running"
+    assert lab.current_draft.links.get().properties=={"latencyMs":120,"jitterMs":10,"lossPercent":1.5,"corruptionPercent":0.2,"rateKbps":10000}
+    job=OperationJob.objects.get(operation_type="save_link_conditions",target_id=deployment.id)
+    audit=AuditEvent.objects.get(action="link.condition_snapshot_draft_created",target_id=lab.current_draft_id)
+    assert job.state=="succeeded" and job.result_payload["changed_count"]==1
+    assert audit.metadata["snapshot_checksum"]==preview.data["snapshot_checksum"] and "condition" not in audit.metadata
+
+@pytest.mark.django_db
 def test_link_condition_worker_persists_runtime_state_without_failing_lab(monkeypatch):
     owner=User.objects.create_user("link-worker",password="long-enough-password");project=Project.objects.create(owner=owner,name="link-worker-project")
     lab=Lab.objects.create(project=project,name="link-worker-lab");revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="9"*64,immutable=True)

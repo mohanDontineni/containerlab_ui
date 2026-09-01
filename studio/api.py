@@ -34,6 +34,7 @@ from .image_compatibility import evaluate as evaluate_image_compatibility
 from .containerlab_interop import ContainerlabInteropError, import_containerlab_topology, inspect_containerlab_topology, read_containerlab_upload
 from .topology import export_containerlab
 from .operation_presenters import safe_text
+from .link_conditions import properties_from_runtime_condition, runtime_condition
 
 def require_edit_lease(request,lab):
     if edit_lease_active(lab) and not valid_edit_lease(lab,request.user,request.headers.get("X-Edit-Lease")):
@@ -1976,6 +1977,84 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
             target_id=link.id,correlation_id=getattr(request,"correlation_id",""),metadata={"operation_job":str(job.id),"condition":condition})
         transaction.on_commit(lambda: execute_operation.delay(str(job.id)))
         return Response(serializers.OperationSerializer(job).data,status=202)
+    def _link_condition_snapshot_data(self,deployment):
+        runtime_conditions=deployment.resource_identities.get("link_conditions",{})
+        rows=[]
+        for link in deployment.revision.links.select_related("endpoint_a__node","endpoint_b__node"):
+            link_id=str(link.id);saved=runtime_condition(link.properties)
+            current=runtime_conditions.get(link_id,{"active":False,"disabled":False,"latency_ms":0,"jitter_ms":0,
+                "loss_percent":0.0,"corruption_percent":0.0,"rate_kbps":0})
+            try:properties=properties_from_runtime_condition(current);normalized=runtime_condition(properties)
+            except ValueError:properties={};normalized=runtime_condition({})
+            rows.append({"id":link_id,"label":link.label,"endpoint_a":f"{link.endpoint_a.node.name}:{link.endpoint_a.name}",
+                "endpoint_b":f"{link.endpoint_b.node.name}:{link.endpoint_b.name}","changed":normalized!=saved,
+                "saved":saved,"current":normalized,"properties":properties})
+        identity={"deployment":str(deployment.id),"revision":str(deployment.revision_id),
+            "links":[{"id":row["id"],"current":row["current"]} for row in rows]}
+        checksum=hashlib.sha256(json.dumps(identity,sort_keys=True,separators=(",",":")).encode()).hexdigest()
+        return {"deployment_id":str(deployment.id),"lab":deployment.revision.lab.name,
+            "source_revision":deployment.revision.revision_number,
+            "expected_current_draft":str(deployment.revision.lab.current_draft_id) if deployment.revision.lab.current_draft_id else None,
+            "snapshot_checksum":checksum,"links":rows,"link_count":len(rows),"changed_count":sum(row["changed"] for row in rows),
+            "can_save":bool(rows) and any(row["changed"] for row in rows),"running_deployment_unchanged":True}
+
+    @action(detail=True,methods=["get"],url_path="link-conditions/save-preview")
+    def link_condition_save_preview(self,request,pk=None):
+        deployment=self.get_object();self._require_operator(deployment);data=self._link_condition_snapshot_data(deployment)
+        data["impact"]=[f"Create a new editable draft from immutable revision {deployment.revision.revision_number}.",
+            f"Copy the current runtime profile for {data['link_count']} point-to-point link(s).",
+            "Replace the current editable draft only after its preview token is revalidated.",
+            "Leave the running deployment, immutable revision, and live network conditions unchanged."]
+        data["blockers"]=[] if data["changed_count"] else ["Every live link profile already matches the deployed topology."]
+        response=Response(data);response["Cache-Control"]="no-store";response["X-Content-Type-Options"]="nosniff";return response
+
+    @action(detail=True,methods=["post"],url_path="link-conditions/save")
+    def save_link_conditions(self,request,pk=None):
+        deployment=self.get_object();self._require_operator(deployment)
+        conflict=require_edit_lease(request,deployment.revision.lab)
+        if conflict:return conflict
+        key=request.headers.get("Idempotency-Key");expected_header=request.headers.get("X-Expected-Draft")
+        expected_snapshot=str(request.data.get("expected_snapshot_checksum","")).strip().lower()
+        if not key:return Response({"error":{"code":"idempotency_key_required"}},status=400)
+        if expected_header is None:return Response({"error":{"code":"expected_draft_required"}},status=400)
+        expected_draft=None if expected_header.lower()=="none" else expected_header
+        if expected_draft:
+            try:expected_draft=str(uuid.UUID(expected_draft))
+            except (ValueError,TypeError,AttributeError):return Response({"error":{"code":"invalid_expected_draft"}},status=422)
+        if len(expected_snapshot)!=64:return Response({"error":{"code":"expected_snapshot_required"}},status=400)
+        payload={"expected_current_draft":expected_draft,"snapshot_checksum":expected_snapshot}
+        existing=models.OperationJob.objects.filter(owner=request.user,idempotency_key=key).first()
+        if existing:
+            if existing.operation_type!="save_link_conditions" or existing.target_id!=deployment.id or existing.deployment_id!=deployment.id or existing.request_payload!=payload:
+                return Response({"error":{"code":"idempotency_conflict"}},status=409)
+            return Response(existing.result_payload,status=200)
+        try:
+            with transaction.atomic():
+                lab=models.Lab.objects.select_for_update().get(pk=deployment.revision.lab_id)
+                actual=str(lab.current_draft_id) if lab.current_draft_id else None
+                if actual!=expected_draft:return Response({"error":{"code":"draft_changed","details":"The active draft changed after the link-profile preview.","current_draft":actual}},status=409)
+                deployment.revision.lab=lab;preview=self._link_condition_snapshot_data(deployment)
+                if preview["snapshot_checksum"]!=expected_snapshot:
+                    return Response({"error":{"code":"link_condition_snapshot_changed","details":"Live link conditions changed after the preview.",
+                        "snapshot_checksum":preview["snapshot_checksum"]}},status=409)
+                if not preview["changed_count"]:return Response({"error":{"code":"link_conditions_unchanged"}},status=409)
+                job=models.OperationJob.objects.create(deployment=deployment,owner=request.user,operation_type="save_link_conditions",
+                    target_id=deployment.id,idempotency_key=key,state="started",progress=25,request_payload=payload)
+                bundle=export_lab_bundle(lab,deployment.revision);by_id={item["id"]:item for item in bundle["topology"]["links"]}
+                for row in preview["links"]:by_id[row["id"]]["properties"]=row["properties"]
+                restored=import_lab_bundle(lab,request.user,bundle)
+                result={"revision_id":str(restored.id),"revision_number":restored.revision_number,
+                    "link_count":preview["link_count"],"changed_count":preview["changed_count"],"snapshot_checksum":expected_snapshot,
+                    "workspace_url":f"/labs/{lab.id}/workspace/","operation_id":str(job.id)}
+                job.state="succeeded";job.progress=100;job.result_payload=result;job.save(update_fields=["state","progress","result_payload","updated_at"])
+                models.AuditEvent.objects.create(actor=request.user,project=lab.project,action="link.condition_snapshot_draft_created",
+                    target_type="LabRevision",target_id=restored.id,correlation_id=getattr(request,"correlation_id",""),
+                    metadata={"deployment":str(deployment.id),"source_revision":str(deployment.revision_id),
+                        "link_count":preview["link_count"],"changed_count":preview["changed_count"],
+                        "snapshot_checksum":expected_snapshot,"operation":str(job.id)})
+        except BundleError as exc:return Response({"error":{"code":"link_condition_save_failed","details":str(exc)}},status=422)
+        except IntegrityError:return Response({"error":{"code":"operation_conflict"}},status=409)
+        return Response(result,status=201)
     @action(detail=True,methods=["get","post"],url_path="captures")
     def captures(self,request,pk=None):
         deployment=self.get_object()

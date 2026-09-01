@@ -59,6 +59,23 @@ def runtime_condition(properties):
     return condition
 
 
+def properties_from_runtime_condition(condition):
+    if not isinstance(condition, dict):
+        raise ValueError("Runtime link condition must be an object")
+    properties = {}
+    if condition.get("disabled", False):
+        properties["adminState"] = "disabled"
+    for source, target in (("latency_ms", "latencyMs"), ("jitter_ms", "jitterMs"), ("rate_kbps", "rateKbps")):
+        value = condition.get(source, 0)
+        if value:
+            properties[target] = value
+    for source, target in (("loss_percent", "lossPercent"), ("corruption_percent", "corruptionPercent")):
+        value = condition.get(source, 0)
+        if value:
+            properties[target] = value
+    return normalize_link_properties(properties)
+
+
 def initial_link_conditions(revision):
     conditions = {}
     for link in revision.links.all():
