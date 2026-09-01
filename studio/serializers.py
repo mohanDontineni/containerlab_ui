@@ -62,7 +62,11 @@ class UploadSessionSerializer(serializers.ModelSerializer):
     def validate_project(self,value):
         if value.deleted_at: raise serializers.ValidationError("This project has been retired.")
         return value
-    class Meta: model=models.UploadSession; fields="__all__"; read_only_fields=("owner","received_bytes","received_parts","expires_at","status","computed_checksum","artifact_destination")
+    class Meta:
+        model=models.UploadSession
+        fields=("id","owner","project","original_filename","expected_size","received_bytes","received_parts","expires_at","status","expected_checksum",
+            "license_acknowledged","computed_checksum","cleanup_result","created_at","updated_at")
+        read_only_fields=("owner","received_bytes","received_parts","expires_at","status","computed_checksum","cleanup_result","created_at","updated_at")
 class ImageArtifactSerializer(serializers.ModelSerializer):
     class Meta:
         model=models.ImageArtifact

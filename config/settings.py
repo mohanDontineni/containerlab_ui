@@ -70,6 +70,7 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": 30.0,
     },
     "dispatch-due-deployment-schedules": {"task":"studio.tasks.dispatch_due_schedules","schedule":15.0},
+    "expire-stale-image-uploads": {"task":"studio.tasks.expire_stale_uploads","schedule":900.0},
 }
 MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(50 * 1024**3)))
 UPLOAD_CHUNK_BYTES = int(os.environ.get("UPLOAD_CHUNK_BYTES", str(16 * 1024**2)))

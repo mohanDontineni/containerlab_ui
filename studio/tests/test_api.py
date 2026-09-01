@@ -410,7 +410,7 @@ def test_upload_creation_is_project_scoped_and_checksum_optional():
     client=APIClient();client.force_authenticate(viewer)
     assert client.post("/api/v1/uploads/",payload,format="json").status_code==403
     client.force_authenticate(owner);response=client.post("/api/v1/uploads/",payload,format="json")
-    assert response.status_code==201 and response.data["expected_checksum"]==""
+    assert response.status_code==201 and response.data["expected_checksum"]=="" and "artifact_destination" not in response.data
     session=UploadSession.objects.get(id=response.data["id"])
     assert session.owner==owner and AuditEvent.objects.filter(action="image.upload_created",target_id=session.id).exists()
 

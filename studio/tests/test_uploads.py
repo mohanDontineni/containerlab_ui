@@ -2,8 +2,37 @@ import hashlib,io,json,tarfile
 from pathlib import Path
 import pytest
 from django.utils import timezone
-from studio.models import ImageArtifact,User,Project,UploadSession
-from studio.uploads import UploadError,append_chunk,finalize,inspect_file
+from studio.models import AuditEvent,ImageArtifact,User,Project,UploadSession
+from studio.quotas import project_usage
+from studio.uploads import UploadError,append_chunk,cleanup_stale_uploads,finalize,inspect_file
+
+@pytest.mark.django_db
+def test_stale_upload_cleanup_is_bounded_safe_idempotent_audited_and_releases_reservation(tmp_path,settings):
+    settings.MEDIA_ROOT=tmp_path;user=User.objects.create_user("expiry-owner",password="long-enough-password");project=Project.objects.create(owner=user,name="expiry")
+    quarantine=tmp_path/"quarantine";quarantine.mkdir();now=timezone.now()
+    expired_path=quarantine/"expired";expired_path.write_bytes(b"partial")
+    failed_path=quarantine/"failed";failed_path.write_bytes(b"bad checksum")
+    outside=tmp_path/"outside";outside.write_bytes(b"must remain")
+    future_path=quarantine/"future";future_path.write_bytes(b"resumable")
+    expired=UploadSession.objects.create(owner=user,project=project,original_filename="expired.tar",expected_size=100,received_bytes=7,
+        expires_at=now-timezone.timedelta(minutes=1),artifact_destination=str(expired_path))
+    failed=UploadSession.objects.create(owner=user,project=project,original_filename="failed.tar",expected_size=12,received_bytes=12,status=UploadSession.Status.FAILED,
+        expires_at=now-timezone.timedelta(minutes=1),artifact_destination=str(failed_path))
+    unsafe=UploadSession.objects.create(owner=user,project=project,original_filename="outside.tar",expected_size=11,received_bytes=11,
+        expires_at=now-timezone.timedelta(minutes=1),artifact_destination=str(outside))
+    future=UploadSession.objects.create(owner=user,project=project,original_filename="future.tar",expected_size=200,received_bytes=9,
+        expires_at=now+timezone.timedelta(hours=1),artifact_destination=str(future_path))
+    assert project_usage(project)["reserved_upload_bytes"]==200
+    cleaned=cleanup_stale_uploads(now=now,limit=10)
+    assert set(cleaned)=={str(expired.id),str(failed.id),str(unsafe.id)} and cleanup_stale_uploads(now=now,limit=10)==[]
+    expired.refresh_from_db();failed.refresh_from_db();unsafe.refresh_from_db();future.refresh_from_db()
+    assert expired.status==UploadSession.Status.EXPIRED and expired.cleanup_result["storage_removed"] is True and not expired_path.exists()
+    assert failed.status==UploadSession.Status.FAILED and failed.cleanup_result["storage_removed"] is True and not failed_path.exists()
+    assert unsafe.status==UploadSession.Status.EXPIRED and unsafe.cleanup_result["storage_removed"] is False and outside.exists()
+    assert future.status==UploadSession.Status.ACTIVE and not future.cleanup_result and future_path.exists()
+    assert AuditEvent.objects.filter(action="image.upload_expired",project=project).count()==2
+    assert AuditEvent.objects.filter(action="image.upload_quarantine_cleaned",target_id=failed.id,metadata__storage_removed=True).exists()
+    assert project_usage(project)["reserved_upload_bytes"]==200
 
 @pytest.mark.django_db
 def test_chunk_offset_and_checksum(tmp_path,settings):

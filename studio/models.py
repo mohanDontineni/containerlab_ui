@@ -80,6 +80,7 @@ class UploadSession(UUIDModel):
     license_acknowledged = models.BooleanField(default=False)
     computed_checksum = models.CharField(max_length=64, blank=True)
     artifact_destination = models.CharField(max_length=512)
+    cleanup_result = models.JSONField(default=dict, blank=True)
 
 class ImageArtifact(UUIDModel):
     class Source(models.TextChoices): UPLOAD="upload"; REGISTRY="registry"

@@ -10,6 +10,7 @@ from django.utils import timezone
 from .configurations import encrypt_configuration
 from .models import AuditEvent, CaptureSession, ConfigurationVersion, ConsoleSession, DeploymentSchedule, DeviceInstance, ImageArtifact, ImageBuild, LabArtifact, LabDeployment, LabLink, LabNode, OperationJob, Project, PublishedImage
 from .runtime import ClabernetesAdapter
+from .uploads import cleanup_stale_uploads
 
 def publish_platform_health(key,payload):
     try: cache.set(key,payload,120)
@@ -248,6 +249,9 @@ def reconcile_active_deployments():
     deployment_ids=list(LabDeployment.objects.filter(observed_state__in=active).values_list("id",flat=True))
     for deployment_id in deployment_ids: reconcile_deployment.delay(str(deployment_id))
     return len(deployment_ids)
+
+@shared_task
+def expire_stale_uploads(): return cleanup_stale_uploads()
 
 @shared_task
 def dispatch_due_schedules():

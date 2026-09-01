@@ -20,7 +20,7 @@ from django.views.decorators.http import require_http_methods
 from .forms import LabEditForm, LabFolderForm, LabForm, PlatformPasswordResetForm, PlatformUserCreateForm, ProfileForm, ProjectForm, RegistryCredentialForm, RegistryImageForm, StudioPasswordChangeForm
 from .models import (AuditEvent, ConfigurationVersion, DeviceTemplate, DeviceTemplateVersion, ImageArtifact, ImageCredentialReference, Lab, LabDeployment, LabFolder,
                      LabInterface, LabLink, LabNode, LabRevision, OperationJob, Project,
-                     ProjectMembership, PublishedImage, User)
+                     ProjectMembership, PublishedImage, UploadSession, User)
 from .permissions import project_role
 from .configurations import decrypt_configuration, encrypt_configuration
 from .quotas import normalized_quotas,project_usage,quota_exceeded
@@ -447,7 +447,9 @@ def images(request):
 @ensure_csrf_cookie
 def image_upload(request):
     editable=Project.objects.filter(Q(owner=request.user)|Q(memberships__user=request.user,memberships__role__in=(ProjectMembership.Role.ADMIN,ProjectMembership.Role.EDITOR)),deleted_at__isnull=True).distinct().order_by("name")
-    return render(request,"studio/image_upload.html",{"projects":editable})
+    sessions=list(UploadSession.objects.filter(owner=request.user,project__in=editable).select_related("project").order_by("-created_at")[:20])
+    for session in sessions: session.progress_percent=min(100,round(session.received_bytes/session.expected_size*100)) if session.expected_size else 0
+    return render(request,"studio/image_upload.html",{"projects":editable,"upload_sessions":sessions})
 
 @login_required
 def image_register(request):

@@ -5,10 +5,33 @@ import tarfile
 from pathlib import Path
 from django.conf import settings
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 from .models import ImageArtifact, UploadSession
 
 class UploadError(ValueError): pass
+
+def cleanup_stale_uploads(now=None,limit=200):
+    now=now or timezone.now();cleaned=[]
+    candidates=list(UploadSession.objects.filter(expires_at__lte=now,cleanup_result={}).filter(
+        Q(status=UploadSession.Status.ACTIVE)|Q(status=UploadSession.Status.FAILED)).order_by("expires_at","created_at").values_list("id",flat=True)[:limit])
+    for session_id in candidates:
+        with transaction.atomic():
+            session=UploadSession.objects.select_for_update().select_related("project").get(pk=session_id)
+            if session.expires_at>now or session.cleanup_result or session.status not in (UploadSession.Status.ACTIVE,UploadSession.Status.FAILED): continue
+            quarantine=(Path(settings.MEDIA_ROOT)/"quarantine").resolve();candidate=Path(session.artifact_destination).resolve();removed=False
+            if candidate.is_relative_to(quarantine) and candidate.is_file(): candidate.unlink();removed=True
+            previous=session.status
+            if session.status==UploadSession.Status.ACTIVE: session.status=UploadSession.Status.EXPIRED
+            session.cleanup_result={"reason":"session_expired","storage_removed":removed,"received_bytes":session.received_bytes,
+                "cleaned_at":now.isoformat(),"previous_status":previous}
+            session.save(update_fields=["status","cleanup_result","updated_at"])
+            from .models import AuditEvent
+            AuditEvent.objects.create(actor=None,project=session.project,action="image.upload_expired" if previous==UploadSession.Status.ACTIVE else "image.upload_quarantine_cleaned",
+                target_type="UploadSession",target_id=session.id,correlation_id=f"upload-expiry:{session.id}",metadata={"filename":session.original_filename,
+                    "received_bytes":session.received_bytes,"expected_size":session.expected_size,"storage_removed":removed,"previous_status":previous})
+            cleaned.append(str(session.id))
+    return cleaned
 
 @transaction.atomic
 def append_chunk(session, owner, offset, stream):
