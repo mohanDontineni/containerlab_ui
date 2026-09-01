@@ -71,6 +71,7 @@ CELERY_BEAT_SCHEDULE = {
     },
     "dispatch-due-deployment-schedules": {"task":"studio.tasks.dispatch_due_schedules","schedule":15.0},
     "expire-stale-image-uploads": {"task":"studio.tasks.expire_stale_uploads","schedule":900.0},
+    "probe-internal-oci-registry": {"task":"studio.tasks.probe_registry_health","schedule":30.0},
 }
 MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(50 * 1024**3)))
 UPLOAD_CHUNK_BYTES = int(os.environ.get("UPLOAD_CHUNK_BYTES", str(16 * 1024**2)))
@@ -80,3 +81,4 @@ STUDIO_NAMESPACE = os.environ.get("STUDIO_NAMESPACE", "containerlab")
 PUBLISHER_IMAGE = os.environ.get("PUBLISHER_IMAGE", "ghcr.io/clabernetes/clabernetes/clabernetes-launcher:0.8.0")
 PUBLISHER_TIMEOUT_SECONDS = int(os.environ.get("PUBLISHER_TIMEOUT_SECONDS", "180"))
 PUBLISHER_NODE_SELECTOR = {"kubernetes.io/hostname": os.environ["PUBLISHER_NODE_NAME"]} if os.environ.get("PUBLISHER_NODE_NAME") else {}
+REGISTRY_INTERNAL_URL = os.environ.get("REGISTRY_INTERNAL_URL", "")

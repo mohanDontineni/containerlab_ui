@@ -13,3 +13,4 @@ data:
   ARTIFACT_ROOT: /artifacts
   STUDIO_NAMESPACE: {{ .Release.Namespace | quote }}
   PUBLISHER_IMAGE: "ghcr.io/clabernetes/clabernetes/clabernetes-launcher:0.8.0"
+  REGISTRY_INTERNAL_URL: "http://containerlab-studio-registry:5000"

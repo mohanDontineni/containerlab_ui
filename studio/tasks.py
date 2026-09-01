@@ -2,6 +2,8 @@ from celery import shared_task
 import hashlib
 import os
 from pathlib import Path
+import json
+from urllib.request import Request, urlopen
 from django.conf import settings
 from django.core.cache import cache
 from django.db import transaction
@@ -15,6 +17,26 @@ from .uploads import cleanup_stale_uploads
 def publish_platform_health(key,payload):
     try: cache.set(key,payload,120)
     except Exception: pass
+
+@shared_task
+def probe_registry_health():
+    checked_at=timezone.now().isoformat()
+    if not settings.REGISTRY_INTERNAL_URL:
+        payload={"available":False,"reason":"not_configured","checked_at":checked_at}
+    else:
+        try:
+            request=Request(f"{settings.REGISTRY_INTERNAL_URL.rstrip('/')}/v2/",headers={"Accept":"application/json"})
+            with urlopen(request,timeout=5) as response:
+                api_version=response.headers.get("Docker-Distribution-Api-Version","")
+                if response.status!=200: raise RuntimeError(f"registry returned HTTP {response.status}")
+                body=response.read(4096)
+                if body: json.loads(body)
+            payload={"available":True,"version":"3.1.1","api_version":api_version or "registry/2.0",
+                "mode":"Persistent filesystem · internal ClusterIP","checked_at":checked_at}
+        except Exception as exc:
+            payload={"available":False,"reason":str(exc)[:200],"checked_at":checked_at}
+    publish_platform_health("studio:platform:registry",payload)
+    return payload
 
 @shared_task(bind=True,autoretry_for=(ConnectionError,),retry_backoff=True,max_retries=5)
 def execute_operation(self,job_id):

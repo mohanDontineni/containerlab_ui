@@ -12,11 +12,13 @@ storage:
   postgres: 10Gi
   redis: 2Gi
   artifacts: 50Gi
+  registry: 50Gi
 postgres:
   image: postgres:17.6-alpine
 redis:
   image: redis:8.2.1-alpine
+registry:
+  image: registry:3.1.1
 resources:
   web: {requests: {cpu: 100m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
   worker: {requests: {cpu: 100m, memory: 256Mi}, limits: {cpu: "2", memory: 2Gi}}
-

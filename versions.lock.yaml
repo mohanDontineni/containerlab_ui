@@ -13,4 +13,6 @@ runtime:
 kubernetes:
   verifiedServer: 1.36.3
   architecture: amd64
-
+registry:
+  distribution: 3.1.1
+  api: registry/2.0

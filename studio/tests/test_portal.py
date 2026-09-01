@@ -12,11 +12,13 @@ from studio.models import AuditEvent, DeviceTemplate, DeviceTemplateVersion, Ima
 def test_dashboard_reports_expiring_worker_verified_platform_capabilities(client,monkeypatch):
     user=User.objects.create_user("health-viewer",password="long-enough-password");client.force_login(user)
     values={"studio:platform:metrics":{"available":True,"checked_at":"2026-09-01T10:00:00Z"},
-        "studio:platform:runtime":{"available":True,"version":"0.8.0","checked_at":"2026-09-01T10:00:00Z"}}
+        "studio:platform:runtime":{"available":True,"version":"0.8.0","checked_at":"2026-09-01T10:00:00Z"},
+        "studio:platform:registry":{"available":True,"version":"3.1.1","mode":"Persistent filesystem · internal ClusterIP","checked_at":"2026-09-01T10:00:00Z"}}
     monkeypatch.setattr("studio.views.cache.get",lambda key:values.get(key))
     response=client.get("/");html=response.content.decode()
     assert response.status_code==200 and "Metrics API · worker verified" in html and "Runtime v0.8.0 · reconciled" in html
-    assert html.count('class="healthy">Ready</b>')==4
+    assert "OCI registry" in html and "Persistent filesystem · internal ClusterIP" in html
+    assert html.count('class="healthy">Ready</b>')==5
 
 @pytest.mark.django_db
 def test_dashboard_exposes_complete_state_quota_and_actionable_failure_evidence(client,monkeypatch):

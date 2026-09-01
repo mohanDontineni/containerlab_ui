@@ -28,6 +28,58 @@ spec:
   storageClassName: {{ .Values.storageClass }}
   {{- end }}
 ---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: containerlab-studio-registry}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: {requests: {storage: {{ .Values.storage.registry }}}}
+  {{- if .Values.storageClass }}
+  storageClassName: {{ .Values.storageClass }}
+  {{- end }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: containerlab-studio-registry}
+spec:
+  serviceName: containerlab-studio-registry
+  replicas: 1
+  selector: {matchLabels: {app: containerlab-studio-registry}}
+  template:
+    metadata: {labels: {app: containerlab-studio-registry}}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {fsGroup: 1000, seccompProfile: {type: RuntimeDefault}}
+      containers:
+      - name: registry
+        image: {{ .Values.registry.image }}
+        env:
+        - {name: REGISTRY_HTTP_ADDR, value: "0.0.0.0:5000"}
+        - {name: REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY, value: /var/lib/registry}
+        - {name: REGISTRY_STORAGE_DELETE_ENABLED, value: "false"}
+        ports: [{name: registry,containerPort: 5000}]
+        volumeMounts: [{name: data,mountPath: /var/lib/registry}]
+        readinessProbe: {httpGet: {path: /v2/,port: registry},initialDelaySeconds: 3,periodSeconds: 5}
+        livenessProbe: {httpGet: {path: /v2/,port: registry},initialDelaySeconds: 15,periodSeconds: 15}
+        resources: {requests: {cpu: 50m,memory: 128Mi},limits: {cpu: "1",memory: 1Gi}}
+        securityContext: {allowPrivilegeEscalation: false,capabilities: {drop: [ALL]}}
+      volumes: [{name: data,persistentVolumeClaim: {claimName: containerlab-studio-registry}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: containerlab-studio-registry}
+spec: {selector: {app: containerlab-studio-registry},ports: [{name: registry,port: 5000,targetPort: registry}]}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: containerlab-studio-registry}
+spec:
+  podSelector: {matchLabels: {app: containerlab-studio-registry}}
+  policyTypes: [Ingress]
+  ingress:
+  - from: [{podSelector: {}}]
+    ports: [{protocol: TCP,port: 5000}]
+---
 apiVersion: apps/v1
 kind: StatefulSet
 metadata: {name: containerlab-studio-postgres}

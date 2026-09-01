@@ -6,8 +6,9 @@ from .models import Lab, LabDeployment, OperationJob, Project
 from .operation_presenters import present
 from .quotas import normalized_quotas, project_usage
 def platform_health():
-    try: return {"metrics":cache.get("studio:platform:metrics"),"runtime":cache.get("studio:platform:runtime")}
-    except Exception: return {"metrics":None,"runtime":None}
+    try: return {"metrics":cache.get("studio:platform:metrics"),"runtime":cache.get("studio:platform:runtime"),
+        "registry":cache.get("studio:platform:registry")}
+    except Exception: return {"metrics":None,"runtime":None,"registry":None}
 @login_required
 def dashboard(request):
     project_filter = Q(revision__lab__project__owner=request.user) | Q(revision__lab__project__memberships__user=request.user)
