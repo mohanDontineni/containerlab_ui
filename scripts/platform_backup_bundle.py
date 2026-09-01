@@ -44,6 +44,9 @@ def verify(directory,namespace=None):
         raise ValueError("unsupported or non-quiesced platform backup manifest")
     if namespace and manifest.get("namespace")!=namespace: raise ValueError("backup namespace does not match the restore target")
     if set(manifest.get("files",{}))!=set(PAYLOADS): raise ValueError("backup payload inventory is incomplete or unexpected")
+    observed={path.name for path in root.iterdir()}
+    allowed=set(PAYLOADS)|{"manifest.json","SHA256SUMS"}
+    if observed!=allowed: raise ValueError("backup directory contains missing or unexpected files")
     for name in PAYLOADS:
         path=root/name
         if not path.is_file() or path.is_symlink(): raise ValueError(f"backup payload is missing or unsafe: {name}")

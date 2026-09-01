@@ -38,6 +38,8 @@ def test_platform_backup_verification_rejects_tampering(tmp_path):
     root=valid_bundle(tmp_path);bundle.create(root,"containerlab")
     with (root/"artifacts.tar.gz").open("ab") as output: output.write(b"tampered")
     with pytest.raises(ValueError,match="integrity check failed"): bundle.verify(root,"containerlab")
+    root=valid_bundle(tmp_path);bundle.create(root,"containerlab");(root/"unexpected.txt").write_text("ignored data")
+    with pytest.raises(ValueError,match="unexpected files"): bundle.verify(root,"containerlab")
 
 
 def test_platform_backup_creation_rejects_traversal_and_links(tmp_path):

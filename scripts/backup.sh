@@ -39,6 +39,7 @@ kubectl -n "$namespace" exec containerlab-studio-postgres-0 -- pg_dump -U contai
 kubectl -n "$namespace" exec deploy/containerlab-studio-web -- tar -C /artifacts -czf - . > "$work/artifacts.tar.gz"
 kubectl -n "$namespace" exec containerlab-studio-registry-0 -- tar -C /var/lib/registry -czf - . > "$work/registry.tar.gz"
 kubectl -n "$namespace" exec containerlab-studio-redis-0 -- sh -c 'redis-cli SAVE >/dev/null && tar -C /data -czf - .' > "$work/redis.tar.gz"
+restore_replicas;rm "$work/replicas.txt"
 python3 "$script_dir/platform_backup_bundle.py" create "$work" "$namespace" >/dev/null
-restore_replicas;mv "$work" "$final";trap - EXIT INT TERM
+mv "$work" "$final";trap - EXIT INT TERM
 echo "$final"
