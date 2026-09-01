@@ -112,6 +112,7 @@ class ImageBuild(UUIDModel):
     started_at = models.DateTimeField(null=True, blank=True)
     finished_at = models.DateTimeField(null=True, blank=True)
     log_reference = models.CharField(max_length=512, blank=True)
+    log_excerpt = models.TextField(blank=True)
     failure_details = models.JSONField(default=dict)
 
 class PublishedImage(UUIDModel):

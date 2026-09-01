@@ -6,7 +6,7 @@ from django.conf import settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 from studio.configurations import decrypt_configuration, encrypt_configuration
-from studio.models import (AuditEvent, CaptureSession, ConsoleSession, DeploymentSchedule, DeviceInstance, DeviceTemplate, DeviceTemplateVersion, ImageArtifact, Lab, LabDeployment,
+from studio.models import (AuditEvent, CaptureSession, ConsoleSession, DeploymentSchedule, DeviceInstance, DeviceTemplate, DeviceTemplateVersion, ImageArtifact, ImageBuild, Lab, LabDeployment,
     ConfigurationVersion, LabArtifact, LabInterface, LabLink, LabNode, LabRevision, OperationJob, Project, ProjectMembership, PublishedImage, UploadSession, User)
 from studio.tasks import dispatch_due_schedules, execute_operation, execute_staged_start, reconcile_active_deployments, reconcile_deployment
 from studio.quotas import project_usage
@@ -461,6 +461,51 @@ def test_owner_can_force_republish_ready_node_local_image(monkeypatch):
     assert response.status_code==202 and response.data["request_payload"]["force"] is True
     published.refresh_from_db();assert published.lifecycle_status=="reconciling"
     assert AuditEvent.objects.filter(action="image.republication_scheduled",target_id=artifact.id).exists()
+
+@pytest.mark.django_db
+def test_successful_image_publication_retains_bounded_build_output(monkeypatch):
+    owner=User.objects.create_user("build-log-owner",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="build-log-project")
+    artifact=ImageArtifact.objects.create(project=project,owner=owner,source_type="upload",original_filename="frr.tar",
+        detected_format="docker-archive",byte_size=10,checksum="f"*64,architecture="amd64",storage_reference="/artifacts/frr.tar",
+        validation_status="validated",license_acknowledged=True,inspection_result={"deployable":True})
+    build=ImageBuild.objects.create(artifact=artifact,recipe_version="node-containerd-v1",job_identity="retained-build")
+    job=OperationJob.objects.create(owner=owner,operation_type="publish_image",target_id=artifact.id,idempotency_key="retain-build-log",
+        request_payload={"build_id":str(build.id)})
+    class Adapter:
+        def publish_local_image(self,received_artifact,received_build):
+            assert (received_artifact.id,received_build.id)==(artifact.id,build.id)
+            return {"reference":"containerlab.local/frr:retained","repository":"containerlab.local/frr",
+                "publication_mode":"node-containerd","logs":"discarded-prefix\n"+("x"*12020)+"\nverified"}
+    monkeypatch.setattr("studio.tasks.ClabernetesAdapter",Adapter);execute_operation.run(str(job.id));build.refresh_from_db();job.refresh_from_db()
+    assert job.state=="succeeded" and "logs" not in job.result_payload
+    assert len(build.log_excerpt)==12000 and build.log_excerpt.endswith("verified") and "discarded-prefix" not in build.log_excerpt
+    assert PublishedImage.objects.get(artifact=artifact).compatibility_result["publication_mode"]=="node-containerd"
+
+@pytest.mark.django_db
+def test_image_evidence_is_project_scoped_no_store_and_excludes_storage_path():
+    owner=User.objects.create_user("image-evidence-owner",password="long-enough-password")
+    viewer=User.objects.create_user("image-evidence-viewer",password="long-enough-password")
+    stranger=User.objects.create_user("image-evidence-stranger",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="image-evidence-project");ProjectMembership.objects.create(project=project,user=viewer,role="viewer")
+    artifact=ImageArtifact.objects.create(project=project,owner=owner,source_type="upload",original_filename="frr.tar",vendor="FRRouting",
+        category="router",version="10.4.1",detected_format="docker-archive",byte_size=4096,checksum="e"*64,architecture="amd64",
+        storage_reference="/private/quarantine/frr.tar",validation_status="validated",license_acknowledged=True,
+        inspection_result={"deployable":True,"manifest_count":1})
+    build=ImageBuild.objects.create(artifact=artifact,recipe_version="node-containerd-v1",job_identity="evidence-build",status="succeeded",
+        started_at=timezone.now()-timezone.timedelta(seconds=3),finished_at=timezone.now(),log_reference="kubernetes-job/evidence-build",
+        log_excerpt="imported frr.tar\nverified node containerd image")
+    PublishedImage.objects.create(artifact=artifact,build=build,registry_digest="containerlab.local/frr:sha256-"+artifact.checksum,
+        repository="containerlab.local/frr",architecture="amd64",compatibility_result={"publication_mode":"node-containerd"},lifecycle_status="ready")
+    client=APIClient();client.force_authenticate(viewer)
+    response=client.get(f"/api/v1/images/{artifact.id}/evidence/")
+    assert response.status_code==200 and response["Cache-Control"]=="no-store" and response["X-Content-Type-Options"]=="nosniff"
+    assert response.data["vendor"]=="FRRouting" and response.data["builds"][0]["status"]=="succeeded"
+    assert response.data["builds"][0]["log_excerpt"].endswith("verified node containerd image")
+    assert response.data["publications"][0]["compatibility"]["publication_mode"]=="node-containerd"
+    assert "storage_reference" not in response.data and "/private/quarantine" not in str(response.data)
+    client.force_authenticate(stranger)
+    assert client.get(f"/api/v1/images/{artifact.id}/evidence/").status_code==404
 
 @pytest.mark.django_db
 def test_image_deletion_is_previewed_guarded_audited_idempotent_and_releases_storage(settings,tmp_path):

@@ -649,6 +649,27 @@ class ImageArtifactViewSet(viewsets.ReadOnlyModelViewSet):
         artifact=self.get_object()
         if artifact.deleted_at: return Response({"error":{"code":"image_not_found"}},status=404)
         return Response(self.get_serializer(artifact).data)
+    @action(detail=True,methods=["get"],url_path="evidence")
+    def evidence(self,request,pk=None):
+        artifact=self.get_object()
+        if artifact.deleted_at: return Response({"error":{"code":"image_not_found"}},status=404)
+        publications=artifact.published_images.select_related("build").order_by("-created_at")[:20]
+        builds=artifact.builds.order_by("-created_at")[:20]
+        revisions=models.LabNode.objects.filter(published_image__artifact=artifact).values("revision_id").distinct().count()
+        payload={"id":str(artifact.id),"name":artifact.original_filename,"project":artifact.project.name,"source_type":artifact.source_type,
+            "vendor":artifact.vendor,"category":artifact.category,"version":artifact.version,"architecture":artifact.architecture,
+            "detected_format":artifact.detected_format,"byte_size":artifact.byte_size,"checksum":artifact.checksum,
+            "validation_status":artifact.validation_status,"license_acknowledged":artifact.license_acknowledged,
+            "inspection":artifact.inspection_result,"created_at":artifact.created_at,
+            "references":{"publications":artifact.published_images.count(),"builds":artifact.builds.count(),"lab_revisions":revisions},
+            "builds":[{"id":str(row.id),"recipe_version":row.recipe_version,"job_identity":row.job_identity,"status":row.status,
+                "started_at":row.started_at,"finished_at":row.finished_at,"log_reference":row.log_reference,"log_excerpt":row.log_excerpt[-12000:],
+                "failure":{"type":str(row.failure_details.get("type", ""))[:120],"message":str(row.failure_details.get("message", ""))[:2000]} if row.failure_details else None}
+                for row in builds],
+            "publications":[{"id":str(row.id),"digest":row.registry_digest,"repository":row.repository,"architecture":row.architecture,
+                "status":row.lifecycle_status,"compatibility":row.compatibility_result,"build_id":str(row.build_id) if row.build_id else None,
+                "created_at":row.created_at} for row in publications]}
+        response=Response(payload);response["Cache-Control"]="no-store";response["X-Content-Type-Options"]="nosniff";return response
     @staticmethod
     def _deletion_preview(artifact):
         publications=artifact.published_images.count();builds=artifact.builds.count()

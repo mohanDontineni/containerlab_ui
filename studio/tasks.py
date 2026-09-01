@@ -32,7 +32,7 @@ def execute_operation(self,job_id):
             build.status="running"; build.started_at=timezone.now(); build.save(update_fields=["status","started_at","updated_at"])
             result=adapter.publish_local_image(artifact,build)
             published,_=PublishedImage.objects.update_or_create(artifact=artifact,registry_digest=result["reference"],defaults={"build":build,"repository":result["repository"],"architecture":artifact.architecture,"compatibility_result":{k:v for k,v in result.items() if k!="logs"},"lifecycle_status":"ready"})
-            build.status="succeeded"; build.finished_at=timezone.now(); build.log_reference=f"kubernetes-job/{build.job_identity}"; build.failure_details={}; build.save()
+            build.status="succeeded"; build.finished_at=timezone.now(); build.log_reference=f"kubernetes-job/{build.job_identity}"; build.log_excerpt=str(result.get("logs", ""))[-12000:]; build.failure_details={}; build.save()
             result={**{k:v for k,v in result.items() if k!="logs"},"published_image_id":str(published.id)}
         elif job.operation_type in ("ping","traceroute"):
             node=LabNode.objects.get(pk=job.request_payload["node_id"],revision=job.deployment.revision)
