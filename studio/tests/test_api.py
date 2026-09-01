@@ -772,6 +772,37 @@ def test_guarded_device_reset_preview_concurrency_capture_block_and_console_revo
     execute_operation.run(str(first.data["id"]));device.refresh_from_db()
     assert device.observed_readiness=="resetting" and ConsoleSession.objects.filter(device=device,revoked_at__isnull=False).count()==1
 
+@pytest.mark.django_db(transaction=True)
+def test_bulk_device_lifecycle_is_authorized_preflighted_atomic_idempotent_and_audited(monkeypatch):
+    scheduled=[];monkeypatch.setattr("studio.api.execute_operation.delay",lambda job_id:scheduled.append(job_id))
+    owner=User.objects.create_user("bulk-owner",password="long-enough-password");viewer=User.objects.create_user("bulk-viewer",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="bulk-project");ProjectMembership.objects.create(project=project,user=viewer,role="viewer")
+    lab=Lab.objects.create(project=project,name="bulk-lab");revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="b"*64,immutable=True)
+    template=DeviceTemplateVersion.objects.filter(containerlab_kind="linux").first()
+    nodes=[LabNode.objects.create(revision=revision,name=f"r{index}",template_version=template) for index in (1,2)]
+    deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-bulk-test",runtime_version="0.8.0",observed_state="running")
+    devices=[DeviceInstance.objects.create(deployment=deployment,lab_node=node,observed_readiness="ready",runtime_resources={"pod":f"{node.name}-pod"}) for node in nodes]
+    payload={"operation":"restart_device","device_ids":[str(device.id) for device in devices]}
+    preview_url=f"/api/v1/deployments/{deployment.id}/device-bulk-preview/";operation_url=f"/api/v1/deployments/{deployment.id}/device-bulk-operations/"
+    client=APIClient();client.force_authenticate(viewer);assert client.post(preview_url,payload,format="json").status_code==403
+    client.force_authenticate(owner)
+    preview=client.post(preview_url,payload,format="json")
+    assert preview.status_code==200 and preview.data["can_schedule"] is True and len(preview.data["devices"])==2
+    assert client.post(operation_url,payload,format="json").status_code==400
+    first=client.post(operation_url,payload,format="json",HTTP_IDEMPOTENCY_KEY="restart-selected")
+    replay=client.post(operation_url,payload,format="json",HTTP_IDEMPOTENCY_KEY="restart-selected")
+    assert first.status_code==replay.status_code==202 and first.data["count"]==2
+    assert {row["id"] for row in first.data["jobs"]}=={row["id"] for row in replay.data["jobs"]} and len(scheduled)==2
+    assert AuditEvent.objects.filter(action="device.restart",metadata__bulk=True).count()==2
+    assert AuditEvent.objects.filter(action="device.bulk_scheduled",target_id=deployment.id).count()==1
+    OperationJob.objects.filter(id=first.data["jobs"][0]["id"]).update(state="succeeded")
+    blocked=client.post(preview_url,payload,format="json")
+    assert blocked.status_code==200 and blocked.data["can_schedule"] is False and sum(row["eligible"] for row in blocked.data["devices"])==1
+    conflict=client.post(operation_url,payload,format="json",HTTP_IDEMPOTENCY_KEY="another-selected-operation")
+    assert conflict.status_code==409 and conflict.data["error"]["code"]=="bulk_device_operation_blocked"
+    duplicate={"operation":"restart_device","device_ids":[str(devices[0].id),str(devices[0].id)]}
+    assert client.post(preview_url,duplicate,format="json").status_code==422
+
 @pytest.mark.django_db
 def test_device_worker_updates_node_without_failing_running_lab(monkeypatch):
     owner=User.objects.create_user("device-worker",password="long-enough-password")
