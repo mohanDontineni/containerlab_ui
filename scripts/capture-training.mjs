@@ -238,6 +238,16 @@ try {
       break;
     }
   }
+  if (tracerouteHref) {
+    await capture("40-guarded-device-reset.png", tracerouteHref, async (p) => {
+      const reset = p.locator("button[data-device-reset]:not([disabled])").first();
+      await reset.waitFor({ timeout: 20_000 });
+      await reset.click();
+      const dialog = p.locator("#device-reset-dialog");
+      await dialog.waitFor();
+      return dialog;
+    });
+  } else console.warn("40-guarded-device-reset.png retained: a ready multi-device runtime is unavailable");
   if (deploymentHref) {
     await capture("14-runtime-overview.png", deploymentHref, async (p) => {
       await p.locator("#device-list article").first().waitFor({ timeout: 20_000 });

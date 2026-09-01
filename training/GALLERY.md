@@ -235,3 +235,9 @@ The designer selects several devices and duplicates the complete internal subgra
 ![Topology arrangement](39-topology-arrangement.png)
 
 The designer automatically arranges connected device groups into a deterministic layout that stays clear of notes and regions. Multi-selected devices can be aligned into a row or column, while the device palette filters immediately by template name, Containerlab kind, or category. Arrangement and alignment are undoable, saved with the draft, and restored on reload without YAML.
+
+## 40 — Guarded device reset
+
+![Guarded device reset](40-guarded-device-reset.png)
+
+The operator previews a single-device reset before discarding ephemeral appliance changes. Studio reports the immutable revision, pinned configuration source, active consoles, capture blockers, and exact preservation boundary. Confirmation replaces only the selected launcher, revokes its console sessions, restores its saved baseline, preserves every peer and topology link, and reconciles the device back to ready without YAML or cluster access.
