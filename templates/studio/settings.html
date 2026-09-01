@@ -2,6 +2,7 @@
 {% block title %}Account & security · ContainerLab Studio{% endblock %}{% block breadcrumb %}Account & security{% endblock %}
 {% block content %}
 <section class="page-heading"><div><p class="eyebrow">IDENTITY & ACCESS</p><h1>Account & security</h1><p>Manage your Studio identity, local time zone, and sign-in credential without leaving the product.</p></div><span class="account-identity"><b>{{ request.user.username }}</b>{% if request.user.is_superuser %}Platform administrator{% else %}Studio operator{% endif %}</span></section>
+{% if request.user.must_change_password %}<div class="settings-messages forced-password" role="alert"><p class="warning"><strong>Password change required.</strong> Replace the administrator-issued temporary password before continuing to Studio.</p></div>{% endif %}
 {% if messages %}<div class="settings-messages" role="status">{% for message in messages %}<p class="{{ message.tags }}">{{ message }}</p>{% endfor %}</div>{% endif %}
 <div class="account-settings-grid">
   <form method="post" class="panel account-form" novalidate>{% csrf_token %}<input type="hidden" name="action" value="profile">

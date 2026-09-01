@@ -12,7 +12,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_http_methods
-from .forms import LabEditForm, LabForm, PlatformUserCreateForm, ProfileForm, ProjectForm, RegistryImageForm, StudioPasswordChangeForm
+from .forms import LabEditForm, LabForm, PlatformPasswordResetForm, PlatformUserCreateForm, ProfileForm, ProjectForm, RegistryImageForm, StudioPasswordChangeForm
 from .models import (AuditEvent, ConfigurationVersion, DeviceTemplate, DeviceTemplateVersion, ImageArtifact, Lab, LabDeployment,
                      LabInterface, LabLink, LabNode, LabRevision, OperationJob, Project,
                      ProjectMembership, PublishedImage, User)
@@ -28,13 +28,26 @@ def visible_projects(user):
 def _require_platform_admin(request):
     if not request.user.is_staff: raise PermissionDenied
 
+def _user_sessions(user,delete=False):
+    from django.contrib.sessions.models import Session
+    revoked=0
+    for session in Session.objects.filter(expire_date__gt=timezone.now()):
+        try: matches=str(session.get_decoded().get("_auth_user_id"))==str(user.pk)
+        except Exception: matches=False
+        if matches:
+            if delete: session.delete()
+            revoked+=1
+    return revoked
+
+def _revoke_user_sessions(user): return _user_sessions(user,delete=True)
+
 @login_required
 @require_http_methods(["GET","POST"])
 def platform_users(request):
     _require_platform_admin(request);form=PlatformUserCreateForm(request.POST or None)
     if request.method=="POST" and form.is_valid():
         with transaction.atomic():
-            user=form.save(commit=False);user.is_active=True;user.set_password(form.cleaned_data["password1"]);user.save()
+            user=form.save(commit=False);user.is_active=True;user.must_change_password=True;user.set_password(form.cleaned_data["password1"]);user.save()
             AuditEvent.objects.create(actor=request.user,action="account.created",target_type="User",target_id=user.id,
                 correlation_id=getattr(request,"correlation_id",""),metadata={"username":user.username})
         messages.success(request,f'Account “{user.username}” created and ready for project access.');return redirect("portal-users")
@@ -68,6 +81,28 @@ def platform_user_status(request,user_id):
         AuditEvent.objects.create(actor=request.user,action=f"account.{action}d",target_type="User",target_id=target.id,
             correlation_id=getattr(request,"correlation_id",""),metadata={"username":target.username,"revoked_consoles":revoked})
     return JsonResponse({"user_id":str(target.id),"username":target.username,"is_active":target.is_active,"action":action})
+
+@login_required
+@require_http_methods(["GET","POST"])
+def platform_user_password_reset(request,user_id):
+    _require_platform_admin(request);target=get_object_or_404(User,pk=user_id);blockers=[]
+    if target==request.user: blockers.append("Use Account & security to change your own password.")
+    if target.is_superuser and not request.user.is_superuser: blockers.append("Only a superuser can reset another superuser credential.")
+    if request.method=="GET":
+        response=JsonResponse({"user_id":str(target.id),"username":target.username,"can_reset":not blockers,"blockers":blockers,
+            "active_sessions":_user_sessions(target),"active_consoles":target.consolesession_set.filter(revoked_at__isnull=True,expires_at__gt=timezone.now()).count(),
+            "impact":["Replace the current credential with an administrator-supplied temporary password.","Sign out every existing browser session and revoke active device consoles.","Require a personal password change before any other Studio operation."]})
+        response["Cache-Control"]="no-store";return response
+    if blockers: return JsonResponse({"error":{"code":"password_reset_blocked","details":blockers}},status=409)
+    form=PlatformPasswordResetForm(target,request.POST)
+    if not form.is_valid(): return JsonResponse({"error":{"code":"invalid_temporary_password","details":form.errors.get_json_data()}},status=422)
+    with transaction.atomic():
+        target=User.objects.select_for_update().get(pk=target.pk);target.set_password(form.cleaned_data["password1"]);target.must_change_password=True;target.save(update_fields=["password","must_change_password"])
+        consoles=target.consolesession_set.filter(revoked_at__isnull=True).update(revoked_at=timezone.now())
+        sessions=_revoke_user_sessions(target)
+        AuditEvent.objects.create(actor=request.user,action="account.password_reset",target_type="User",target_id=target.id,
+            correlation_id=getattr(request,"correlation_id",""),metadata={"username":target.username,"revoked_sessions":sessions,"revoked_consoles":consoles})
+    return JsonResponse({"user_id":str(target.id),"username":target.username,"must_change_password":True,"revoked_sessions":sessions,"revoked_consoles":consoles})
 
 @login_required
 def projects(request):
@@ -402,9 +437,9 @@ def settings_view(request):
         elif action=="password":
             password_form=StudioPasswordChangeForm(request.user,request.POST,prefix="password")
             if password_form.is_valid():
-                user=password_form.save();update_session_auth_hash(request,user)
+                forced=request.user.must_change_password;user=password_form.save();user.must_change_password=False;user.save(update_fields=["must_change_password"]);update_session_auth_hash(request,user)
                 AuditEvent.objects.create(actor=user,action="account.password_changed",target_type="User",target_id=user.id,
-                    correlation_id=getattr(request,"correlation_id",""),metadata={})
+                    correlation_id=getattr(request,"correlation_id",""),metadata={"forced_rotation":forced})
                 messages.success(request,"Password changed. Your current session remains active.");return redirect("portal-settings")
         else: messages.error(request,"Unknown settings action.")
     return render(request,"studio/settings.html",{"profile_form":profile_form,"password_form":password_form})

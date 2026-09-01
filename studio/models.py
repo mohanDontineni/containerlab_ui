@@ -14,6 +14,7 @@ class UUIDModel(models.Model):
 class User(AbstractUser):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     timezone = models.CharField(max_length=64, default="UTC")
+    must_change_password = models.BooleanField(default=False)
 
 class Project(UUIDModel):
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="owned_projects")

@@ -23,6 +23,7 @@ urlpatterns = [
     path("labs/<uuid:lab_id>/workspace/", portal_views.topology_workspace, name="topology-workspace"),
     path("users/", portal_views.platform_users, name="portal-users"),
     path("users/<uuid:user_id>/status/", portal_views.platform_user_status, name="portal-user-status"),
+    path("users/<uuid:user_id>/password-reset/", portal_views.platform_user_password_reset, name="portal-user-password-reset"),
     path("api/v1/topology/templates/", portal_views.topology_catalog, name="topology-catalog"),
     path("api/v1/labs/<uuid:lab_id>/topology/images/", portal_views.topology_images, name="topology-images"),
     path("api/v1/labs/<uuid:lab_id>/topology/edit-lease/", portal_views.topology_edit_lease, name="topology-edit-lease"),

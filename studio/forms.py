@@ -43,6 +43,18 @@ class PlatformUserCreateForm(forms.ModelForm):
             except ValidationError as exc: self.add_error("password1",exc)
         return cleaned
 
+class PlatformPasswordResetForm(forms.Form):
+    password1=forms.CharField(label="New temporary password",widget=forms.PasswordInput(attrs={"autocomplete":"new-password"}))
+    password2=forms.CharField(label="Confirm temporary password",widget=forms.PasswordInput(attrs={"autocomplete":"new-password"}))
+    def __init__(self,user,*args,**kwargs): self.user=user;super().__init__(*args,**kwargs)
+    def clean(self):
+        cleaned=super().clean();first=cleaned.get("password1");second=cleaned.get("password2")
+        if first and second and first!=second: self.add_error("password2","The passwords do not match.")
+        if first:
+            try: validate_password(first,self.user)
+            except ValidationError as exc: self.add_error("password1",exc)
+        return cleaned
+
 class ProjectForm(forms.ModelForm):
     class Meta:
         model = Project

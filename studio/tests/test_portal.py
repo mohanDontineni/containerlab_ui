@@ -51,7 +51,7 @@ def test_native_platform_user_administration_is_staff_only_and_audited(client):
         "email":"ENGINEER@EXAMPLE.TEST","timezone":"America/Chicago","password1":"Secure-Onboarding-2026!","password2":"Secure-Onboarding-2026!"},follow=True)
     assert response.status_code==200 and b"created and ready for project access" in response.content
     created=User.objects.get(username="new-operator")
-    assert created.is_active and created.check_password("Secure-Onboarding-2026!") and created.email=="engineer@example.test"
+    assert created.is_active and created.must_change_password and created.check_password("Secure-Onboarding-2026!") and created.email=="engineer@example.test"
     event=AuditEvent.objects.get(action="account.created",target_id=created.id)
     assert event.actor==admin and event.metadata=={"username":"new-operator"}
 
@@ -81,6 +81,29 @@ def test_platform_admin_cannot_deactivate_self(client):
     admin=User.objects.create_user("self-admin",password="Original-Password-2026!",is_staff=True)
     client.force_login(admin);preview=client.get(f"/users/{admin.id}/status/").json()
     assert preview["can_change"] is False and "current account" in preview["blockers"][0]
+
+@pytest.mark.django_db
+def test_native_password_reset_revokes_sessions_and_forces_personal_rotation(client):
+    admin=User.objects.create_user("reset-admin",password="Original-Password-2026!",is_staff=True)
+    target=User.objects.create_user("reset-target",password="Original-Password-2026!")
+    operator=Client();operator.force_login(target);assert operator.get("/").status_code==200
+    client.force_login(admin);preview=client.get(f"/users/{target.id}/password-reset/")
+    assert preview.status_code==200 and preview.json()["can_reset"] is True
+    weak=client.post(f"/users/{target.id}/password-reset/",{"password1":"short","password2":"short"})
+    assert weak.status_code==422
+    reset=client.post(f"/users/{target.id}/password-reset/",{"password1":"Temporary-Zebra-2026!","password2":"Temporary-Zebra-2026!"})
+    assert reset.status_code==200 and reset.json()["revoked_sessions"]==1
+    target.refresh_from_db();assert target.must_change_password and target.check_password("Temporary-Zebra-2026!")
+    assert operator.get("/").status_code==302 and "/accounts/login/" in operator.get("/").url
+    assert operator.login(username=target.username,password="Temporary-Zebra-2026!")
+    forced=operator.get("/");assert forced.status_code==302 and forced.url=="/settings/"
+    rotated=operator.post("/settings/",{"action":"password","password-old_password":"Temporary-Zebra-2026!",
+        "password-new_password1":"Personal-Router-2026!","password-new_password2":"Personal-Router-2026!"},follow=True)
+    target.refresh_from_db();assert rotated.status_code==200 and not target.must_change_password and target.check_password("Personal-Router-2026!")
+    assert operator.get("/").status_code==200
+    reset_event=AuditEvent.objects.get(action="account.password_reset",target_id=target.id)
+    changed_event=AuditEvent.objects.get(action="account.password_changed",target_id=target.id)
+    assert reset_event.metadata["revoked_sessions"]==1 and changed_event.metadata["forced_rotation"] is True
 
 @pytest.mark.django_db
 def test_project_create_is_native_and_scoped(client):
@@ -128,7 +151,7 @@ def test_native_password_change_requires_current_password_applies_policy_keeps_s
     assert changed.status_code==200 and b"current session remains active" in changed.content and changed.wsgi_request.user.is_authenticated
     user.refresh_from_db();assert user.check_password(new) and not user.check_password(old)
     event=AuditEvent.objects.get(action="account.password_changed",target_id=user.id)
-    assert event.metadata=={} and event.project_id is None
+    assert event.metadata=={"forced_rotation":False} and event.project_id is None
 
 @pytest.mark.django_db
 def test_account_mutations_require_csrf_and_legacy_password_page_redirects_to_native_settings():
