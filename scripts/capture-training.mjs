@@ -62,6 +62,17 @@ try {
   await page.goto(`${baseUrl}/projects/`, { waitUntil: "networkidle" });
   const projectHref = await firstHref('a[href^="/projects/"]', /^\/projects\/[0-9a-f-]+\/$/i);
   if (projectHref) await capture("04-project-access.png", projectHref);
+  await page.goto(`${baseUrl}/projects/`, { waitUntil: "networkidle" });
+  const retirementRow = page.locator(".catalog-row").filter({ hasText: /Project Retirement Acceptance/i }).first();
+  if (await retirementRow.count()) {
+    const retirementHref = await retirementRow.locator('a[href^="/projects/"]').getAttribute("href");
+    if (retirementHref) await capture("33-guarded-project-retirement.png", retirementHref, async (p) => {
+      await p.locator("#retire-project").click();
+      const dialog = p.locator("#project-retire-dialog");
+      await dialog.waitFor();
+      return dialog;
+    });
+  }
 
   await capture("05-lab-library.png", "/labs/");
   await capture("32-guarded-lab-deletion.png", "/labs/", async (p) => {
@@ -122,14 +133,17 @@ try {
   }
 
   await capture("10-image-library.png", "/images/");
-  await capture("31-guarded-image-deletion.png", "/images/", async (p) => {
-    const row = p.locator(".catalog-row").filter({ hasText: /Deletion Acceptance Artifact\.bin/i }).first();
-    await row.waitFor();
-    await row.locator("button[data-delete-image]").click();
-    const dialog = p.locator("#image-delete-dialog");
-    await dialog.waitFor();
-    return dialog;
-  });
+  await page.goto(`${baseUrl}/images/`, { waitUntil: "networkidle" });
+  const imageDeletionRow = page.locator(".catalog-row").filter({ hasText: /Deletion Acceptance Artifact\.bin/i }).first();
+  if (await imageDeletionRow.count()) {
+    await capture("31-guarded-image-deletion.png", "/images/", async (p) => {
+      const row = p.locator(".catalog-row").filter({ hasText: /Deletion Acceptance Artifact\.bin/i }).first();
+      await row.locator("button[data-delete-image]").click();
+      const dialog = p.locator("#image-delete-dialog");
+      await dialog.waitFor();
+      return dialog;
+    });
+  } else console.warn("31-guarded-image-deletion.png retained: disposable specimen has already been deleted");
   await capture("11-upload-image.png", "/images/upload/");
   await capture("12-register-image.png", "/images/register/");
   await capture("13-deployments.png", "/deployments/");

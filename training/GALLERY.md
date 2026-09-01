@@ -193,3 +193,9 @@ Before deletion, the server counts publications, build records, lab revisions, a
 ![Guarded lab deletion](32-guarded-lab-deletion.png)
 
 The operator reviews revision and deployment history plus active runtime and job blockers before confirming. A safe deletion removes only the lab-library entry, releases one project lab quota unit, preserves immutable operational history, and allows the lab name to be reused without exposing YAML or cluster commands.
+
+## 33 — Guarded project retirement
+
+![Guarded project retirement](33-guarded-project-retirement.png)
+
+An administrator reviews active labs, images, uploads, runtimes, and jobs before retiring a workspace. Retirement is available only when every active dependency is resolved; Studio then hides the project and its collaboration access, preserves all historical records, and permits the owner to reuse the project name.
