@@ -157,3 +157,9 @@ Before replacing device compute, the operator reviews the pinned revision, devic
 ![Device runtime logs](26-device-runtime-logs.png)
 
 The operator opens the device inspector from a live device, switches between appliance and Clabernetes launcher sources, selects a bounded line count, refreshes, and copies the audited no-store result without using Kubernetes or Containerlab commands.
+
+## 27 — Verified backup restore preview
+
+![Backup restore preview](27-backup-restore-preview.png)
+
+After selecting a product-native backup, the server validates its format, checksum, templates, images, interfaces, and deployability without changing the lab. The operator reviews device, link, configuration, image, draft, published-revision, and active-deployment impact before explicitly confirming restore.

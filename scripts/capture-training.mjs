@@ -67,6 +67,8 @@ try {
   await capture("06-create-lab.png", "/labs/new/");
   await page.goto(`${baseUrl}/labs/`, { waitUntil: "networkidle" });
   const workspaceHrefs = await matchingHrefs('a[href*="/workspace/"]', /^\/labs\/[0-9a-f-]+\/workspace\/$/i);
+  const acceptanceRow = page.locator(".catalog-row").filter({ hasText: /Backup Restore Acceptance/i }).first();
+  const acceptanceHref = (await acceptanceRow.count()) ? await acceptanceRow.locator('a[href*="/workspace/"]').first().getAttribute("href") : null;
   let workspaceHref = workspaceHrefs[0] || null;
   for (const candidate of workspaceHrefs) {
     await page.goto(`${baseUrl}${candidate}`, { waitUntil: "networkidle" });
@@ -97,6 +99,18 @@ try {
         .first()
         .waitFor();
     });
+    const restoreHref = acceptanceHref || workspaceHref;
+    const restoreLabId = restoreHref.match(/^\/labs\/([0-9a-f-]+)\/workspace\/$/i)?.[1];
+    if (restoreLabId) {
+      const backupResponse = await context.request.get(`${baseUrl}/api/v1/labs/${restoreLabId}/export/`);
+      if (!backupResponse.ok()) throw new Error(`Backup download failed with ${backupResponse.status()}`);
+      const backupBuffer = await backupResponse.body();
+      await capture("27-backup-restore-preview.png", restoreHref, async (p) => {
+        const editor = p.frameLocator('iframe[title^="Topology workspace"]');
+        await editor.locator('input[type="file"]').setInputFiles({ name: "verified-lab.clabstudio.json", mimeType: "application/vnd.containerlab.studio.lab+json", buffer: backupBuffer });
+        await editor.getByRole("dialog", { name: /restore topology backup/i }).waitFor();
+      });
+    }
   }
 
   await capture("10-image-library.png", "/images/");

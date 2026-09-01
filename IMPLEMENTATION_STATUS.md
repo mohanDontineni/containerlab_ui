@@ -30,7 +30,8 @@
 - Native self-service account and security page with profile/timezone management, normalized email, verified current-password changes, strengthened password validation, CSRF protection, session continuity, legacy-route safety, and content-free audit events.
 - Explicit GUI-only operator contract: topology Backup/Restore is labeled as a product-native bundle workflow, while Containerlab/Kubernetes YAML remains internal to the validated runtime adapter.
 - Bounded per-device appliance and Clabernetes launcher log inspection through audited worker jobs, with operator authorization, selectable 20-1000 line limits, 100 KB output caps, no-store polling, refresh, and copy controls.
-- A 26-screen, read-only Firefox training capture catalog covering projects, labs, visual topology design, images, deployment/device lifecycle, safe redeploy preview, runtime logs, link controls, diagnostics, packet capture, console, configuration history, templates, jobs, security, and API discovery.
+- Server-validated lab backup restore preview with bundle checksum, topology/configuration/template/image inventory, deployability issues, explicit impact confirmation, stale-draft protection, idempotent replay, immutable/running revision preservation, and audit events.
+- A 27-screen, read-only Firefox training capture catalog covering projects, labs, visual topology design, verified backup/restore, images, deployment/device lifecycle, safe redeploy preview, runtime logs, link controls, diagnostics, packet capture, console, configuration history, templates, jobs, security, and API discovery.
 
 ## Acceptance results
 
@@ -55,7 +56,7 @@
 | 17 | Cross-project isolation | PASS | Guessed UUID API test returns 404. |
 | 18 | Cleanup preserves unrelated resources | PASS | Only `containerlab` and owned PVs touched; `trading` namespace unchanged. |
 | 19 | Existing workloads unaffected | PASS | Trading workloads remained running during inspection/deployment. |
-| 20 | Backup/restore | NOT RUN | Commands supplied; destructive restore exercise not performed on live instance. |
+| 20 | Backup/restore | PASS | A 1,888-byte GUI-native backup was server-previewed and restored into an independent lab with two devices, one link, one configuration, and unchanged source state; a deployable BGP backup then replaced that draft under concurrency protection. |
 | 21 | Project collaboration lifecycle | PASS | Live owner assigned admin/editor/viewer roles; editor mutation returned 403; delegated admin add/change/remove returned 201/200/204; owner and viewer pages rendered the correct controls. |
 | 22 | Project resource governance | PASS | Live one-unit limits allowed the first lab and rejected excess labs, members, image reservations, and topology nodes with typed 409 conflicts; usage/UI/audit checks passed. |
 | 23 | Versioned startup configuration | PASS | FRR configs remained encrypted in PostgreSQL, materialized into deployment-scoped ConfigMaps, mounted into launchers, and applied to both ready devices. |
@@ -72,8 +73,9 @@
 | 34 | Packet-corruption impairment | PASS | The authenticated product API applied 0.5% corruption to a live two-router link, `tc netem` reported `corrupt 0.5%` on both launcher endpoints, and a second idempotent operation restored the persisted/runtime condition to 0%. |
 | 35 | Safe whole-lab redeploy | PASS | Firefox verified the read-only impact preview; an authenticated audited redeploy recreated a stopped two-device/one-link Alpine runtime from pinned revision 1, reached 2/2 ready and `running`, and a final stop restored its original stopped state. |
 | 36 | Device and launcher logs | PASS | Authenticated worker jobs collected 2,682 bytes of live FRR appliance startup output and 11,799 bytes of Clabernetes launcher output for the same router; both completed successfully through bounded, audited, no-store GUI contracts. |
+| 37 | Restored topology runtime | PASS | The independently restored two-router BGP backup reached 2/2 ready after audited node-local image repair; product diagnostics passed 3/3 with 0% loss in both directions, the test runtime was stopped, and the displaced capacity runtime was returned to running. |
 
-Automated tests: **99 passed**. Django checks and migration drift checks: **pass**. React TypeScript/Vite production build: **pass**. Firefox training capture: **26 live screens passed**. Helm lint/render: **pass**. Native runtime ping: **3 transmitted, 3 received, 0% loss, 0.445 ms average RTT**. Bidirectional 120 ms link condition: **240.563 ms average RTT**. Disabled link: **100% loss**. Restored qdiscs: **native `noqueue` on both endpoints**.
+Automated tests: **100 passed**. Django checks and migration drift checks: **pass**. React TypeScript/Vite production build: **pass**. Firefox training capture: **27 live screens passed**. Helm lint/render: **pass**. Native runtime ping: **3 transmitted, 3 received, 0% loss, 0.445 ms average RTT**. Bidirectional 120 ms link condition: **240.563 ms average RTT**. Disabled link: **100% loss**. Restored qdiscs: **native `noqueue` on both endpoints**.
 
 ## Known limitations
 
