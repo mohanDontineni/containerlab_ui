@@ -343,3 +343,9 @@ The visual topology inspector lets operators assign each device a bounded startu
 ![Native packet analysis](57-native-packet-analysis.png)
 
 The operator opens a completed interface capture directly in the runtime GUI instead of leaving Studio for Wireshark or a CLI decoder. A bounded, read-only classic-PCAP parser reports packet and byte totals, protocol distribution, normalized bidirectional conversations, relative timestamps, endpoints, lengths, and safe protocol summaries; raw payload bytes are never rendered. Firefox captured `r1:eth1` while the GUI ran five live pings to `10.2.2.2`, then verified all 10 request/reply frames as one ICMP conversation. The same dialog retains an authorized raw-PCAP download for advanced offline analysis.
+
+## 58 — Kubernetes device events
+
+![Kubernetes device events](58-kubernetes-device-events.png)
+
+The operator selects Kubernetes events from the same native device-evidence dialog used for appliance and launcher logs. Studio resolves the recorded launcher UID internally, reads only that pod's events through the reconciler identity, caps the request at 200 events, normalizes occurrence time, type, reason, count, component, and bounded message text, and renders warning-aware cards. Firefox restarted production BGP router `r1` through the GUI, observed its launcher UID change, then displayed the replacement pod's real Scheduled, Pulled, Created, and Started events. A post-restart product diagnostic passed 3/3 routed packets with 0% loss.
