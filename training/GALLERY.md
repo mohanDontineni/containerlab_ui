@@ -175,3 +175,9 @@ The operator selects two encrypted, immutable versions collected from the same d
 ![Configuration restore preview](29-configuration-restore-preview.png)
 
 Before restoring a collected configuration, the operator reviews the device, version, checksum, source revision, and impact. Confirmation creates a new editable draft pinned to the selected content while the running deployment, immutable revision, and collected history remain unchanged until the operator explicitly deploys the draft.
+
+## 30 — Bounded appliance traceroute
+
+![Traceroute diagnostic](30-traceroute-diagnostic.png)
+
+The operator selects a ready appliance, literal IPv4/IPv6 destination, probes per hop, timeout, and maximum hop count. The authenticated worker executes the bounded command inside the owned device and returns the real hop path without exposing a launcher shell or accepting arbitrary command text.

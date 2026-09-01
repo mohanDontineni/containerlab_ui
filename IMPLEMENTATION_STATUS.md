@@ -32,7 +32,8 @@
 - Bounded per-device appliance and Clabernetes launcher log inspection through audited worker jobs, with operator authorization, selectable 20-1000 line limits, 100 KB output caps, no-store polling, refresh, and copy controls.
 - Server-validated lab backup restore preview with bundle checksum, topology/configuration/template/image inventory, deployability issues, explicit impact confirmation, stale-draft protection, idempotent replay, immutable/running revision preservation, and audit events.
 - Audited configuration-version comparison and safe restore with same-device validation, bounded no-store unified diffs, explicit impact preview, stale-draft protection, idempotent replay, newly encrypted draft configuration versions, and immutable/running revision preservation.
-- A 29-screen, read-only Firefox training capture catalog covering projects, labs, visual topology design, verified backup/restore, images, deployment/device lifecycle, safe redeploy preview, runtime logs, link controls, diagnostics, packet capture, console, configuration history/compare/restore, templates, jobs, security, and API discovery.
+- GUI-native appliance traceroute with ready-device authorization, literal IP validation, bounded hop/probe/timeout controls, idempotent audited worker execution, and capped output from the selected nested appliance.
+- A 30-screen, read-only Firefox training capture catalog covering projects, labs, visual topology design, verified backup/restore, images, deployment/device lifecycle, safe redeploy preview, runtime logs, link controls, ping/traceroute diagnostics, packet capture, console, configuration history/compare/restore, templates, jobs, security, and API discovery.
 
 ## Acceptance results
 
@@ -76,8 +77,9 @@
 | 36 | Device and launcher logs | PASS | Authenticated worker jobs collected 2,682 bytes of live FRR appliance startup output and 11,799 bytes of Clabernetes launcher output for the same router; both completed successfully through bounded, audited, no-store GUI contracts. |
 | 37 | Restored topology runtime | PASS | The independently restored two-router BGP backup reached 2/2 ready after audited node-local image repair; product diagnostics passed 3/3 with 0% loss in both directions, the test runtime was stopped, and the displaced capacity runtime was returned to running. |
 | 38 | Configuration compare and safe restore | PASS | Firewall collected versions 1 and 2 were compared through the authenticated no-store API; version 2 then produced editable revision 2 under idempotency and draft-concurrency protection while the original immutable deployment remained running with 3/3 devices ready and an unchanged revision. |
+| 39 | Appliance traceroute | PASS | The authenticated product operation executed bounded traceroute inside live FRR router r1 toward 10.2.2.2 and returned the real one-hop path (`10.2.2.2`, 0.018 ms); the same completed workflow was captured in Firefox with explicit probe, timeout, and hop bounds. |
 
-Automated tests: **101 passed**. Django checks and migration drift checks: **pass**. React TypeScript/Vite production build: **pass**. Firefox training capture: **29 live screens passed**. Helm lint/render: **pass**. Native runtime ping: **3 transmitted, 3 received, 0% loss, 0.445 ms average RTT**. Bidirectional 120 ms link condition: **240.563 ms average RTT**. Disabled link: **100% loss**. Restored qdiscs: **native `noqueue` on both endpoints**.
+Automated tests: **103 passed**. Django checks and migration drift checks: **pass**. React TypeScript/Vite production build: **pass**. Firefox training capture: **30 live screens passed**. Helm lint/render: **pass**. Native runtime ping: **3 transmitted, 3 received, 0% loss, 0.445 ms average RTT**. Live appliance traceroute: **1 verified hop to 10.2.2.2**. Bidirectional 120 ms link condition: **240.563 ms average RTT**. Disabled link: **100% loss**. Restored qdiscs: **native `noqueue` on both endpoints**.
 
 ## Known limitations
 

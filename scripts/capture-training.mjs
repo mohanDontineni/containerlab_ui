@@ -130,6 +130,7 @@ try {
     }
   }
   let configurationHref = deploymentHref;
+  let tracerouteHref = deploymentHref;
   for (const candidate of deploymentHrefs) {
     await page.goto(`${baseUrl}${candidate}`, { waitUntil: "networkidle" });
     await page.waitForFunction(() => {
@@ -138,6 +139,15 @@ try {
     });
     if ((await page.locator("#configuration-list article").count()) > 0) {
       configurationHref = candidate;
+      break;
+    }
+  }
+  for (const candidate of deploymentHrefs) {
+    await page.goto(`${baseUrl}${candidate}`, { waitUntil: "networkidle" });
+    await page.locator("#device-list article").first().waitFor({ timeout: 20_000 });
+    const deviceNames = await page.locator("#device-list article strong").allTextContents();
+    if (deviceNames.includes("r1") && deviceNames.includes("r2")) {
+      tracerouteHref = candidate;
       break;
     }
   }
@@ -157,6 +167,16 @@ try {
     await capture("17-ping-diagnostic.png", deploymentHref, async (p) => {
       const panel = p.locator(".diagnostic-panel");
       await panel.scrollIntoViewIfNeeded();
+      return panel;
+    });
+    await capture("30-traceroute-diagnostic.png", tracerouteHref, async (p) => {
+      const panel = p.locator(".diagnostic-panel");
+      await panel.scrollIntoViewIfNeeded();
+      await p.locator("#diagnostic-kind").selectOption("traceroute");
+      await p.locator("#ping-node").selectOption({ index: 1 });
+      await p.locator("#ping-target").fill("10.2.2.2");
+      await p.locator("#ping-form button").click();
+      await p.waitForFunction(() => (document.querySelector("#diagnostic-output")?.textContent || "").includes("traceroute to"), null, { timeout: 20_000 });
       return panel;
     });
     await capture("18-packet-capture.png", deploymentHref, async (p) => {
