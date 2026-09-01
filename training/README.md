@@ -89,6 +89,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 | `77-live-interface-traffic-rates.png` | Live interface traffic rates | Uses two bounded GUI samples around a five-packet diagnostic to show per-second RX/TX packet and byte rates alongside cumulative counters, with no YAML or shell access. |
 | `78-live-device-resource-trends.png` | Live device resource trends | Shows bounded browser-local CPU and memory history for both running routers, current immutable limits, worker placement, and pressure classification without deploying a monitoring agent. |
 | `79-topology-wide-link-traffic.png` | Topology-wide link traffic | Runs one bounded GUI inspection across every point-to-point link and shows both endpoints' live RX/TX packets, bytes, state, errors, and drops beneath the operational map. |
+| `80-topology-link-traffic-rates.png` | Topology link traffic rates | Compares two explicitly requested topology snapshots and shows safe per-second RX/TX packet and byte rates for both endpoints, with counter-reset protection and no background polling. |
 
 ## No-YAML operating model
 
@@ -142,6 +143,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 47. Refresh the native network-state dialog to calculate live per-interface RX/TX packet and byte rates from bounded counter samples; no polling agent, YAML, or shell workflow is required.
 48. Review each running device's live CPU and memory trend against its immutable limit; Studio retains at most 30 distinct samples in the active browser tab and labels current normal, elevated, or critical pressure without persisting monitoring data.
 49. Inspect every point-to-point link from the operational topology with one action; Studio atomically requires all linked devices to be ready and renders both endpoints' live RX/TX counters and faults without appliance or Kubernetes CLI access.
+50. Refresh the topology traffic snapshot to calculate per-endpoint RX/TX packet and byte rates; Studio keeps only the prior browser-local sample, rejects negative counter deltas after resets, and performs no background server polling.
 
 Containerlab/Kubernetes YAML is an internal adapter concern. It may be inspected by platform administrators for troubleshooting, but it is not part of the normal user workflow.
 
