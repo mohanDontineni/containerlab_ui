@@ -20,6 +20,7 @@ from rest_framework.response import Response
 from rest_framework.parsers import BaseParser,FormParser,JSONParser,MultiPartParser
 from rest_framework.views import exception_handler as drf_exception_handler
 from . import models, serializers
+from .access_revocation import revoke_project_access
 from .permissions import ProjectAccess, project_role
 from .runtime import ClabernetesAdapter
 from .tasks import execute_operation, execute_staged_start, reconcile_deployment
@@ -270,10 +271,14 @@ class ProjectViewSet(viewsets.ModelViewSet):
                 usage=project.memberships.count()+1;limit=normalized_quotas(project)["max_members"]
                 if usage>=limit: return Response(quota_exceeded("members",limit,usage),status=409)
                 membership=models.ProjectMembership.objects.create(project=project,user=user,role=role);created=True
-            else: membership.role=role;membership.save(update_fields=["role","updated_at"]);created=False
+            else:
+                previous=membership.role;membership.role=role;membership.save(update_fields=["role","updated_at"]);created=False
+                revocation=revoke_project_access(project,user,reason="project_role_downgraded") if previous in (models.ProjectMembership.Role.ADMIN,models.ProjectMembership.Role.EDITOR) and role==models.ProjectMembership.Role.VIEWER else {"revoked_consoles":0,"released_edit_leases":0}
         models.AuditEvent.objects.create(actor=request.user,project=project,action="project.member_added" if created else "project.member_role_changed",
-            target_type="ProjectMembership",target_id=membership.id,correlation_id=getattr(request,"correlation_id",""),metadata={"username":user.username,"role":role})
-        return Response(serializers.MembershipSerializer(membership).data,status=201 if created else 200)
+            target_type="ProjectMembership",target_id=membership.id,correlation_id=getattr(request,"correlation_id",""),metadata={"username":user.username,"role":role,**({} if created else revocation)})
+        data=serializers.MembershipSerializer(membership).data
+        if not created:data["access_revocation"]=revocation
+        return Response(data,status=201 if created else 200)
 
 class MembershipViewSet(viewsets.ModelViewSet):
     serializer_class=serializers.MembershipSerializer
@@ -282,20 +287,38 @@ class MembershipViewSet(viewsets.ModelViewSet):
     def _require_admin(self,membership):
         if project_role(self.request.user,membership.project)!=models.ProjectMembership.Role.ADMIN:
             from rest_framework.exceptions import PermissionDenied; raise PermissionDenied()
+    @action(detail=True,methods=["get"],url_path="access-impact")
+    def access_impact(self,request,*args,**kwargs):
+        membership=self.get_object();self._require_admin(membership);now=timezone.now()
+        active_consoles=models.ConsoleSession.objects.filter(device__deployment__revision__lab__project=membership.project,
+            user=membership.user,revoked_at__isnull=True,expires_at__gt=now).count()
+        editing_leases=models.Lab.objects.filter(project=membership.project,edit_lock_owner=membership.user,
+            edit_lock_expires_at__gt=now).count()
+        return Response({"membership_id":str(membership.id),"username":membership.user.username,"current_role":membership.role,
+            "active_consoles":active_consoles,"editing_leases":editing_leases,
+            "impact":["Close active device consoles immediately.","Release active topology editing leases so another editor can continue.",
+                "Preserve the member account, saved labs, revisions, runtime history, and audit evidence."]})
     def partial_update(self,request,*args,**kwargs):
         membership=self.get_object(); self._require_admin(membership)
         role=str(request.data.get("role",""))
         if role not in models.ProjectMembership.Role.values: return Response({"error":{"code":"invalid_project_role"}},status=422)
-        previous=membership.role; membership.role=role; membership.save(update_fields=["role","updated_at"])
-        models.AuditEvent.objects.create(actor=request.user,project=membership.project,action="project.member_role_changed",target_type="ProjectMembership",
-            target_id=membership.id,correlation_id=getattr(request,"correlation_id",""),metadata={"username":membership.user.username,"previous_role":previous,"role":role})
-        return Response(self.get_serializer(membership).data)
+        with transaction.atomic():
+            membership=models.ProjectMembership.objects.select_for_update().select_related("project","user").get(pk=membership.pk)
+            previous=membership.role; membership.role=role; membership.save(update_fields=["role","updated_at"])
+            revocation=revoke_project_access(membership.project,membership.user,reason="project_role_downgraded") if previous in (models.ProjectMembership.Role.ADMIN,models.ProjectMembership.Role.EDITOR) and role==models.ProjectMembership.Role.VIEWER else {"revoked_consoles":0,"released_edit_leases":0}
+            models.AuditEvent.objects.create(actor=request.user,project=membership.project,action="project.member_role_changed",target_type="ProjectMembership",
+                target_id=membership.id,correlation_id=getattr(request,"correlation_id",""),metadata={"username":membership.user.username,"previous_role":previous,"role":role,**revocation})
+        data=self.get_serializer(membership).data;data["access_revocation"]=revocation
+        return Response(data)
     def destroy(self,request,*args,**kwargs):
         membership=self.get_object(); self._require_admin(membership)
-        metadata={"username":membership.user.username,"role":membership.role}; project=membership.project; target_id=membership.id
-        membership.delete()
-        models.AuditEvent.objects.create(actor=request.user,project=project,action="project.member_removed",target_type="ProjectMembership",
-            target_id=target_id,correlation_id=getattr(request,"correlation_id",""),metadata=metadata)
+        with transaction.atomic():
+            membership=models.ProjectMembership.objects.select_for_update().select_related("project","user").get(pk=membership.pk)
+            project=membership.project;target_id=membership.id
+            revocation=revoke_project_access(project,membership.user,reason="project_membership_removed")
+            metadata={"username":membership.user.username,"role":membership.role,**revocation};membership.delete()
+            models.AuditEvent.objects.create(actor=request.user,project=project,action="project.member_removed",target_type="ProjectMembership",
+                target_id=target_id,correlation_id=getattr(request,"correlation_id",""),metadata=metadata)
         return Response(status=204)
 
 class LabViewSet(viewsets.ModelViewSet):

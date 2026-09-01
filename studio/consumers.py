@@ -26,7 +26,10 @@ class ConsoleConsumer(AsyncJsonWebsocketConsumer):
             await self.close(code=4403)
             return
         self.console = session
+        self.console_group = f"console.{session['id']}"
+        await self.channel_layer.group_add(self.console_group, self.channel_name)
         self.last_activity = asyncio.get_running_loop().time()
+        self.next_authorization_check = self.last_activity
         await self.accept()
         await self.send_json({"type": "status", "state": "connecting", "readOnly": session["read_only"]})
         try:
@@ -69,6 +72,23 @@ class ConsoleConsumer(AsyncJsonWebsocketConsumer):
             "kind": session.device.lab_node.template_version.containerlab_kind,
         }
 
+    @database_sync_to_async
+    def session_active(self):
+        session = ConsoleSession.objects.select_related(
+            "user", "device__deployment__revision__lab__project"
+        ).filter(
+            id=self.console["id"],
+            expires_at__gt=timezone.now(),
+            revoked_at__isnull=True,
+        ).first()
+        if not session:
+            return False
+        project = session.device.deployment.revision.lab.project
+        if project.owner_id == session.user_id or session.user.is_superuser:
+            return True
+        role = project.memberships.filter(user_id=session.user_id).values_list("role", flat=True).first()
+        return bool(role and (session.read_only or role in ("administrator", "editor")))
+
     @staticmethod
     def open_transport(session):
         config.load_incluster_config()
@@ -80,7 +100,14 @@ class ConsoleConsumer(AsyncJsonWebsocketConsumer):
     async def pump(self):
         try:
             while self.transport and self.transport.is_open():
-                if asyncio.get_running_loop().time() - self.last_activity > IDLE_SECONDS:
+                current = asyncio.get_running_loop().time()
+                if current >= self.next_authorization_check:
+                    self.next_authorization_check = current + 2
+                    if not await self.session_active():
+                        await self.send_json({"type": "status", "state": "access-revoked"})
+                        await self.close(code=4403)
+                        return
+                if current - self.last_activity > IDLE_SECONDS:
                     await self.send_json({"type": "status", "state": "idle-timeout"})
                     await self.close(code=4408)
                     return
@@ -123,8 +150,15 @@ class ConsoleConsumer(AsyncJsonWebsocketConsumer):
         if self.transport:
             with suppress(Exception):
                 await asyncio.to_thread(self.transport.close)
+        if getattr(self, "console_group", None):
+            await self.channel_layer.group_discard(self.console_group, self.channel_name)
         if getattr(self, "console", None):
             await self.record_event("console.disconnected")
+
+    async def access_revoked(self, event):
+        with suppress(Exception):
+            await self.send_json({"type": "status", "state": "access-revoked", "reason": event.get("reason", "project_access_changed")})
+        await self.close(code=4403)
 
     @database_sync_to_async
     def record_event(self, action):

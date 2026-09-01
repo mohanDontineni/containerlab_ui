@@ -152,6 +152,50 @@ def test_project_member_lifecycle_is_admin_only_and_audited():
         "project.member_added","project.member_role_changed","project.member_removed"]
 
 @pytest.mark.django_db
+def test_membership_downgrade_and_removal_revoke_live_project_access(monkeypatch,django_capture_on_commit_callbacks):
+    notifications=[]
+    monkeypatch.setattr("studio.access_revocation._notify_console_revoked",lambda ids,reason:notifications.append((list(ids),reason)))
+    owner=User.objects.create_user("revocation-owner",password="long-enough-password")
+    editor=User.objects.create_user("revocation-editor",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="revocation-project")
+    membership=ProjectMembership.objects.create(project=project,user=editor,role="editor")
+    lab=Lab.objects.create(project=project,name="revocation-lab",edit_lock_owner=editor,
+        edit_lock_token_hash="a"*64,edit_lock_expires_at=timezone.now()+timezone.timedelta(minutes=5))
+    revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="a"*64,immutable=True)
+    template=DeviceTemplateVersion.objects.filter(containerlab_kind="linux").first()
+    node=LabNode.objects.create(revision=revision,name="client",template_version=template)
+    deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-revocation",
+        runtime_version="0.8.0",observed_state="running")
+    device=DeviceInstance.objects.create(deployment=deployment,lab_node=node,observed_readiness="ready",runtime_resources={"pod":"client-pod"})
+    first=ConsoleSession.objects.create(device=device,user=editor,token_hash="b"*64,
+        expires_at=timezone.now()+timezone.timedelta(minutes=10),read_only=False)
+    client=APIClient();client.force_authenticate(owner)
+    preview=client.get(f"/api/v1/memberships/{membership.id}/access-impact/")
+    assert preview.status_code==200 and preview.data["active_consoles"]==1 and preview.data["editing_leases"]==1
+    with django_capture_on_commit_callbacks(execute=True):
+        changed=client.patch(f"/api/v1/memberships/{membership.id}/",{"role":"viewer"},format="json")
+    assert changed.status_code==200 and changed.data["access_revocation"]=={"revoked_consoles":1,"released_edit_leases":1}
+    first.refresh_from_db();lab.refresh_from_db()
+    assert first.revoked_at and not lab.edit_lock_owner_id and not lab.edit_lock_token_hash and not lab.edit_lock_expires_at
+    assert notifications==[([first.id],"project_role_downgraded")]
+    event=AuditEvent.objects.get(action="project.member_role_changed",target_id=membership.id)
+    assert event.metadata["revoked_consoles"]==1 and event.metadata["released_edit_leases"]==1
+
+    membership.role="editor";membership.save(update_fields=["role","updated_at"])
+    lab.edit_lock_owner=editor;lab.edit_lock_token_hash="c"*64;lab.edit_lock_expires_at=timezone.now()+timezone.timedelta(minutes=5)
+    lab.save(update_fields=["edit_lock_owner","edit_lock_token_hash","edit_lock_expires_at","updated_at"])
+    second=ConsoleSession.objects.create(device=device,user=editor,token_hash="d"*64,
+        expires_at=timezone.now()+timezone.timedelta(minutes=10),read_only=False)
+    with django_capture_on_commit_callbacks(execute=True):
+        removed=client.delete(f"/api/v1/memberships/{membership.id}/")
+    assert removed.status_code==204
+    second.refresh_from_db();lab.refresh_from_db()
+    assert second.revoked_at and not lab.edit_lock_owner_id
+    assert notifications[-1]==([second.id],"project_membership_removed")
+    removed_event=AuditEvent.objects.get(action="project.member_removed",target_id=membership.id)
+    assert removed_event.metadata["revoked_consoles"]==1 and removed_event.metadata["released_edit_leases"]==1
+
+@pytest.mark.django_db
 def test_project_membership_prevents_owner_duplication_and_cross_project_mutation():
     owner=User.objects.create_user("protected-owner",password="long-enough-password")
     other_owner=User.objects.create_user("other-owner",password="long-enough-password")
