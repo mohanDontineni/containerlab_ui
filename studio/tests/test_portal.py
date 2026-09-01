@@ -6,7 +6,7 @@ from django.db.models import F
 from django.test import Client
 from django.utils import timezone
 from studio.configurations import decrypt_secret
-from studio.models import AuditEvent, DeviceTemplateVersion, ImageArtifact, ImageCredentialReference, Lab, LabDeployment, LabFolder, LabLink, LabNode, LabRevision, Project, ProjectMembership, PublishedImage, User
+from studio.models import AuditEvent, DeviceTemplateVersion, ImageArtifact, ImageCredentialReference, Lab, LabDeployment, LabFolder, LabLink, LabNode, LabRevision, OperationJob, Project, ProjectMembership, PublishedImage, User
 
 @pytest.mark.django_db
 def test_dashboard_reports_expiring_worker_verified_platform_capabilities(client,monkeypatch):
@@ -17,6 +17,31 @@ def test_dashboard_reports_expiring_worker_verified_platform_capabilities(client
     response=client.get("/");html=response.content.decode()
     assert response.status_code==200 and "Metrics API · worker verified" in html and "Runtime v0.8.0 · reconciled" in html
     assert html.count('class="healthy">Ready</b>')==4
+
+@pytest.mark.django_db
+def test_dashboard_exposes_complete_state_quota_and_actionable_failure_evidence(client,monkeypatch):
+    user=User.objects.create_user("dashboard-operator",password="long-enough-password")
+    project=Project.objects.create(owner=user,name="Capacity lab",quotas={"max_labs":7,"max_running_deployments":3,
+        "max_members":9,"max_image_bytes":2*1024**3,"max_nodes_per_lab":12})
+    lab=Lab.objects.create(project=project,name="Failure topology")
+    revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="a"*64,immutable=True)
+    running=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-dashboard-running",
+        runtime_version="0.8.0",observed_state="running")
+    LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-dashboard-stopped",
+        runtime_version="0.8.0",observed_state="stopped")
+    LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-dashboard-degraded",
+        runtime_version="0.8.0",observed_state="degraded")
+    job=OperationJob.objects.create(owner=user,deployment=running,operation_type="ping",target_id=uuid.uuid4(),
+        idempotency_key="dashboard-failure",state="failed",progress=100,
+        error_details={"type":"CapabilityError","message":"The device launcher pod is not ready"})
+    monkeypatch.setattr("studio.views.cache.get",lambda key:{"available":False,"checked_at":"2026-09-01T10:00:00Z"})
+    client.force_login(user);response=client.get("/");html=response.content.decode()
+    assert response.status_code==200
+    assert "1 running" in html and "1 stopped or removed" in html and "1 degraded" in html
+    assert "Labs <b>1/7</b>" in html and "Active runtimes <b>2/3</b>" in html and "Largest draft <b>0/12 nodes</b>" in html
+    assert "CapabilityError" in html and "The device launcher pod is not ready" in html
+    assert f'href="/deployments/{running.id}/"' in html and "Live CPU and memory usage: <b>Unavailable</b>" in html
+    assert str(job.id) not in html
 
 @pytest.mark.django_db
 def test_topology_edit_lease_blocks_second_editor_and_expires(client):
