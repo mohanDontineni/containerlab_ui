@@ -477,3 +477,15 @@ The link inspector now treats administrative state as part of the saved visual t
 ![Applied saved link shutdown](90-saved-link-shutdown-runtime.png)
 
 Deployment seeds the saved condition and applies it only after both Clabernetes launchers become ready. Reconciliation records the endpoint pod identities so normal polling is idempotent, then automatically replays the condition if either launcher is replaced. Firefox verified the new isolated `clab-c870a626963b4f638dc0` runtime reached Running with both routers ready, the operational map rendered the impaired red dashed edge, the link control reported `Link disabled`, and the native r1-to-`10.0.12.2` diagnostic returned 3 transmitted, 0 received, and 100% packet loss. Exact release `54bdad9` ran on web, worker, scheduler, and console; the pre-existing revision-3 production runtime remained unchanged.
+
+## 91 — Guarded live membership revocation
+
+![Guarded live membership revocation](91-live-membership-revocation-preview.png)
+
+Project administrators receive a server-authoritative impact preview before an editor is demoted to viewer or removed. The preview counts that member's unexpired project-scoped device consoles and active topology editing leases, explains exactly what will terminate, and confirms that accounts, labs, revisions, runtimes, and audit history remain preserved. Firefox kept one writable r1 console and the production BGP topology lease open as `revocation-acceptance`; the guarded dialog reported exactly one console and one lease before confirmation.
+
+## 92 — Immediate live console revocation
+
+![Immediate live console revocation](92-live-console-access-revoked.png)
+
+Confirmation row-locks the membership, changes or removes the role, marks affected console sessions revoked, releases every owned project topology lease, records exact counts in the audit event, and emits a post-commit Channels signal to each connected WebSocket. Every console also revalidates authorization every two seconds, so a transient channel-layer failure cannot preserve access. Firefox changed the disposable editor to Viewer and the real FRR r1 terminal immediately printed `[access-revoked]`; the post-action API reported viewer role, zero active consoles, and zero editing leases. The disposable membership was then removed and its account disabled through Studio's guarded GUI. Exact release `e76cd67` ran on all four services while both production routers remained Running/Ready.
