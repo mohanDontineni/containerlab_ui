@@ -1636,6 +1636,28 @@ def test_reconciliation_drops_manual_lifecycle_after_launcher_replacement(monkey
     assert device.observed_readiness=="ready" and "manual_lifecycle" not in device.runtime_resources
 
 @pytest.mark.django_db
+def test_reconciliation_applies_saved_link_shutdown_once_and_reapplies_after_launcher_replacement(monkeypatch):
+    owner=User.objects.create_user("reconcile-link",password="long-enough-password");project=Project.objects.create(owner=owner,name="reconcile-link-project")
+    lab=Lab.objects.create(project=project,name="reconcile-link-lab");revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="7"*64,immutable=True)
+    template=DeviceTemplateVersion.objects.filter(containerlab_kind="linux").first()
+    a=LabNode.objects.create(revision=revision,name="a",template_version=template);b=LabNode.objects.create(revision=revision,name="b",template_version=template)
+    ia=LabInterface.objects.create(node=a,name="eth1");ib=LabInterface.objects.create(node=b,name="eth1")
+    link=LabLink.objects.create(revision=revision,endpoint_a=ia,endpoint_b=ib,properties={"adminState":"disabled"})
+    condition={"active":True,"disabled":True,"latency_ms":0,"jitter_ms":0,"loss_percent":0.0,"corruption_percent":0.0,"rate_kbps":0}
+    deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-reconcile-link",runtime_version="0.8.0",observed_state="running",
+        resource_identities={"link_conditions":{str(link.id):condition},"link_condition_applied_to":{str(link.id):["old-a","old-b"]}})
+    applied=[]
+    class Adapter:
+        def get_observed_state(self,_):return {"topologyReady":True}
+        def observe_devices(self,_):return [{"name":name,"node_uid":f"node-{name}","readiness":"ready","pod":f"{name}-pod","pod_uid":f"new-{name}","worker":"worker","pod_phase":"Running","appliance_running":True,"appliance_paused":False} for name in ("a","b")]
+        def set_link_condition(self,received_deployment,received_link,received_condition):applied.append((received_link.id,received_condition));return {"condition":received_condition}
+    monkeypatch.setattr("studio.tasks.ClabernetesAdapter",Adapter)
+    assert reconcile_deployment.run(str(deployment.id))==LabDeployment.State.RUNNING
+    deployment.refresh_from_db();assert applied==[(link.id,condition)]
+    assert deployment.resource_identities["link_condition_applied_to"][str(link.id)]==["new-a","new-b"]
+    assert reconcile_deployment.run(str(deployment.id))==LabDeployment.State.RUNNING and len(applied)==1
+
+@pytest.mark.django_db
 def test_reconciliation_keeps_topology_deploying_until_appliance_container_runs(monkeypatch):
     owner=User.objects.create_user("reconcile-appliance",password="long-enough-password")
     project=Project.objects.create(owner=owner,name="appliance-project");lab=Lab.objects.create(project=project,name="appliance-lab")

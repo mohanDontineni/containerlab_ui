@@ -305,6 +305,7 @@ function Workspace() {
             type: "smoothstep",
             markerEnd: { type: MarkerType.ArrowClosed },
             data: { properties: l.properties },
+            style: l.properties?.adminState==="disabled"?{stroke:"#e16878",strokeDasharray:"6 6"}:undefined,
           })),
         );
         setAnnotations(Array.isArray(doc.annotations)?doc.annotations:[]);
@@ -1116,10 +1117,13 @@ function Workspace() {
               </div>
               <label>
                 Link state
-                <select>
-                  <option>Enabled</option>
-                  <option disabled>Disabled (runtime unsupported)</option>
+                <select value={String((selectedEdge.data?.properties as Record<string,unknown>|undefined)?.adminState||"enabled")} onChange={(event)=>{
+                  snapshot();const adminState=event.target.value;setEdges(current=>current.map(edge=>edge.id===selectedEdge.id?{...edge,data:{...edge.data,properties:adminState==="disabled"?{adminState:"disabled"}:{}},style:adminState==="disabled"?{stroke:"#e16878",strokeDasharray:"6 6"}:undefined}:edge));setDirty(true)
+                }}>
+                  <option value="enabled">Enabled</option>
+                  <option value="disabled">Shut down on deployment</option>
                 </select>
+                <small className="field-help">The saved shutdown is applied after both endpoints become ready and restored after launcher replacement.</small>
               </label>
               <button className="danger" onClick={removeSelected}>
                 Remove link

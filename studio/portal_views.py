@@ -28,6 +28,7 @@ from .configurations import decrypt_configuration, encrypt_configuration
 from .quotas import normalized_quotas,project_usage,quota_exceeded
 from .topology_annotations import normalize_legacy_topology_annotations,validate_topology_annotations
 from .edit_leases import acquire as acquire_edit_lease, conflict_payload as edit_lease_conflict, is_active as edit_lease_active, release as release_edit_lease, status_payload as edit_lease_status, valid_token as valid_edit_lease
+from .link_conditions import normalize_link_properties
 
 def visible_projects(user):
     return Project.objects.filter(Q(owner=user) | Q(memberships__user=user),deleted_at__isnull=True).distinct()
@@ -346,6 +347,11 @@ def topology_document(request, lab_id):
     node_limit=normalized_quotas(lab.project)["max_nodes_per_lab"]
     if len(payload.get("nodes", []))>node_limit: return JsonResponse(quota_exceeded("nodes_per_lab",node_limit,0,len(payload.get("nodes",[]))),status=409)
     if len(payload.get("links", [])) > 1000: return JsonResponse({"error": "Topology exceeds workspace limits"}, status=422)
+    try:
+        for link in payload.get("links", []):
+            if not isinstance(link,dict): raise ValueError("Every link must be an object")
+            link["properties"]=normalize_link_properties(link.get("properties",{}))
+    except ValueError as exc: return JsonResponse({"error":str(exc)},status=422)
     names = [str(node.get("name", "")).strip()[:63] for node in payload.get("nodes", []) if isinstance(node, dict)]
     if len(names) != len(payload.get("nodes", [])) or any(not name for name in names) or len(names) != len(set(names)):
         return JsonResponse({"error": "Every node needs a unique name"}, status=422)
@@ -414,7 +420,7 @@ def topology_document(request, lab_id):
         for data in payload.get("links", []):
             a=(data["sourceNode"],data["sourceInterface"]); b=(data["targetNode"],data["targetInterface"])
             if a in used or b in used or a not in interface_map or b not in interface_map: transaction.set_rollback(True); return JsonResponse({"error": "A link contains an invalid or already-used interface"}, status=422)
-            used.update((a,b)); LabLink.objects.create(id=uuid.UUID(data["id"]), revision=revision, endpoint_a=interface_map[a], endpoint_b=interface_map[b], label=data.get("label", "")[:120], properties=data.get("properties", {}))
+            used.update((a,b)); LabLink.objects.create(id=uuid.UUID(data["id"]), revision=revision, endpoint_a=interface_map[a], endpoint_b=interface_map[b], label=data.get("label", "")[:120], properties=data["properties"])
         AuditEvent.objects.create(actor=request.user,project=lab.project,action="lab.topology_saved",target_type="LabRevision",target_id=revision.id,
             correlation_id=getattr(request,"correlation_id",""),metadata={"lab":str(lab.id),"revision_number":revision.revision_number,
                 "edit_version":revision.edit_version,"topology_checksum":revision.topology_checksum,"node_count":len(node_map),

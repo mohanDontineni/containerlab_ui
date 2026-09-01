@@ -10,6 +10,7 @@ from rest_framework.exceptions import ParseError
 from .configurations import decrypt_configuration, encrypt_configuration
 from .models import (ConfigurationVersion, DeviceTemplateVersion, LabInterface,
                      LabLink, LabNode, LabRevision, PublishedImage)
+from .link_conditions import normalize_link_properties
 from .topology_annotations import normalize_legacy_topology_annotations
 
 BUNDLE_FORMAT = "io.containerlab.studio.lab"
@@ -207,8 +208,10 @@ def import_lab_bundle(lab, user, raw):
         if a == b or a in used or b in used or a not in interface_map or b not in interface_map:
             raise BundleError("A link contains an invalid or reused interface")
         used.update((a, b))
+        try: properties=normalize_link_properties(item.get("properties",{}))
+        except ValueError as exc: raise BundleError(str(exc)) from exc
         LabLink.objects.create(id=uuid.uuid4(), revision=revision, endpoint_a=interface_map[a], endpoint_b=interface_map[b],
-                               label=str(item.get("label", ""))[:120], properties=item.get("properties") if isinstance(item.get("properties"), dict) else {})
+                               label=str(item.get("label", ""))[:120], properties=properties)
     previous = lab.current_draft
     lab.current_draft = revision
     lab.save(update_fields=["current_draft", "updated_at"])

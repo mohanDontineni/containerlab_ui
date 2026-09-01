@@ -13,6 +13,7 @@ from django.utils import timezone
 from .configurations import encrypt_configuration
 from .models import AuditEvent, CaptureSession, ConfigurationVersion, ConsoleSession, DeploymentSchedule, DeviceInstance, ImageArtifact, ImageBuild, LabArtifact, LabDeployment, LabLink, LabNode, OperationJob, Project, PublishedImage
 from .runtime import ClabernetesAdapter
+from .link_conditions import initial_link_conditions, runtime_endpoint_signature
 from .uploads import cleanup_stale_uploads
 
 def publish_platform_health(key,payload):
@@ -127,9 +128,14 @@ def execute_operation(self,job_id):
             result=adapter.set_link_condition(job.deployment,link,condition)
             deployment=job.deployment
             conditions=dict(deployment.resource_identities.get("link_conditions",{}))
-            if condition.get("active"): conditions[str(link.id)]=condition
-            else: conditions.pop(str(link.id),None)
-            deployment.resource_identities={**deployment.resource_identities,"link_conditions":conditions}
+            applied=dict(deployment.resource_identities.get("link_condition_applied_to",{}))
+            if condition.get("active"):
+                conditions[str(link.id)]=condition
+                signature=runtime_endpoint_signature(deployment,link)
+                if signature:applied[str(link.id)]=signature
+            else:
+                conditions.pop(str(link.id),None);applied.pop(str(link.id),None)
+            deployment.resource_identities={**deployment.resource_identities,"link_conditions":conditions,"link_condition_applied_to":applied}
             deployment.save(update_fields=["resource_identities","updated_at"])
         elif job.operation_type in device_operations:
             device=DeviceInstance.objects.select_related("lab_node").get(pk=job.target_id,deployment=job.deployment)
@@ -166,8 +172,10 @@ def execute_operation(self,job_id):
         deployment=job.deployment
         if job.operation_type in ("deploy_lab","redeploy_lab"):
             deployment.observed_state=LabDeployment.State.DEPLOYING
-            deployment.resource_identities={"topology":{"name":"topology","namespace":deployment.namespace},
-                "last_redeploy_at":timezone.now().isoformat()} if job.operation_type=="redeploy_lab" else {"topology":{"name":"topology","namespace":deployment.namespace}}
+            identities={"topology":{"name":"topology","namespace":deployment.namespace},
+                "link_conditions":initial_link_conditions(deployment.revision),"link_condition_applied_to":{}}
+            if job.operation_type=="redeploy_lab":identities["last_redeploy_at"]=timezone.now().isoformat()
+            deployment.resource_identities=identities
         elif job.operation_type=="stop_lab":
             deployment.observed_state=LabDeployment.State.STOPPED
         elif job.operation_type=="delete_runtime":
@@ -301,6 +309,16 @@ def reconcile_deployment(self,deployment_id):
         if observed==LabDeployment.State.RUNNING and waiting:
             deployment.observed_state=observed=LabDeployment.State.DEPLOYING
             deployment.error_details={"waiting_for_devices":waiting}
+        conditions=deployment.resource_identities.get("link_conditions",{})
+        applied=dict(deployment.resource_identities.get("link_condition_applied_to",{}))
+        if conditions:
+            links=deployment.revision.links.filter(id__in=conditions).select_related("endpoint_a__node","endpoint_b__node")
+            for link in links:
+                signature=runtime_endpoint_signature(deployment,link)
+                if signature and applied.get(str(link.id))!=signature:
+                    adapter.set_link_condition(deployment,link,conditions[str(link.id)])
+                    applied[str(link.id)]=signature
+            deployment.resource_identities={**deployment.resource_identities,"link_condition_applied_to":applied}
         deployment.save(update_fields=["observed_state","last_reconciliation","error_details","resource_identities","updated_at"])
         return observed
     except Exception as exc:
