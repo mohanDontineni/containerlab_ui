@@ -93,6 +93,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 | `81-data-plane-reachability-matrix.png` | Data-plane reachability matrix | Automatically discovers usable addresses on linked interfaces and verifies every ordered device pair with bounded one-packet probes, normalized loss and latency, and no address entry or CLI access. |
 | `82-durable-runtime-observation-recovery.png` | Durable observation recovery | Reloads the runtime page and restores the latest successful reachability and topology-traffic evidence with original completion times while requiring a fresh traffic-rate baseline. |
 | `83-network-health-evidence-export.png` | Network-health evidence export | Downloads the latest normalized traffic and reachability observations as CSV files in one ZIP with a machine-readable SHA-256 integrity manifest, without YAML or CLI access. |
+| `84-multi-device-split-console.png` | Multi-device split console | Opens authenticated consoles for two owned routers as closable tabs, displays both real shells side by side, and lets the operator reconnect or securely revoke each session independently. |
 
 ## No-YAML operating model
 
@@ -150,6 +151,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 51. Run the whole-topology reachability matrix to discover linked-interface addresses and test every ordered device pair; Studio preflights all devices, caps the matrix at 10 devices and 90 probes, and renders normalized reachability, loss, and latency without raw command output.
 52. Reload or revisit a runtime to recover its latest successful topology traffic and reachability evidence from durable jobs; Studio labels recovered timestamps and refuses to calculate rates from stale restored counters until a fresh baseline is collected.
 53. Export the latest durable topology traffic and reachability observations as one network-health ZIP; Studio includes normalized CSV files, member byte sizes and SHA-256 checksums, observation job identities and completion times, and no raw command output or YAML.
+54. Open multiple ready devices in one console workspace, switch among closable tabs, select a one- or two-pane layout, reconnect only the affected device, and close a tab to revoke its server-side session without exposing credentials or Kubernetes shells.
 
 Containerlab/Kubernetes YAML is an internal adapter concern. It may be inspected by platform administrators for troubleshooting, but it is not part of the normal user workflow.
 
