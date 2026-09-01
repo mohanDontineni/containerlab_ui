@@ -34,6 +34,16 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 | `22-jobs-events.png` | Jobs and audit events | Tracks asynchronous operation state, progress, failures, and audit history. |
 | `23-account-security.png` | Account and security | Updates profile/timezone or changes a password through the native product page. |
 | `24-api-explorer.png` | API explorer | Reviews the authenticated automation API that backs the same authorization and validation rules. |
+| `25-redeploy-preview.png` | Safe redeploy preview | Reviews compute replacement impact before explicitly recreating a stopped runtime. |
+| `26-device-runtime-logs.png` | Runtime logs | Reads bounded appliance or launcher logs without shell access. |
+| `27-backup-restore-preview.png` | Backup restore preview | Validates a native backup and reviews restore impact before confirmation. |
+| `28-configuration-compare.png` | Configuration comparison | Compares two encrypted immutable configuration versions. |
+| `29-configuration-restore-preview.png` | Configuration restore | Reviews the selected version before creating a new editable draft. |
+| `30-traceroute-diagnostic.png` | Traceroute diagnostic | Runs a bounded appliance traceroute from a selected device. |
+| `31-guarded-image-deletion.png` | Guarded image deletion | Reviews references and permits deletion only for an unused artifact. |
+| `32-guarded-lab-deletion.png` | Guarded lab deletion | Reviews runtime/history blockers before removing a lab-library entry. |
+| `33-guarded-project-retirement.png` | Guarded project retirement | Reviews workspace dependencies before retiring a project. |
+| `34-guarded-runtime-removal.png` | Guarded runtime removal | Reviews compute and session impact before deleting the owned runtime namespace. |
 
 ## No-YAML operating model
 

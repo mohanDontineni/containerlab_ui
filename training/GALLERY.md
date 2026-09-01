@@ -199,3 +199,9 @@ The operator reviews revision and deployment history plus active runtime and job
 ![Guarded project retirement](33-guarded-project-retirement.png)
 
 An administrator reviews active labs, images, uploads, runtimes, and jobs before retiring a workspace. Retirement is available only when every active dependency is resolved; Studio then hides the project and its collaboration access, preserves all historical records, and permits the owner to reuse the project name.
+
+## 34 — Guarded runtime removal
+
+![Guarded runtime removal](34-guarded-runtime-removal.png)
+
+The operator reviews the runtime namespace, device, console, capture, artifact, and active-job impact before confirming permanent compute removal. Studio deletes only the deployment-owned Kubernetes namespace, revokes console access, clears live compute references, preserves the immutable lab revision and operation history, and prevents the removed runtime from being redeployed or refreshed.

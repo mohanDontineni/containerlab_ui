@@ -150,6 +150,17 @@ try {
 
   await page.goto(`${baseUrl}/deployments/`, { waitUntil: "networkidle" });
   const deploymentHrefs = await matchingHrefs('a[href^="/deployments/"]', /^\/deployments\/[0-9a-f-]+\/$/i);
+  const removalRow = page.locator(".catalog-row").filter({ hasText: /Runtime Removal Acceptance/i }).first();
+  if (await removalRow.count()) {
+    const removalHref = await removalRow.locator('a[href^="/deployments/"]').getAttribute("href");
+    if (removalHref) await capture("34-guarded-runtime-removal.png", removalHref, async (p) => {
+      await p.locator("#device-list article").first().waitFor({ timeout: 20_000 });
+      await p.locator("#remove-runtime").click();
+      const dialog = p.locator("#runtime-removal-dialog");
+      await dialog.waitFor();
+      return dialog;
+    });
+  }
   let deploymentHref = deploymentHrefs[0] || null;
   for (const candidate of deploymentHrefs) {
     await page.goto(`${baseUrl}${candidate}`, { waitUntil: "networkidle" });
