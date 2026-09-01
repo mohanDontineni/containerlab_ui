@@ -307,3 +307,9 @@ An authorized administrator filters immutable project activity by project, actio
 ![Scheduled lab lifecycle](51-scheduled-lab-lifecycle.png)
 
 The operator schedules one-time whole-lab start or stop actions directly on the runtime page. Pending actions can be cancelled with optimistic concurrency protection; due actions are rechecked against current runtime eligibility, converted into standard idempotent operation jobs, and retained as dispatched, cancelled, or skipped history. Firefox created and cancelled a future stop, dispatched a scheduled start through Celery Beat, followed its linked job to success, and restored the acceptance lab to its original stopped state with no pending test actions.
+
+## 52 — Dependency-aware staged device start
+
+![Dependency-aware staged device start](52-staged-device-start.png)
+
+The operator selects stopped devices, opens the guarded staged-start preview, arranges the exact dependency order with accessible controls, and chooses a bounded 0–60 second interval. Studio rechecks project role, current device state, active operations, order uniqueness, optimistic versions, the 20-device limit, and the five-minute total bound before creating one idempotent parent job. Each start is a separately persisted Celery step rather than a sleeping worker; progress, heartbeat, timestamps, failures, and completion remain durable. Firefox started production BGP routers in `r2 → r1` order 8.213 seconds apart, returned both replacement launchers to ready, and verified routed reachability with 3/3 packets and 0% loss.

@@ -61,6 +61,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 | `49-navigable-lab-folder-browser.png` | Navigable lab folder browser | Opens nested folder levels with breadcrumbs, contextual creation actions, project-aware preselection, and a catalog scoped to the current folder. |
 | `50-native-security-audit-trail.png` | Native security audit trail | Filters real project activity by action, actor, target, correlation ID, and retention window, expands bounded metadata, and exports an authorized CSV. |
 | `51-scheduled-lab-lifecycle.png` | Scheduled lab lifecycle | Creates, cancels, and tracks one-time start or stop actions with linked asynchronous jobs and eligibility rechecks. |
+| `52-staged-device-start.png` | Dependency-aware staged start | Reorders stopped devices and applies a bounded interval while one durable job tracks the complete startup sequence. |
 
 ## No-YAML operating model
 
@@ -86,6 +87,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 19. Select two or more ready devices and review the reset-to-saved-revision impact before Studio discards ephemeral state, revokes consoles, and replaces each launcher.
 20. Select any two saved topology revisions and compare their structural changes before choosing whether to restore or deploy; configuration content remains encrypted.
 21. Schedule a one-time whole-lab start or stop from the runtime page, cancel it while pending, and follow the linked operation after dispatch.
+22. Select stopped devices, arrange their dependency order, choose a bounded interval, and follow one resumable staged-start job until every launcher is ready.
 
 Containerlab/Kubernetes YAML is an internal adapter concern. It may be inspected by platform administrators for troubleshooting, but it is not part of the normal user workflow.
 
