@@ -265,3 +265,9 @@ A platform administrator creates a local operator with policy-validated temporar
 ![Guarded password recovery](44-guarded-password-recovery.png)
 
 A platform administrator searches for an operator and opens the credential-recovery preview entirely inside Studio. The dialog reports active browser and console sessions before accepting a policy-compliant temporary password. Confirmation revokes those sessions, invalidates the previous credential, and blocks every non-security page until the operator signs in with the temporary password and replaces it with a personal one. Firefox verified revocation, forced rotation, final access, and content-free audit events without opening Django administration.
+
+## 45 — Live device network state
+
+![Live device network state](45-live-device-network-state.png)
+
+The operator opens a ready FRR device's live network-state inspector directly from the runtime inventory. Studio executes only fixed, bounded `iproute2` queries inside the selected appliance and renders interface state, assigned IPv4/IPv6 addresses, forwarding routes, gateways, protocols, metrics, and neighbor reachability as searchable visual evidence. Firefox verified 3 real interfaces, 23 real routes—including the learned BGP route to `10.2.2.2`—and one data-plane neighbor with no console errors or failed application requests.
