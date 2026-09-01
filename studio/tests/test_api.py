@@ -1,6 +1,9 @@
 import pytest
 import uuid
 import hashlib
+import io
+import json
+import zipfile
 from pathlib import Path
 from django.conf import settings
 from django.utils import timezone
@@ -1276,6 +1279,52 @@ def test_live_configuration_collection_is_operator_only_versioned_and_encrypted(
     assert history.status_code==200 and history.data==[{"id":str(collected.id),"name":collected.name,"version":1,
         "checksum":collected.checksum,"byte_size":29,"created_at":collected.created_at,"device":"r1","restorable":True,
         "download":job.result_payload["download"]}]
+
+@pytest.mark.django_db
+def test_configuration_archive_exports_latest_per_device_with_manifest_and_redacted_audit():
+    owner=User.objects.create_user("archive-owner",password="long-enough-password")
+    viewer=User.objects.create_user("archive-viewer",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="archive-project");ProjectMembership.objects.create(project=project,user=viewer,role="viewer")
+    lab=Lab.objects.create(project=project,name="Archive Lab");revision=LabRevision.objects.create(lab=lab,revision_number=7,topology_checksum="7"*64,immutable=True)
+    deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-archive",runtime_version="0.8.0",observed_state="running")
+    contents={"r1-old":"hostname r1-old\n","r1":"hostname r1\nrouter bgp 65001\n","r2":"hostname r2\nrouter bgp 65002\n"}
+    configurations={}
+    for index,(key,content) in enumerate(contents.items(),1):
+        device="r1" if key.startswith("r1") else "r2"
+        configuration=ConfigurationVersion.objects.create(project=project,name=f"archive/{key}",version=index,
+            encrypted_content=encrypt_configuration(content),checksum=hashlib.sha256(content.encode()).hexdigest(),created_by=owner)
+        configurations[key]=configuration
+        AuditEvent.objects.create(actor=owner,project=project,action="configuration.collected",target_type="ConfigurationVersion",
+            target_id=configuration.id,correlation_id="archive-test",occurred_at=timezone.now()+timezone.timedelta(seconds=index),
+            metadata={"deployment":str(deployment.id),"device":device,"version":index,"checksum":configuration.checksum,"byte_size":len(content.encode())})
+    endpoint=f"/api/v1/deployments/{deployment.id}/configurations/export/";client=APIClient();client.force_authenticate(viewer)
+    assert client.get(endpoint).status_code==403
+    client.force_authenticate(owner);response=client.get(endpoint)
+    assert response.status_code==200 and response["Content-Type"]=="application/zip"
+    assert response["Content-Disposition"]=='attachment; filename="archive-lab-revision-7-configurations.zip"'
+    assert response["Cache-Control"]=="no-store" and response["Pragma"]=="no-cache" and response["X-Content-Type-Options"]=="nosniff"
+    assert int(response["Content-Length"])==len(response.content)
+    assert response["X-Archive-SHA256"]==hashlib.sha256(response.content).hexdigest()
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        names=archive.namelist();manifest=json.loads(archive.read("manifest.json"))
+        assert len(names)==3 and names[-1]=="manifest.json"
+        assert [row["device"] for row in manifest["configurations"]]==["r1","r2"]
+        assert manifest["deployment_id"]==str(deployment.id) and manifest["revision"]==7 and manifest["lab"]=="Archive Lab"
+        exported={row["device"]:archive.read(row["filename"]).decode() for row in manifest["configurations"]}
+        assert exported=={"r1":contents["r1"],"r2":contents["r2"]} and contents["r1-old"] not in exported.values()
+        assert {row["checksum"] for row in manifest["configurations"]}=={configurations["r1"].checksum,configurations["r2"].checksum}
+    audit=AuditEvent.objects.get(action="configuration.archive_exported",target_id=deployment.id)
+    assert audit.metadata["device_count"]==2 and audit.metadata["archive_checksum"]==response["X-Archive-SHA256"]
+    assert "hostname" not in json.dumps(audit.metadata) and "content" not in audit.metadata
+
+@pytest.mark.django_db
+def test_configuration_archive_requires_collected_configuration():
+    owner=User.objects.create_user("empty-archive-owner",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="empty-archive-project");lab=Lab.objects.create(project=project,name="empty-archive-lab")
+    revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="8"*64,immutable=True)
+    deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-empty-archive",runtime_version="0.8.0")
+    client=APIClient();client.force_authenticate(owner);response=client.get(f"/api/v1/deployments/{deployment.id}/configurations/export/")
+    assert response.status_code==409 and response.data["error"]["code"]=="configuration_export_empty"
 
 @pytest.mark.django_db
 def test_configuration_compare_and_restore_creates_concurrency_safe_draft_without_touching_runtime():

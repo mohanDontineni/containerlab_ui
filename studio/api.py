@@ -3,6 +3,8 @@ import ipaddress
 import hashlib
 import json
 import difflib
+import io
+import zipfile
 from pathlib import Path
 from django.conf import settings
 from django.db import IntegrityError, transaction
@@ -1007,6 +1009,46 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
         response=HttpResponse(payload,content_type="text/plain; charset=utf-8")
         response["Content-Disposition"]=f'attachment; filename="{slugify(configuration.name)[:80] or "configuration"}-v{configuration.version}.txt"'
         response["Cache-Control"]="no-store";response["X-Content-Type-Options"]="nosniff"
+        return response
+
+    @action(detail=True,methods=["get"],url_path="configurations/export")
+    def export_configurations(self,request,pk=None):
+        deployment=self.get_object();self._require_operator(deployment)
+        events=models.AuditEvent.objects.filter(action="configuration.collected",project=deployment.revision.lab.project,
+            metadata__deployment=str(deployment.id)).order_by("-occurred_at")[:2000]
+        latest={}
+        for event in events:
+            device=str(event.metadata.get("device","")).strip()
+            if device and device not in latest: latest[device]=event
+            if len(latest)>200: return Response({"error":{"code":"configuration_export_limit","details":"A configuration export supports at most 200 devices."}},status=422)
+        if not latest: return Response({"error":{"code":"configuration_export_empty","details":"Collect at least one device configuration before exporting."}},status=409)
+        configurations={row.id:row for row in models.ConfigurationVersion.objects.filter(
+            id__in=[event.target_id for event in latest.values()],project=deployment.revision.lab.project)}
+        buffer=io.BytesIO();inventory=[];total=0
+        with zipfile.ZipFile(buffer,"w",compression=zipfile.ZIP_DEFLATED,compresslevel=6) as archive:
+            for device,event in sorted(latest.items()):
+                configuration=configurations.get(event.target_id)
+                if not configuration: return Response({"error":{"code":"configuration_export_incomplete","details":f"Collected configuration for {device} is unavailable."}},status=409)
+                payload=decrypt_configuration(configuration.encrypted_content).encode("utf-8")
+                if len(payload)>1024*1024: return Response({"error":{"code":"configuration_export_limit","details":f"{device} exceeds the 1 MiB configuration limit."}},status=422)
+                total+=len(payload)
+                if total>20*1024*1024: return Response({"error":{"code":"configuration_export_limit","details":"Configuration export exceeds the 20 MiB uncompressed limit."}},status=422)
+                filename=f"configurations/{slugify(device)[:64] or 'device'}-{configuration.id.hex[:8]}-v{configuration.version}.cfg"
+                archive.writestr(filename,payload)
+                inventory.append({"device":device,"filename":filename,"configuration_id":str(configuration.id),"version":configuration.version,
+                    "checksum":configuration.checksum,"bytes":len(payload),"collected_at":event.occurred_at.isoformat()})
+            manifest={"schema":1,"product":"containerlab-studio","lab":deployment.revision.lab.name,"deployment_id":str(deployment.id),
+                "revision":deployment.revision.revision_number,"exported_at":timezone.now().isoformat(),"configurations":inventory}
+            archive.writestr("manifest.json",json.dumps(manifest,indent=2,sort_keys=True)+"\n")
+        payload=buffer.getvalue();archive_checksum=hashlib.sha256(payload).hexdigest()
+        models.AuditEvent.objects.create(actor=request.user,project=deployment.revision.lab.project,action="configuration.archive_exported",
+            target_type="LabDeployment",target_id=deployment.id,correlation_id=getattr(request,"correlation_id",""),
+            metadata={"revision":deployment.revision.revision_number,"device_count":len(inventory),"configuration_ids":[row["configuration_id"] for row in inventory],
+                "configuration_checksums":[row["checksum"] for row in inventory],"archive_checksum":archive_checksum,"archive_bytes":len(payload)})
+        response=HttpResponse(payload,content_type="application/zip")
+        response["Content-Disposition"]=f'attachment; filename="{slugify(deployment.revision.lab.name)[:64] or "lab"}-revision-{deployment.revision.revision_number}-configurations.zip"'
+        response["Content-Length"]=str(len(payload));response["X-Archive-SHA256"]=archive_checksum
+        response["Cache-Control"]="no-store";response["Pragma"]="no-cache";response["X-Content-Type-Options"]="nosniff"
         return response
 
     @action(detail=True,methods=["post"],url_path="configuration-compare")
