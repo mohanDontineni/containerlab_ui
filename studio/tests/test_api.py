@@ -91,7 +91,7 @@ def test_deployment_schedules_are_authorized_bounded_cancellable_and_audited():
     cancel=f"/api/v1/deployments/{deployment.id}/schedules/{schedule.id}/cancel/"
     assert client.post(cancel,{},format="json").status_code==400
     stale=client.post(cancel,{},format="json",HTTP_X_EXPECTED_UPDATED_AT=timezone.now().isoformat());assert stale.status_code==409
-    cancelled=client.post(cancel,{},format="json",HTTP_X_EXPECTED_UPDATED_AT=schedule.updated_at.isoformat())
+    cancelled=client.post(cancel,{},format="json",HTTP_X_EXPECTED_UPDATED_AT=created.data["updated_at"])
     schedule.refresh_from_db();assert cancelled.status_code==200 and schedule.status=="cancelled" and schedule.cancelled_at
     assert AuditEvent.objects.filter(action="deployment.schedule_created",target_id=schedule.id).exists()
     assert AuditEvent.objects.filter(action="deployment.schedule_cancelled",target_id=schedule.id).exists()

@@ -999,10 +999,11 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
         except (TypeError,ValueError): return Response({"error":{"code":"schedule_not_found"}},status=404)
         expected=request.headers.get("X-Expected-Updated-At")
         if not expected: return Response({"error":{"code":"expected_updated_at_required"}},status=400)
+        expected_at=parse_datetime(expected)
         with transaction.atomic():
             schedule=models.DeploymentSchedule.objects.select_for_update().filter(pk=schedule_uuid,deployment=deployment).first()
             if not schedule: return Response({"error":{"code":"schedule_not_found"}},status=404)
-            if schedule.updated_at.isoformat()!=expected: return Response({"error":{"code":"schedule_changed","updated_at":schedule.updated_at.isoformat()}},status=409)
+            if not expected_at or timezone.is_naive(expected_at) or schedule.updated_at!=expected_at: return Response({"error":{"code":"schedule_changed","updated_at":schedule.updated_at.isoformat()}},status=409)
             if schedule.status!=models.DeploymentSchedule.Status.PENDING: return Response({"error":{"code":"schedule_not_pending","status":schedule.status}},status=409)
             schedule.status=models.DeploymentSchedule.Status.CANCELLED;schedule.cancelled_at=timezone.now();schedule.save(update_fields=["status","cancelled_at","updated_at"])
             models.AuditEvent.objects.create(actor=request.user,project=deployment.revision.lab.project,action="deployment.schedule_cancelled",target_type="DeploymentSchedule",target_id=schedule.id,correlation_id=getattr(request,"correlation_id",""),metadata={"action":schedule.action,"execute_at":schedule.execute_at.isoformat()})
