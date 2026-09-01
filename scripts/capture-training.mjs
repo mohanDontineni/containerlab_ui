@@ -88,6 +88,8 @@ try {
   const workspaceHrefs = await matchingHrefs('a[href*="/workspace/"]', /^\/labs\/[0-9a-f-]+\/workspace\/$/i);
   const acceptanceRow = page.locator(".catalog-row").filter({ hasText: /Backup Restore Acceptance/i }).first();
   const acceptanceHref = (await acceptanceRow.count()) ? await acceptanceRow.locator('a[href*="/workspace/"]').first().getAttribute("href") : null;
+  const canvasObjectsRow = page.locator(".catalog-row").filter({ hasText: /Canvas Objects Acceptance/i }).first();
+  const canvasObjectsHref = (await canvasObjectsRow.count()) ? await canvasObjectsRow.locator('a[href*="/workspace/"]').first().getAttribute("href") : null;
   let workspaceHref = workspaceHrefs[0] || null;
   for (const candidate of workspaceHrefs) {
     await page.goto(`${baseUrl}${candidate}`, { waitUntil: "networkidle" });
@@ -131,6 +133,13 @@ try {
       });
     }
   }
+  if (canvasObjectsHref) {
+    await capture("36-topology-canvas-objects.png", canvasObjectsHref, async (p) => {
+      const editor = p.frameLocator('iframe[title^="Topology workspace"]');
+      await editor.getByText("Draft loaded", { exact: true }).waitFor();
+      await editor.locator(".topology-annotation.note").first().click();
+    });
+  } else console.warn("36-topology-canvas-objects.png retained: Canvas Objects Acceptance fixture is unavailable");
 
   await capture("10-image-library.png", "/images/");
   await page.goto(`${baseUrl}/images/`, { waitUntil: "networkidle" });

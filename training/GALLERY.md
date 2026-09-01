@@ -211,3 +211,9 @@ The operator reviews the runtime namespace, device, console, capture, artifact, 
 ![Versioned device template management](35-versioned-device-template.png)
 
 A platform administrator manages the catalog identity, Containerlab kind, generated data interfaces, reserved management port, bounded compute resources, console mode, reviewed configuration preset, privilege requirement, and verification state without Django admin or YAML. Saving creates and activates a new immutable version; the history panel shows earlier versions that remain pinned by existing lab revisions.
+
+## 36 — Topology canvas notes and regions
+
+![Topology canvas objects](36-topology-canvas-objects.png)
+
+The designer adds, moves, resizes, colors, and layers notes and regions directly on the topology canvas. The inspector edits the selected object without YAML; the objects participate in undo/redo, autosave, checksums, native backup/restore, export, revision history, and deep lab cloning.

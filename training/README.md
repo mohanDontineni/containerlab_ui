@@ -45,6 +45,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 | `33-guarded-project-retirement.png` | Guarded project retirement | Reviews workspace dependencies before retiring a project. |
 | `34-guarded-runtime-removal.png` | Guarded runtime removal | Reviews compute and session impact before deleting the owned runtime namespace. |
 | `35-versioned-device-template.png` | Versioned device templates | Creates or activates a validated launch-profile version while preserving lab pins and history. |
+| `36-topology-canvas-objects.png` | Canvas notes and regions | Documents intent and groups devices with editable, styled objects that persist with the topology. |
 
 ## No-YAML operating model
 
@@ -57,6 +58,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 7. Operate the whole topology or individual devices from the runtime page.
 8. Use browser console, link conditions, bounded diagnostics, packet capture, and configuration collection from the same page.
 9. Use Save As and revision restore for change workflows. Backup/Restore downloads a product-native JSON bundle; YAML is never required.
+10. Add notes and colored regions directly on the canvas to document intent and visually organize larger topologies.
 
 Containerlab/Kubernetes YAML is an internal adapter concern. It may be inspected by platform administrators for troubleshooting, but it is not part of the normal user workflow.
 
