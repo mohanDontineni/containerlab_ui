@@ -13,6 +13,9 @@ restore_replicas() {
   [ "$quiesced" = true ] || return 0
   while read -r name replicas; do kubectl -n "$namespace" scale deployment "$name" --replicas="$replicas" >/dev/null; done < "$work/replicas.txt"
   quiesced=false
+  while read -r name replicas; do
+    [ "$replicas" = 0 ] || kubectl -n "$namespace" rollout status deployment/"$name" --timeout=180s >/dev/null
+  done < "$work/replicas.txt"
 }
 cleanup() {
   status=$?;trap - EXIT INT TERM;restore_replicas || true
