@@ -42,8 +42,8 @@ def test_traceroute_is_bounded_and_executes_inside_selected_appliance(monkeypatc
     except CapabilityError as exc: assert "bounds" in str(exc)
     else: raise AssertionError("must enforce traceroute bounds")
 
-def test_plan_uses_clabernetes_080_string_definition():
-    node=SimpleNamespace(name="r1",template_version=SimpleNamespace(containerlab_kind="linux"),published_image=SimpleNamespace(registry_digest="registry/alpine@sha256:abc"))
+def test_plan_uses_clabernetes_080_string_definition_and_real_template_resources():
+    node=SimpleNamespace(name="r1",template_version=SimpleNamespace(containerlab_kind="linux",resource_requirements={"cpu":"750m","memory":"768Mi"}),published_image=SimpleNamespace(registry_digest="registry/alpine@sha256:abc"))
     nodes=SimpleNamespace(select_related=lambda *_:[node])
     links=SimpleNamespace(select_related=lambda *_:[])
     revision=SimpleNamespace(nodes=nodes,links=links)
@@ -53,6 +53,16 @@ def test_plan_uses_clabernetes_080_string_definition():
     assert isinstance(definition,str)
     assert yaml.safe_load(definition)["topology"]["nodes"]["r1"]["image"].endswith("@sha256:abc")
     assert plan.manifest["spec"]["expose"]["disableExpose"] is True
+    assert plan.manifest["spec"]["deployment"]["resources"]=={"r1":{
+        "requests":{"cpu":"750m","memory":"768Mi"},"limits":{"cpu":"750m","memory":"768Mi"}}}
+
+def test_plan_omits_resource_policy_for_legacy_unbounded_template():
+    node=SimpleNamespace(name="legacy",template_version=SimpleNamespace(containerlab_kind="linux",resource_requirements={}),
+        published_image=SimpleNamespace(registry_digest="registry/alpine@sha256:abc"))
+    revision=SimpleNamespace(nodes=SimpleNamespace(select_related=lambda *_:[node]),links=SimpleNamespace(select_related=lambda *_:[]))
+    deployment=SimpleNamespace(id="12345678-0000-0000-0000-000000000000",namespace="lab-legacy",revision=revision)
+    plan=object.__new__(ClabernetesAdapter).plan_deployment(deployment)
+    assert "deployment" not in plan.manifest["spec"]
 
 def test_plan_materializes_supported_startup_configuration_without_embedding_secret_in_topology(monkeypatch):
     monkeypatch.setattr("studio.runtime.decrypt_configuration",lambda _:"router bgp 65001\n network 10.1.0.0/24\n")

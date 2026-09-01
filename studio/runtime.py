@@ -103,10 +103,17 @@ class ClabernetesAdapter:
         return {"reference":reference,"repository":repository,"archive_checksum":digest,"logs":logs[-12000:],"publication_mode":"node-containerd"}
     def plan_deployment(self,deployment):
         revision=deployment.revision
-        nodes={};config_maps=[];files_from_config_map={}
+        nodes={};config_maps=[];files_from_config_map={};resources={}
         for node in revision.nodes.select_related("template_version","published_image","startup_configuration"):
             definition={"kind":node.template_version.containerlab_kind,"image":node.published_image.registry_digest}
             profile=getattr(node.template_version,"launch_profile",{})
+            requirements=getattr(node.template_version,"resource_requirements",{}) or {}
+            cpu=requirements.get("cpu");memory=requirements.get("memory")
+            if cpu and memory:
+                # Clabernetes applies this node-name keyed map to the launcher pod.
+                # Keep requests below limits so Kubernetes can schedule honestly while
+                # preventing a lab device from exceeding its platform-approved profile.
+                resources[node.name]={"requests":{"cpu":cpu,"memory":memory},"limits":{"cpu":cpu,"memory":memory}}
             if getattr(node,"startup_configuration_id",None):
                 config_name=f"studio-startup-{node.id.hex[:20]}";launcher_path="/clabernetes/studio/startup.cfg"
                 data={"startup.cfg":decrypt_configuration(node.startup_configuration.encrypted_content)}
@@ -123,7 +130,10 @@ class ClabernetesAdapter:
         body={"apiVersion":f"{API_GROUP}/{API_VERSION}","kind":"Topology","metadata":{"name":"topology","namespace":deployment.namespace,
             "labels":{"app.kubernetes.io/managed-by":"containerlab-studio","studio.containerlab.io/deployment":str(deployment.id)}},
             "spec":{"definition":{"containerlab":definition},"naming":"prefixed","expose":{"disableExpose":True,"exposeType":"LoadBalancer"}}}
-        if files_from_config_map: body["spec"]["deployment"]={"filesFromConfigMap":files_from_config_map}
+        deployment_policy={}
+        if files_from_config_map: deployment_policy["filesFromConfigMap"]=files_from_config_map
+        if resources: deployment_policy["resources"]=resources
+        if deployment_policy: body["spec"]["deployment"]=deployment_policy
         return Plan(deployment.namespace,"topology",body,tuple(config_maps))
     def deploy_lab(self,deployment):
         errors=self.validate_topology(deployment.revision)
