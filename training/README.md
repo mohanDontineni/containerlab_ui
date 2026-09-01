@@ -62,6 +62,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 | `50-native-security-audit-trail.png` | Native security audit trail | Filters real project activity by action, actor, target, correlation ID, and retention window, expands bounded metadata, and exports an authorized CSV. |
 | `51-scheduled-lab-lifecycle.png` | Scheduled lab lifecycle | Creates, cancels, and tracks one-time start or stop actions with linked asynchronous jobs and eligibility rechecks. |
 | `52-staged-device-start.png` | Dependency-aware staged start | Reorders stopped devices and applies a bounded interval while one durable job tracks the complete startup sequence. |
+| `53-live-operational-topology.png` | Live operational topology | Renders saved node placement, link health, selected-device runtime facts, authorized actions, and direct console launch. |
 
 ## No-YAML operating model
 
@@ -88,6 +89,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 20. Select any two saved topology revisions and compare their structural changes before choosing whether to restore or deploy; configuration content remains encrypted.
 21. Schedule a one-time whole-lab start or stop from the runtime page, cancel it while pending, and follow the linked operation after dispatch.
 22. Select stopped devices, arrange their dependency order, choose a bounded interval, and follow one resumable staged-start job until every launcher is ready.
+23. Operate the running lab from its visual map: select devices, inspect live state, follow links to impairment controls, and open an authenticated console in context.
 
 Containerlab/Kubernetes YAML is an internal adapter concern. It may be inspected by platform administrators for troubleshooting, but it is not part of the normal user workflow.
 

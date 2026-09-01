@@ -313,3 +313,9 @@ The operator schedules one-time whole-lab start or stop actions directly on the 
 ![Dependency-aware staged device start](52-staged-device-start.png)
 
 The operator selects stopped devices, opens the guarded staged-start preview, arranges the exact dependency order with accessible controls, and chooses a bounded 0–60 second interval. Studio rechecks project role, current device state, active operations, order uniqueness, optimistic versions, the 20-device limit, and the five-minute total bound before creating one idempotent parent job. Each start is a separately persisted Celery step rather than a sleeping worker; progress, heartbeat, timestamps, failures, and completion remain durable. Firefox started production BGP routers in `r2 → r1` order 8.213 seconds apart, returned both replacement launchers to ready, and verified routed reachability with 3/3 packets and 0% loss.
+
+## 53 — Live operational topology
+
+![Live operational topology](53-live-operational-topology.png)
+
+The runtime page now preserves the designer's saved node placement in a responsive EVE-style operational map. Device cards continuously reflect appliance readiness and compute presence; links distinguish healthy, impaired, disabled, and endpoint-down state. Selecting a node exposes its template, worker, launcher, interfaces, console, network-state, log, selection, and authorized lifecycle controls, while selecting a link navigates directly to its bounded impairment form. Firefox rendered the production revision-2 BGP topology at its saved positions, selected `r1`, followed the healthy `r1:eth1 ↔ r2:eth1` link, and opened an authenticated `r1` console to `connected` through a same-origin message contract without changing runtime or link state.
