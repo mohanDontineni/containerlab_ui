@@ -29,6 +29,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import "./style.css";
+import "./activity.css";
 import "./clone.css";
 import "./configuration.css";
 import "./annotations.css";
@@ -128,6 +129,8 @@ type ContainerlabImportPreview={source_name:string;checksum:string;node_count:nu
   running_deployments_unchanged:number;impact:string[];nodes:{name:string;kind:string;source_image:string;interfaces:string[];
     external_startup_configuration:boolean;template_choices:ContainerlabTemplateChoice[];recommended_template:string|null;recommended_image:string|null}[]};
 type EditLease = {active:boolean;can_edit:boolean;owner:string|null;expires_at:string|null;lease_seconds:number;token?:string};
+type ActivityItem={kind:"job"|"event";id:string;label:string;state:string;progress:number|null;occurred_at:string;actor:string;
+  deployment_id?:string|null;target_type?:string;error?:{type:string;message:string}|null};
 const params = new URLSearchParams(location.search);
 const labId = params.get("lab") || "";
 const labName = params.get("name") || "Topology Workspace";
@@ -234,12 +237,15 @@ function Workspace() {
   const leaseToken=useRef("");
   const [templateQuery,setTemplateQuery]=useState("");
   const [notice, setNotice] = useState("Ready");
+  const [activity,setActivity]=useState<ActivityItem[]>([]);
+  const [activityLoading,setActivityLoading]=useState(false);
   const [history, setHistory] = useState<Snapshot[]>([]);
   const [future, setFuture] = useState<Snapshot[]>([]);
   const [rf, setRf] = useState<any>(null);
   const counter = useRef(1);
   const importInput = useRef<HTMLInputElement>(null);
   const containerlabInput=useRef<HTMLInputElement>(null);
+  const loadActivity=async()=>{setActivityLoading(true);try{const response=await fetch(`/api/v1/labs/${labId}/activity/`,{credentials:"same-origin",cache:"no-store"});const data=await response.json();if(!response.ok)throw new Error();setActivity(data.items||[])}catch{setNotice("Lab activity is temporarily unavailable")}finally{setActivityLoading(false)}};
   const snapshot = useCallback(() => {
     setHistory((h) => [
       ...h.slice(-29),
@@ -248,6 +254,7 @@ function Workspace() {
     setFuture([]);
   }, [nodes, edges,annotations]);
   useEffect(() => {
+    loadActivity();
     Promise.all([
       fetch("/api/v1/topology/templates/").then((r) => r.json()),
       fetch(`/api/v1/labs/${labId}/topology/images/`).then((r) => r.json()),
@@ -520,6 +527,7 @@ function Workspace() {
       setEditVersion(data.editVersion);
       setDirty(false);
       setNotice("All changes saved");
+      loadActivity();
     } catch (e) {
       setNotice(e instanceof Error ? e.message : "Save failed");
     } finally {
@@ -1140,6 +1148,14 @@ function Workspace() {
               <p className="valid">✓ Topology is structurally valid</p>
             )}
           </div>
+          <section className="topology-activity" aria-label="Lab jobs and events">
+            <header><div><strong>Jobs &amp; events</strong><small>Current lab only · payloads excluded</small></div><button onClick={loadActivity} disabled={activityLoading}>{activityLoading?"…":"↻"}</button></header>
+            <div>{activity.length?activity.slice(0,8).map(item=><article key={`${item.kind}:${item.id}`} className={`activity-${item.state}`}>
+              <i>{item.kind==="job"?"↻":"•"}</i><p><strong>{item.label}</strong><small>{item.actor} · {new Date(item.occurred_at).toLocaleString()}</small>{item.error&&<em>{item.error.type}: {item.error.message}</em>}</p>
+              <span>{item.kind==="job"?`${item.progress??0}%`:item.state}</span>
+            </article>):<p className="activity-empty">No lab activity has been recorded yet.</p>}</div>
+            <a href="/operations/" target="_top">Open full job center →</a>
+          </section>
         </aside>
       </div>
       <footer className="workspace-footer">

@@ -685,6 +685,27 @@ def test_topology_validation_report_returns_actionable_device_failures_and_empty
     assert {check["key"]:check["status"] for check in report.data["checks"]}["adapter"]=="failed"
 
 @pytest.mark.django_db
+def test_lab_activity_is_scoped_bounded_payload_free_and_redacts_failures():
+    owner=User.objects.create_user("activity-owner",password="long-enough-password")
+    viewer=User.objects.create_user("activity-viewer",password="long-enough-password")
+    stranger=User.objects.create_user("activity-stranger",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="activity-project");ProjectMembership.objects.create(project=project,user=viewer,role="viewer")
+    lab=Lab.objects.create(project=project,name="activity-lab");revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="d"*64)
+    deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-activity",runtime_version="0.8.0")
+    job=OperationJob.objects.create(deployment=deployment,owner=owner,operation_type="deploy_lab",target_id=deployment.id,idempotency_key="activity-job",
+        state="failed",progress=42,request_payload={"password":"must-not-leak"},result_payload={"secret":"must-not-leak"},
+        error_details={"type":"CapabilityError","message":"launcher failed token=private-value password:another-value"})
+    event=AuditEvent.objects.create(actor=owner,project=project,action="topology.updated",target_type="LabRevision",target_id=revision.id,metadata={"secret":"must-not-leak"})
+    AuditEvent.objects.create(actor=owner,project=project,action="unrelated.event",target_type="ImageArtifact",target_id=uuid.uuid4())
+    client=APIClient();client.force_authenticate(viewer);response=client.get(f"/api/v1/labs/{lab.id}/activity/")
+    assert response.status_code==200 and response["Cache-Control"]=="no-store" and response.data["bounds"]=={"revisions":50,"deployments":50,"items":24}
+    assert {item["id"] for item in response.data["items"]}=={str(job.id),str(event.id)}
+    job_item=next(item for item in response.data["items"] if item["kind"]=="job")
+    assert job_item["progress"]==42 and job_item["error"]["message"]=="launcher failed token=[redacted] password:[redacted]"
+    serialized=json.dumps(response.data);assert "must-not-leak" not in serialized and "request_payload" not in serialized and "result_payload" not in serialized
+    client.force_authenticate(stranger);assert client.get(f"/api/v1/labs/{lab.id}/activity/").status_code==404
+
+@pytest.mark.django_db
 def test_active_deployment_quota_blocks_new_runtime_without_consuming_draft():
     owner=User.objects.create_user("deployment-quota",password="long-enough-password")
     project=Project.objects.create(owner=owner,name="bounded-runtime",quotas={"max_running_deployments":1})

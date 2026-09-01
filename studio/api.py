@@ -32,6 +32,7 @@ from .pcap import PcapError, analyze_pcap
 from .image_compatibility import evaluate as evaluate_image_compatibility
 from .containerlab_interop import ContainerlabInteropError, import_containerlab_topology, inspect_containerlab_topology, read_containerlab_upload
 from .topology import export_containerlab
+from .operation_presenters import safe_text
 
 def require_edit_lease(request,lab):
     if edit_lease_active(lab) and not valid_edit_lease(lab,request.user,request.headers.get("X-Edit-Lease")):
@@ -318,6 +319,28 @@ class LabViewSet(viewsets.ModelViewSet):
             correlation_id=getattr(self.request,"correlation_id",""),metadata={"changed_fields":changed})
     def destroy(self,request,*args,**kwargs):
         return Response({"error":{"code":"guarded_delete_required","details":"Preview and confirm lab deletion using the guarded delete operation."}},status=405)
+    @action(detail=True,methods=["get"],url_path="activity")
+    def activity(self,request,pk=None):
+        lab=self.get_object();revision_ids=list(lab.revisions.order_by("-revision_number").values_list("id",flat=True)[:50])
+        deployment_ids=list(models.LabDeployment.objects.filter(revision__lab=lab).order_by("-created_at").values_list("id",flat=True)[:50])
+        jobs=models.OperationJob.objects.filter(Q(deployment__revision__lab=lab)|Q(target_id=lab.id)|Q(target_id__in=revision_ids))\
+            .select_related("owner","deployment").distinct().order_by("-updated_at")[:25]
+        target_ids=[lab.id,*revision_ids,*deployment_ids]
+        events=models.AuditEvent.objects.filter(project=lab.project,target_id__in=target_ids).select_related("actor").order_by("-occurred_at")[:25]
+        items=[]
+        for job in jobs:
+            details=job.error_details if isinstance(job.error_details,dict) else {}
+            items.append({"kind":"job","id":str(job.id),"label":job.operation_type.replace("_"," "),"state":job.state,
+                "progress":job.progress,"occurred_at":job.updated_at.isoformat(),"actor":job.owner.username,
+                "deployment_id":str(job.deployment_id) if job.deployment_id else None,
+                "error":{"type":safe_text(details.get("type"),80,"").strip(),"message":safe_text(details.get("message"),240,"").strip()} if job.state=="failed" else None})
+        for event in events:
+            items.append({"kind":"event","id":str(event.id),"label":event.action.replace("_"," ").replace("."," · "),"state":"recorded",
+                "progress":None,"occurred_at":event.occurred_at.isoformat(),"actor":event.actor.username if event.actor else "system",
+                "target_type":event.target_type})
+        items.sort(key=lambda item:item["occurred_at"],reverse=True)
+        response=Response({"lab_id":str(lab.id),"items":items[:24],"bounds":{"revisions":50,"deployments":50,"items":24}})
+        response["Cache-Control"]="no-store";response["X-Content-Type-Options"]="nosniff";return response
     @action(detail=True,methods=["get"],url_path="validation-report")
     def validation_report(self,request,pk=None):
         lab=self.get_object();revision=lab.current_draft
