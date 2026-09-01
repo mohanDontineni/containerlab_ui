@@ -67,7 +67,8 @@ class ImageArtifact(UUIDModel):
     license_acknowledged = models.BooleanField(default=False)
     inspection_result = models.JSONField(default=dict)
     validation_status = models.CharField(max_length=20, choices=Validation.choices, default=Validation.QUARANTINED)
-    class Meta: constraints=[models.UniqueConstraint(fields=["project","checksum"],name="unique_image_checksum_per_project")]
+    deleted_at = models.DateTimeField(null=True, blank=True)
+    class Meta: constraints=[models.UniqueConstraint(fields=["project","checksum"],condition=Q(deleted_at__isnull=True),name="unique_active_image_checksum_per_project")]
 
 class ImageBuild(UUIDModel):
     artifact = models.ForeignKey(ImageArtifact, on_delete=models.PROTECT, related_name="builds")

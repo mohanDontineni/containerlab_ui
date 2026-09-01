@@ -90,7 +90,7 @@ def topology_catalog(request):
 @require_http_methods(["GET"])
 def topology_images(request, lab_id):
     lab=get_object_or_404(Lab.objects.filter(project__in=visible_projects(request.user)),id=lab_id)
-    rows=PublishedImage.objects.filter(artifact__project=lab.project,lifecycle_status__in=("ready","verified","unverified")).select_related("artifact").order_by("artifact__vendor","artifact__version")
+    rows=PublishedImage.objects.filter(artifact__project=lab.project,artifact__deleted_at__isnull=True,lifecycle_status__in=("ready","verified","unverified")).select_related("artifact").order_by("artifact__vendor","artifact__version")
     return JsonResponse({"images":[{"id":str(row.id),"name":f"{row.artifact.vendor or row.artifact.category or 'Image'} {row.artifact.version}".strip(),
         "digest":row.registry_digest,"architecture":row.architecture,"status":row.lifecycle_status,"compatibility":row.compatibility_result} for row in rows]})
 
@@ -146,7 +146,7 @@ def topology_document(request, lab_id):
         node_map, interface_map = {}, {}
         templates = {str(t.id): t for t in DeviceTemplateVersion.objects.filter(id__in=[n.get("templateVersionId") for n in payload.get("nodes", [])])}
         image_ids=[n.get("publishedImageId") for n in payload.get("nodes", []) if n.get("publishedImageId")]
-        images={str(image.id):image for image in PublishedImage.objects.filter(id__in=image_ids,artifact__project=lab.project)}
+        images={str(image.id):image for image in PublishedImage.objects.filter(id__in=image_ids,artifact__project=lab.project,artifact__deleted_at__isnull=True)}
         if len(images)!=len(set(image_ids)): transaction.set_rollback(True); return JsonResponse({"error":"A selected image is unavailable to this project"},status=422)
         for data in payload.get("nodes", []):
             template = templates.get(str(data.get("templateVersionId")))
@@ -194,13 +194,17 @@ def deployment_detail(request, deployment_id):
 
 @login_required
 def images(request):
-    artifacts = ImageArtifact.objects.filter(project__in=visible_projects(request.user)).select_related("project").prefetch_related("published_images").order_by("-created_at")
+    artifacts = ImageArtifact.objects.filter(project__in=visible_projects(request.user),deleted_at__isnull=True).select_related("project").prefetch_related("published_images","builds").order_by("-created_at")
     for artifact in artifacts:
         artifact.ready_publication=next((image for image in artifact.published_images.all() if image.lifecycle_status=="ready"),None)
         can_operate=project_role(request.user,artifact.project) in (ProjectMembership.Role.ADMIN,ProjectMembership.Role.EDITOR)
+        artifact.can_manage=can_operate
         artifact.can_publish=can_operate and artifact.validation_status==ImageArtifact.Validation.VALIDATED and artifact.detected_format in ("docker-archive","oci-archive") and artifact.license_acknowledged and not artifact.ready_publication
         artifact.can_republish=can_operate and bool(artifact.ready_publication) and artifact.source_type==ImageArtifact.Source.UPLOAD
-    published = PublishedImage.objects.filter(artifact__project__in=visible_projects(request.user)).count()
+        artifact.revision_reference_count=LabNode.objects.filter(published_image__artifact=artifact).values("revision_id").distinct().count()
+        artifact.reference_count=len(artifact.published_images.all())+len(artifact.builds.all())+artifact.revision_reference_count
+        artifact.can_delete=can_operate and artifact.reference_count==0
+    published = PublishedImage.objects.filter(artifact__project__in=visible_projects(request.user),artifact__deleted_at__isnull=True).count()
     return render(request, "studio/catalog.html", {"section": "images", "title": "Image library", "eyebrow": "DEVICE SOFTWARE", "items": artifacts,
         "description": "Track quarantined uploads, inspection results, builds, and immutable publications.", "secondary_stat": f"{published} published",
         "create_url": "/images/register/", "create_label": "Register image", "upload_url":"/images/upload/"})

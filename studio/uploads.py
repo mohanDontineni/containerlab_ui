@@ -85,7 +85,7 @@ def finalize(session, owner):
         for chunk in iter(lambda:f.read(4*1024*1024),b""): digest.update(chunk)
     checksum=digest.hexdigest()
     if session.expected_checksum and checksum.lower()!=session.expected_checksum.lower(): session.status=UploadSession.Status.FAILED; session.computed_checksum=checksum; session.save(); raise UploadError("SHA-256 checksum mismatch")
-    existing=ImageArtifact.objects.filter(project=session.project,checksum=checksum).first()
+    existing=ImageArtifact.objects.filter(project=session.project,checksum=checksum,deleted_at__isnull=True).first()
     if existing:
         if existing.validation_status!=ImageArtifact.Validation.VALIDATED:
             detected,result=inspect_file(session.artifact_destination)

@@ -328,12 +328,77 @@ class UploadViewSet(viewsets.ModelViewSet):
 
 class ImageArtifactViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class=serializers.ImageArtifactSerializer
-    def get_queryset(self): return models.ImageArtifact.objects.filter(project__in=visible_projects(self.request.user)).select_related("project")
+    def get_queryset(self): return models.ImageArtifact.objects.filter(project__in=visible_projects(self.request.user)).select_related("project").order_by("-created_at")
+    def list(self,request,*args,**kwargs):
+        queryset=self.filter_queryset(self.get_queryset().filter(deleted_at__isnull=True))
+        page=self.paginate_queryset(queryset)
+        if page is not None: return self.get_paginated_response(self.get_serializer(page,many=True).data)
+        return Response(self.get_serializer(queryset,many=True).data)
+    def retrieve(self,request,*args,**kwargs):
+        artifact=self.get_object()
+        if artifact.deleted_at: return Response({"error":{"code":"image_not_found"}},status=404)
+        return Response(self.get_serializer(artifact).data)
+    @staticmethod
+    def _deletion_preview(artifact):
+        publications=artifact.published_images.count();builds=artifact.builds.count()
+        revisions=models.LabNode.objects.filter(published_image__artifact=artifact).values("revision_id").distinct().count()
+        active_jobs=models.OperationJob.objects.filter(target_id=artifact.id,state__in=("accepted","scheduled","started")).exclude(operation_type="delete_image").count()
+        blockers=[]
+        if publications: blockers.append(f"{publications} published image record{'s' if publications!=1 else ''}")
+        if builds: blockers.append(f"{builds} retained build record{'s' if builds!=1 else ''}")
+        if revisions: blockers.append(f"{revisions} lab revision{'s' if revisions!=1 else ''}")
+        if active_jobs: blockers.append(f"{active_jobs} active operation{'s' if active_jobs!=1 else ''}")
+        return {"artifact_id":str(artifact.id),"name":artifact.original_filename,"checksum":artifact.checksum,"byte_size":artifact.byte_size,
+            "source_type":artifact.source_type,"references":{"publications":publications,"builds":builds,"lab_revisions":revisions,"active_operations":active_jobs},
+            "can_delete":not blockers,"blockers":blockers,"impact":["Remove the quarantined artifact file when it is owned by Studio",
+                "Release the artifact's project storage quota","Retain upload, operation, and audit provenance","Prevent this artifact from appearing in image and topology libraries"]}
+    @action(detail=True,methods=["get"],url_path="delete-preview")
+    def delete_preview(self,request,pk=None):
+        artifact=self.get_object()
+        if project_role(request.user,artifact.project) not in (models.ProjectMembership.Role.ADMIN,models.ProjectMembership.Role.EDITOR):
+            from rest_framework.exceptions import PermissionDenied; raise PermissionDenied()
+        if artifact.deleted_at: return Response({"error":{"code":"image_already_deleted"}},status=410)
+        response=Response(self._deletion_preview(artifact));response["Cache-Control"]="no-store";response["X-Content-Type-Options"]="nosniff";return response
+    @action(detail=True,methods=["post"],url_path="delete")
+    def delete_artifact(self,request,pk=None):
+        artifact=self.get_object()
+        if project_role(request.user,artifact.project) not in (models.ProjectMembership.Role.ADMIN,models.ProjectMembership.Role.EDITOR):
+            from rest_framework.exceptions import PermissionDenied; raise PermissionDenied()
+        key=request.headers.get("Idempotency-Key")
+        if not key: return Response({"error":{"code":"idempotency_key_required"}},status=400)
+        expected=request.headers.get("X-Expected-Checksum")
+        if expected!=artifact.checksum: return Response({"error":{"code":"image_changed","details":"Refresh the deletion preview before confirming."}},status=409)
+        existing=models.OperationJob.objects.filter(owner=request.user,idempotency_key=key).first()
+        if existing:
+            if existing.operation_type!="delete_image" or existing.target_id!=artifact.id: return Response({"error":{"code":"idempotency_conflict"}},status=409)
+            return Response(existing.result_payload,status=200)
+        if artifact.deleted_at: return Response({"error":{"code":"image_already_deleted"}},status=410)
+        with transaction.atomic():
+            artifact=models.ImageArtifact.objects.select_for_update().get(pk=artifact.id)
+            preview=self._deletion_preview(artifact)
+            if not preview["can_delete"]: return Response({"error":{"code":"image_in_use","details":preview["blockers"],"references":preview["references"]}},status=409)
+            job=models.OperationJob.objects.create(owner=request.user,operation_type="delete_image",target_id=artifact.id,idempotency_key=key,
+                state="started",progress=25,request_payload={"checksum":artifact.checksum})
+            removed_storage=False
+            if artifact.source_type==models.ImageArtifact.Source.UPLOAD and artifact.storage_reference:
+                root=Path(settings.MEDIA_ROOT).resolve();candidate=Path(artifact.storage_reference).resolve()
+                if candidate.is_relative_to(root) and candidate.is_file(): candidate.unlink();removed_storage=True
+            deleted_at=timezone.now();artifact.deleted_at=deleted_at;artifact.storage_reference=""
+            artifact.inspection_result={**artifact.inspection_result,"deleted":True,"deleted_at":deleted_at.isoformat()}
+            artifact.save(update_fields=["deleted_at","storage_reference","inspection_result","updated_at"])
+            result={"artifact_id":str(artifact.id),"deleted_at":deleted_at.isoformat(),"checksum":artifact.checksum,"byte_size":artifact.byte_size,
+                "storage_removed":removed_storage,"released_bytes":artifact.byte_size}
+            job.state="succeeded";job.progress=100;job.result_payload=result;job.save(update_fields=["state","progress","result_payload","updated_at"])
+            models.AuditEvent.objects.create(actor=request.user,project=artifact.project,action="image.deleted",target_type="ImageArtifact",
+                target_id=artifact.id,correlation_id=getattr(request,"correlation_id",""),metadata={"checksum":artifact.checksum,
+                    "byte_size":artifact.byte_size,"storage_removed":removed_storage,"operation":str(job.id)})
+        return Response(result,status=200)
     @action(detail=True,methods=["post"])
     def publish(self,request,pk=None):
         artifact=self.get_object()
         if project_role(request.user,artifact.project) not in (models.ProjectMembership.Role.ADMIN,models.ProjectMembership.Role.EDITOR):
             from rest_framework.exceptions import PermissionDenied; raise PermissionDenied()
+        if artifact.deleted_at: return Response({"error":{"code":"image_not_found"}},status=404)
         if artifact.validation_status!=models.ImageArtifact.Validation.VALIDATED or artifact.detected_format not in ("docker-archive","oci-archive"):
             return Response({"error":{"code":"image_not_publishable","details":"Only validated Docker or OCI archives can be published."}},status=422)
         if not artifact.license_acknowledged: return Response({"error":{"code":"license_acknowledgement_required"}},status=422)

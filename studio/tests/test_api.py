@@ -9,6 +9,7 @@ from studio.configurations import decrypt_configuration, encrypt_configuration
 from studio.models import (AuditEvent, CaptureSession, ConsoleSession, DeviceInstance, DeviceTemplateVersion, ImageArtifact, Lab, LabDeployment,
     ConfigurationVersion, LabArtifact, LabInterface, LabLink, LabNode, LabRevision, OperationJob, Project, ProjectMembership, PublishedImage, UploadSession, User)
 from studio.tasks import execute_operation, reconcile_active_deployments, reconcile_deployment
+from studio.quotas import project_usage
 
 def test_web_process_uses_configured_celery_broker():
     assert execute_operation.app.conf.broker_url == settings.CELERY_BROKER_URL
@@ -242,6 +243,46 @@ def test_owner_can_force_republish_ready_node_local_image(monkeypatch):
     assert response.status_code==202 and response.data["request_payload"]["force"] is True
     published.refresh_from_db();assert published.lifecycle_status=="reconciling"
     assert AuditEvent.objects.filter(action="image.republication_scheduled",target_id=artifact.id).exists()
+
+@pytest.mark.django_db
+def test_image_deletion_is_previewed_guarded_audited_idempotent_and_releases_storage(settings,tmp_path):
+    settings.MEDIA_ROOT=tmp_path
+    owner=User.objects.create_user("image-delete-owner",password="long-enough-password")
+    viewer=User.objects.create_user("image-delete-viewer",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="image-delete-project");ProjectMembership.objects.create(project=project,user=viewer,role="viewer")
+    stored=tmp_path/"quarantine"/"unsupported.bin";stored.parent.mkdir();stored.write_bytes(b"not an image")
+    artifact=ImageArtifact.objects.create(project=project,owner=owner,source_type="upload",original_filename="unsupported.bin",
+        detected_format="unknown",byte_size=12,checksum="a"*64,architecture="",storage_reference=str(stored),validation_status="unsupported")
+    client=APIClient();client.force_authenticate(viewer)
+    assert client.get(f"/api/v1/images/{artifact.id}/delete-preview/").status_code==403
+    client.force_authenticate(owner);preview=client.get(f"/api/v1/images/{artifact.id}/delete-preview/")
+    assert preview.status_code==200 and preview.data["can_delete"] is True and preview.data["references"]=={
+        "publications":0,"builds":0,"lab_revisions":0,"active_operations":0}
+    endpoint=f"/api/v1/images/{artifact.id}/delete/"
+    stale=client.post(endpoint,{},format="json",HTTP_IDEMPOTENCY_KEY="delete-stale",HTTP_X_EXPECTED_CHECKSUM="b"*64)
+    assert stale.status_code==409 and stored.exists()
+    deleted=client.post(endpoint,{},format="json",HTTP_IDEMPOTENCY_KEY="delete-once",HTTP_X_EXPECTED_CHECKSUM=artifact.checksum)
+    replay=client.post(endpoint,{},format="json",HTTP_IDEMPOTENCY_KEY="delete-once",HTTP_X_EXPECTED_CHECKSUM=artifact.checksum)
+    assert deleted.status_code==replay.status_code==200 and deleted.data==replay.data and deleted.data["storage_removed"] is True
+    artifact.refresh_from_db();assert artifact.deleted_at and artifact.storage_reference=="" and not stored.exists()
+    assert client.get("/api/v1/images/").data["count"]==0 and project_usage(project)["image_bytes"]==0
+    assert OperationJob.objects.filter(operation_type="delete_image",target_id=artifact.id,state="succeeded").count()==1
+    assert AuditEvent.objects.filter(action="image.deleted",target_id=artifact.id,metadata__storage_removed=True).exists()
+    replacement=ImageArtifact.objects.create(project=project,owner=owner,source_type="upload",original_filename="replacement.bin",
+        detected_format="unknown",byte_size=1,checksum=artifact.checksum,storage_reference="",validation_status="unsupported")
+    assert replacement.id!=artifact.id
+
+@pytest.mark.django_db
+def test_image_deletion_refuses_published_or_built_artifacts():
+    owner=User.objects.create_user("image-protected-owner",password="long-enough-password");project=Project.objects.create(owner=owner,name="protected-image-project")
+    artifact=ImageArtifact.objects.create(project=project,owner=owner,source_type="registry",original_filename="router",
+        detected_format="oci-registry",byte_size=0,checksum="c"*64,architecture="amd64",storage_reference="registry/router",validation_status="validated")
+    PublishedImage.objects.create(artifact=artifact,registry_digest="registry/router@sha256:"+"c"*64,repository="registry/router",architecture="amd64")
+    client=APIClient();client.force_authenticate(owner);preview=client.get(f"/api/v1/images/{artifact.id}/delete-preview/")
+    assert preview.status_code==200 and preview.data["can_delete"] is False and preview.data["references"]["publications"]==1
+    blocked=client.post(f"/api/v1/images/{artifact.id}/delete/",{},format="json",HTTP_IDEMPOTENCY_KEY="blocked-delete",HTTP_X_EXPECTED_CHECKSUM=artifact.checksum)
+    assert blocked.status_code==409 and blocked.data["error"]["code"]=="image_in_use"
+    artifact.refresh_from_db();assert artifact.deleted_at is None
 
 @pytest.mark.django_db
 def test_owner_can_publish_and_schedule_deployable_lab(django_capture_on_commit_callbacks):
