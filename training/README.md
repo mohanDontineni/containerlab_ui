@@ -51,6 +51,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 | `39-topology-arrangement.png` | Topology arrangement and discovery | Automatically lays out linked groups clear of canvas objects, aligns a selection, and filters devices by name, kind, or category. |
 | `40-guarded-device-reset.png` | Reset device to saved revision | Reviews the single-device replacement impact, saved baseline, sessions, and capture blockers before discarding ephemeral state. |
 | `41-selected-device-lifecycle.png` | Selected-device lifecycle | Preflights and schedules start, stop, restart, suspend, or resume across several selected devices with independent audited jobs. |
+| `42-topology-edit-lease.png` | Safe concurrent topology editing | Shows the second editor's named, expiring read-only session while another operator owns the topology draft. |
 
 ## No-YAML operating model
 
@@ -68,6 +69,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 12. Arrange linked groups automatically, align selected devices into rows or columns, and filter the device palette by name, kind, or category.
 13. Reset one ready device to its immutable deployed revision through a guarded preview; Studio preserves peers and topology while restoring the pinned startup configuration.
 14. Select several runtime devices and preview a lifecycle action before Studio schedules independently tracked start, stop, restart, suspend, or resume jobs.
+15. Open a topology with one active editor; additional editors receive a clearly labeled read-only view until the renewable five-minute editing session is released or expires.
 
 Containerlab/Kubernetes YAML is an internal adapter concern. It may be inspected by platform administrators for troubleshooting, but it is not part of the normal user workflow.
 

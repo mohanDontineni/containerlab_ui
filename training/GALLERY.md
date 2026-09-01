@@ -247,3 +247,9 @@ The operator previews a single-device reset before discarding ephemeral applianc
 ![Selected-device lifecycle](41-selected-device-lifecycle.png)
 
 The operator selects multiple runtime devices and previews one coordinated start, stop, restart, suspend, or resume action. The server rechecks every device together and schedules nothing unless the complete selection is eligible. Confirmation creates an independent idempotent job and audit record per device plus an aggregate audit event, making partial progress visible without hiding failures or exposing cluster commands.
+
+## 42 — Safe concurrent topology editing
+
+![Topology edit lease](42-topology-edit-lease.png)
+
+The first editor receives a renewable, token-bound five-minute editing session. A second project editor can still inspect the complete topology, validation state, backups, and history, but sees the active owner's name and expiry in a prominent read-only banner. Canvas mutations, restores, saves, revision replacement, configuration restore, and deployment publication are server-protected so another browser cannot silently overwrite the active draft. Sessions renew automatically, release on navigation, and can be safely acquired after expiry without YAML or coordination outside the GUI.
