@@ -89,7 +89,8 @@ type RevisionSummary = { id:string; revision_number:number; edit_version:number;
   node_count:number; link_count:number; deployment_count:number; created_at:string; is_current_draft:boolean };
 type BundlePreview = { checksum:string; source_lab:string; destination_lab:string; node_count:number; link_count:number;
   configured_node_count:number; template_count:number; image_count:number; templates:string[]; will_replace_draft:boolean;
-  preserved_published_revisions:number; running_deployments_unchanged:number; expected_current_draft:string|null };
+  preserved_published_revisions:number; running_deployments_unchanged:number; expected_current_draft:string|null;
+  deployable:boolean; deployability_issues:string[] };
 const params = new URLSearchParams(location.search);
 const labId = params.get("lab") || "";
 const labName = params.get("name") || "Topology Workspace";
@@ -634,7 +635,7 @@ function Workspace() {
           <header><div><p className="dialog-eyebrow">VERIFIED BACKUP</p><h2 id="bundle-title">Restore topology backup</h2><p>Review the server-validated contents and impact before replacing the editable draft.</p></div><button aria-label="Close backup preview" onClick={()=>setBundleRestore(null)} disabled={bundleRestoring}>×</button></header>
           <div className="bundle-source"><span>Source lab</span><strong>{bundleRestore.preview.source_lab}</strong><code>SHA-256 {bundleRestore.preview.checksum}</code></div>
           <div className="bundle-facts"><article><span>Devices</span><strong>{bundleRestore.preview.node_count}</strong></article><article><span>Links</span><strong>{bundleRestore.preview.link_count}</strong></article><article><span>Configurations</span><strong>{bundleRestore.preview.configured_node_count}</strong></article><article><span>Images</span><strong>{bundleRestore.preview.image_count}</strong></article></div>
-          <div className="bundle-impact"><strong>Restore impact</strong><ul><li>{bundleRestore.preview.will_replace_draft?"The current editable draft will be replaced.":"A new editable draft will be created."}</li>{dirty&&<li>Unsaved browser changes will be discarded.</li>}<li>{bundleRestore.preview.preserved_published_revisions} published revision(s) remain immutable.</li><li>{bundleRestore.preview.running_deployments_unchanged} active deployment revision(s) remain unchanged.</li></ul><small>{bundleRestore.preview.templates.join(" · ")}</small></div>
+          <div className={`bundle-impact ${bundleRestore.preview.deployable?"":"has-issues"}`}><strong>{bundleRestore.preview.deployable?"Restore impact":"Restore impact · deployment attention required"}</strong><ul><li>{bundleRestore.preview.will_replace_draft?"The current editable draft will be replaced.":"A new editable draft will be created."}</li>{dirty&&<li>Unsaved browser changes will be discarded.</li>}<li>{bundleRestore.preview.preserved_published_revisions} published revision(s) remain immutable.</li><li>{bundleRestore.preview.running_deployments_unchanged} active deployment revision(s) remain unchanged.</li>{bundleRestore.preview.deployability_issues.map(issue=><li key={issue} className="bundle-issue">{issue}</li>)}</ul><small>{bundleRestore.preview.templates.join(" · ")}</small></div>
           <footer><button onClick={()=>setBundleRestore(null)} disabled={bundleRestoring}>Cancel</button><button className="primary" onClick={confirmBundleRestore} disabled={bundleRestoring}>{bundleRestoring?"Restoring…":"Restore verified backup"}</button></footer>
         </section>
       </div>}

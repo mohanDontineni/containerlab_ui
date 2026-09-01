@@ -84,7 +84,7 @@ def inspect_lab_bundle(lab, raw):
         raise BundleError("Bundle topology must contain node and link lists")
     if not isinstance(topology.get("annotations",[]),list): raise BundleError("Bundle annotations must be a list")
     if len(topology["nodes"])>250 or len(topology["links"])>1000: raise BundleError("Bundle exceeds workspace topology limits")
-    source_ids=set();names=set();interfaces=set();templates=set();images=set();configured=0
+    source_ids=set();names=set();interfaces=set();templates=set();images=set();configured=0;node_checks={}
     for item in topology["nodes"]:
         if not isinstance(item,dict): raise BundleError("Every node must be an object")
         source_id=str(_uuid(item.get("id"),"node"))
@@ -97,7 +97,8 @@ def inspect_lab_bundle(lab, raw):
         templates.add(f"{template.template.name} v{template.version}")
         digest=item.get("imageDigest")
         if digest:
-            if not PublishedImage.objects.filter(artifact__project=lab.project,registry_digest=digest).exists(): raise BundleError(f"Image {digest} is unavailable in the destination project")
+            image=PublishedImage.objects.filter(artifact__project=lab.project,registry_digest=digest).first()
+            if not image: raise BundleError(f"Image {digest} is unavailable in the destination project")
             images.add(digest)
         content=item.get("startupConfiguration","")
         if not isinstance(content,str): raise BundleError(f"Startup configuration must be text for {name}")
@@ -106,6 +107,7 @@ def inspect_lab_bundle(lab, raw):
         expected={f"{template.interface_rules.get('prefix','eth')}{number}" for number in range(int(template.interface_rules.get('start',1)),int(template.interface_rules.get('start',1))+min(int(template.interface_rules.get('count',4)),64))}
         if allowed!=expected: raise BundleError(f"Interface inventory does not match the template for {name}")
         interfaces.update((source_id,interface) for interface in expected)
+        node_checks[source_id]=(name,template,content,digest,image.lifecycle_status if digest else None)
     used=set();link_ids=set()
     for item in topology["links"]:
         if not isinstance(item,dict): raise BundleError("Every link must be an object")
@@ -116,12 +118,22 @@ def inspect_lab_bundle(lab, raw):
         b=(str(_uuid(item.get("targetNode"),"target node")),str(item.get("targetInterface","")))
         if a==b or a in used or b in used or a not in interfaces or b not in interfaces: raise BundleError("A link contains an invalid or reused interface")
         used.update((a,b))
+    deployability_issues=[]
+    for source_id,(name,template,content,digest,image_status) in node_checks.items():
+        profile=template.launch_profile or {}
+        if not digest: deployability_issues.append(f"{name}: select a published image before deployment")
+        elif image_status!="ready": deployability_issues.append(f"{name}: published image is not ready")
+        if content and not profile.get("startup_config_target"): deployability_issues.append(f"{name}: template does not support startup configuration")
+        if profile.get("startup_config_required") and not content: deployability_issues.append(f"{name}: startup configuration is required")
+        required=int(profile.get("required_interfaces",0));linked=sum(1 for endpoint in used if endpoint[0]==source_id)
+        if required and linked<required: deployability_issues.append(f"{name}: connect at least {required} interfaces")
     canonical=json.dumps(bundle,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()
     source_lab=bundle.get("lab") if isinstance(bundle.get("lab"),dict) else {}
     preview={"format":BUNDLE_FORMAT,"version":BUNDLE_VERSION,"checksum":hashlib.sha256(canonical).hexdigest(),
         "source_lab":str(source_lab.get("name","")).strip() or "Unnamed lab","destination_lab":lab.name,
         "node_count":len(topology["nodes"]),"link_count":len(topology["links"]),"configured_node_count":configured,
         "template_count":len(templates),"image_count":len(images),"templates":sorted(templates),
+        "deployable":not deployability_issues,"deployability_issues":deployability_issues,
         "will_replace_draft":bool(lab.current_draft_id),"preserved_published_revisions":lab.revisions.filter(immutable=True).count(),
         "running_deployments_unchanged":lab.revisions.filter(deployments__observed_state__in=("pending","deploying","running","degraded")).distinct().count()}
     return bundle,preview

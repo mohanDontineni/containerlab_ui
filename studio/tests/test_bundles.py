@@ -54,6 +54,7 @@ def test_lab_bundle_round_trip_preserves_topology_and_configuration():
     preview=client.post(f"/api/v1/labs/{lab.id}/import-preview/",exported.content,content_type="application/vnd.containerlab.studio.lab+json")
     assert preview.status_code==200 and preview.data["node_count"]==2 and preview.data["link_count"]==1
     assert preview.data["configured_node_count"]==1 and preview.data["will_replace_draft"] is True
+    assert preview.data["deployable"] is False and "does not support startup configuration" in " ".join(preview.data["deployability_issues"])
     assert preview["Cache-Control"]=="no-store" and len(preview.data["checksum"])==64
     imported=client.post(f"/api/v1/labs/{lab.id}/import/",exported.content,content_type="application/vnd.containerlab.studio.lab+json",
         HTTP_IDEMPOTENCY_KEY="bundle-round-trip",HTTP_X_EXPECTED_DRAFT=str(revision.id))
