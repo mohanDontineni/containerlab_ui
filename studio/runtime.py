@@ -221,11 +221,14 @@ class ClabernetesAdapter:
         except (binascii.Error,ValueError) as exc: raise CapabilityError("Launcher returned an invalid capture stream") from exc
         return strip_capture_stop_packets(payload)
     def _delete_topology(self,deployment):
-        try: result=self.custom.delete_namespaced_custom_object(API_GROUP,API_VERSION,deployment.namespace,"topologies","topology",
-            body=client.V1DeleteOptions(propagation_policy="Foreground"))
+        topology_requested=False;topology_already_absent=False
+        try:
+            self.custom.delete_namespaced_custom_object(API_GROUP,API_VERSION,deployment.namespace,"topologies","topology",
+                body=client.V1DeleteOptions(propagation_policy="Foreground"))
+            topology_requested=True
         except ApiException as exc:
             if exc.status!=404: raise
-            result={"status":"already_stopped"}
+            topology_already_absent=True
         selector=f"studio.containerlab.io/deployment={deployment.id}"
         deleted=0
         for config_map in self.core.list_namespaced_config_map(deployment.namespace,label_selector=selector).items:
@@ -235,8 +238,8 @@ class ClabernetesAdapter:
                 deleted+=1
             except ApiException as exc:
                 if exc.status!=404: raise
-        if isinstance(result,dict): result["configMapsDeleted"]=deleted
-        return result
+        return {"topology":"topology","topologyDeletionRequested":topology_requested,
+            "topologyAlreadyAbsent":topology_already_absent,"configMapsDeleted":deleted}
     def stop_lab(self,deployment): return self._delete_topology(deployment)
     def delete_runtime(self,deployment):
         result=self._delete_topology(deployment)
