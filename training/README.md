@@ -82,6 +82,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 | `70-verified-image-registry-mirror.png` | Verified image registry mirror | Repairs a validated upload through the GUI and shows its successful v2 build, internal registry reference, independently addressable manifest digest, and verified state. |
 | `71-platform-network-isolation.png` | Verified platform network isolation | Shows five workload-scoped ingress policies verified by the worker after authorized service traffic succeeds and cross-namespace database, cache, and registry probes are denied. |
 | `72-whole-lab-configuration-export.png` | Whole-lab configuration archive | Collects live configurations from both routers and exports the latest version per device as one audited ZIP with a checksum inventory. |
+| `73-whole-lab-configuration-collection.png` | Whole-lab configuration collection | Runs one GUI action that atomically preflights every supported device, schedules independently tracked collection jobs, and advances both encrypted router histories. |
 
 ## No-YAML operating model
 
@@ -128,6 +129,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 40. Publish or repair a validated uploaded image from the catalog; Studio retains the node-local runtime tag, mirrors the manifest and layers into the internal registry, verifies the returned digest, and shows the proof without requiring registry CLI access.
 41. Confirm the dashboard reports all platform ingress policies verified; web/console traffic is limited to the gateway, data services to named application workloads, and registry publication to the worker job boundary.
 42. Export the latest collected configuration for every device as one integrity-described ZIP from the runtime page; no YAML, shell, or per-device download sequence is required.
+43. Collect current configurations across every supported ready device with one runtime-page action; Studio refuses partial collection when any supported device is unavailable and shows each resulting version in encrypted history.
 
 Containerlab/Kubernetes YAML is an internal adapter concern. It may be inspected by platform administrators for troubleshooting, but it is not part of the normal user workflow.
 
