@@ -63,6 +63,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 | `51-scheduled-lab-lifecycle.png` | Scheduled lab lifecycle | Creates, cancels, and tracks one-time start or stop actions with linked asynchronous jobs and eligibility rechecks. |
 | `52-staged-device-start.png` | Dependency-aware staged start | Reorders stopped devices and applies a bounded interval while one durable job tracks the complete startup sequence. |
 | `53-live-operational-topology.png` | Live operational topology | Renders saved node placement, link health, selected-device runtime facts, authorized actions, and direct console launch. |
+| `54-live-device-resource-telemetry.png` | Live device resource telemetry | Compares current launcher CPU and memory use with each device's enforced limits, worker placement, sample window, and freshness. |
 
 ## No-YAML operating model
 
@@ -90,6 +91,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 21. Schedule a one-time whole-lab start or stop from the runtime page, cancel it while pending, and follow the linked operation after dispatch.
 22. Select stopped devices, arrange their dependency order, choose a bounded interval, and follow one resumable staged-start job until every launcher is ready.
 23. Operate the running lab from its visual map: select devices, inspect live state, follow links to impairment controls, and open an authenticated console in context.
+24. Monitor each running device's live CPU and memory use against its enforced template limits without Kubernetes access or CLI commands.
 
 Containerlab/Kubernetes YAML is an internal adapter concern. It may be inspected by platform administrators for troubleshooting, but it is not part of the normal user workflow.
 

@@ -319,3 +319,9 @@ The operator selects stopped devices, opens the guarded staged-start preview, ar
 ![Live operational topology](53-live-operational-topology.png)
 
 The runtime page now preserves the designer's saved node placement in a responsive EVE-style operational map. Device cards continuously reflect appliance readiness and compute presence; links distinguish healthy, impaired, disabled, and endpoint-down state. Selecting a node exposes its template, worker, launcher, interfaces, console, network-state, log, selection, and authorized lifecycle controls, while selecting a link navigates directly to its bounded impairment form. Firefox rendered the production revision-2 BGP topology at its saved positions, selected `r1`, followed the healthy `r1:eth1 ↔ r2:eth1` link, and opened an authenticated `r1` console to `connected` through a same-origin message contract without changing runtime or link state.
+
+## 54 — Live device resource telemetry
+
+![Live device resource telemetry](54-live-device-resource-telemetry.png)
+
+The runtime page displays current CPU and memory use for every device launcher beside its enforced template limits, worker placement, metrics window, and sample freshness. Proportional bars make capacity pressure visible without Kubernetes access, CLI commands, or YAML. The reconciler alone receives narrowly scoped read permission for pod metrics and persists bounded snapshots for authorized viewers; released compute and unavailable metrics render explicit non-error states. Firefox verified real metrics for both production BGP routers against their 500m CPU and 512Mi memory limits.
