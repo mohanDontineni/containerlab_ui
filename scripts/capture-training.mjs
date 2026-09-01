@@ -164,6 +164,12 @@ try {
       await panel.scrollIntoViewIfNeeded();
       return panel;
     });
+    await capture("25-redeploy-preview.png", deploymentHref, async (p) => {
+      await p.locator("#redeploy-runtime").click();
+      const dialog = p.locator("#redeploy-dialog");
+      await dialog.waitFor();
+      return dialog;
+    });
   }
 
   await capture("21-device-templates.png", "/device-templates/");

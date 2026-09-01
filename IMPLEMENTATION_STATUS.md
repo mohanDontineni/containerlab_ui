@@ -29,7 +29,7 @@
 - Topology revision-history workspace with immutable/deployed/draft status, counts and checksums, optimistic draft-conflict protection, idempotent restore into a new editable revision, encrypted configuration re-versioning, and audited provenance.
 - Native self-service account and security page with profile/timezone management, normalized email, verified current-password changes, strengthened password validation, CSRF protection, session continuity, legacy-route safety, and content-free audit events.
 - Explicit GUI-only operator contract: topology Backup/Restore is labeled as a product-native bundle workflow, while Containerlab/Kubernetes YAML remains internal to the validated runtime adapter.
-- A 24-screen, read-only training capture catalog covering projects, labs, visual topology design, images, deployment/device lifecycle, link controls, diagnostics, packet capture, console, configuration history, templates, jobs, security, and API discovery.
+- A 25-screen, read-only Firefox training capture catalog covering projects, labs, visual topology design, images, deployment/device lifecycle, safe redeploy preview, link controls, diagnostics, packet capture, console, configuration history, templates, jobs, security, and API discovery.
 
 ## Acceptance results
 
@@ -69,8 +69,9 @@
 | 32 | Revision history and restore | PASS | The deployed BGP revision remained immutable and its original runtime stayed healthy while restore created revision 2 as a new editable draft with two encrypted FRR configs; replay returned the same result, a stale draft token returned typed 409, and deploying the restored revision established eBGP and passed 3/3 routed pings both ways. |
 | 33 | Self-service account security | PASS | A temporary production account rendered the native page, rejected an incorrect current password, normalized and saved profile/timezone data, changed to a policy-compliant password, authenticated with the replacement credential, retained its active session, and emitted content-free profile/password audit events; the temporary user was then removed. |
 | 34 | Packet-corruption impairment | PASS | The authenticated product API applied 0.5% corruption to a live two-router link, `tc netem` reported `corrupt 0.5%` on both launcher endpoints, and a second idempotent operation restored the persisted/runtime condition to 0%. |
+| 35 | Safe whole-lab redeploy | PASS | Firefox verified the read-only impact preview; an authenticated audited redeploy recreated a stopped two-device/one-link Alpine runtime from pinned revision 1, reached 2/2 ready and `running`, and a final stop restored its original stopped state. |
 
-Automated tests: **95 passed**. Django checks and migration drift checks: **pass**. React TypeScript/Vite production build: **pass**. Training capture runner syntax check: **pass**. Helm lint/render: **pass**. Native runtime ping: **3 transmitted, 3 received, 0% loss, 0.445 ms average RTT**. Bidirectional 120 ms link condition: **240.563 ms average RTT**. Disabled link: **100% loss**. Restored qdiscs: **native `noqueue` on both endpoints**.
+Automated tests: **97 passed**. Django checks and migration drift checks: **pass**. React TypeScript/Vite production build: **pass**. Firefox training capture: **25 live screens passed**. Helm lint/render: **pass**. Native runtime ping: **3 transmitted, 3 received, 0% loss, 0.445 ms average RTT**. Bidirectional 120 ms link condition: **240.563 ms average RTT**. Disabled link: **100% loss**. Restored qdiscs: **native `noqueue` on both endpoints**.
 
 ## Known limitations
 

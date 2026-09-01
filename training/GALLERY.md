@@ -145,3 +145,9 @@ The user updates profile and timezone settings or changes their password using c
 ![API explorer](24-api-explorer.png)
 
 The operator or automation engineer reviews the authenticated API behind the GUI. The API enforces the same authorization, validation, quota, and idempotency rules as the visual workflows.
+
+## 25 — Safe redeploy preview
+
+![Redeploy preview](25-redeploy-preview.png)
+
+Before replacing device compute, the operator reviews the pinned revision, device and link counts, current state, preserved records, session impact, and any conflicting active job. Redeploy is submitted only after explicit confirmation.
