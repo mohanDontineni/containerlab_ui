@@ -301,3 +301,9 @@ The operator drills from the project-wide lab root into `Navigable Evidence 49 /
 ![Native security audit trail](50-native-security-audit-trail.png)
 
 An authorized administrator filters immutable project activity by project, action fragment, actor, target type, correlation ID, and bounded time window without opening Django administration or querying PostgreSQL. Each row exposes its actor, project, exact target, request trace, and an escaped, size-bounded metadata record; viewers see only accessible-project events and their own platform events. Firefox rendered eight real lab-folder events, expanded the deletion evidence, and downloaded the same filtered set as a nine-line, 1,804-byte CSV. The export neutralizes spreadsheet formulas, uses no-store/nosniff headers, caps output at 5,000 records, and emits its own content-free `audit.exported` event.
+
+## 51 — Scheduled lab lifecycle
+
+![Scheduled lab lifecycle](51-scheduled-lab-lifecycle.png)
+
+The operator schedules one-time whole-lab start or stop actions directly on the runtime page. Pending actions can be cancelled with optimistic concurrency protection; due actions are rechecked against current runtime eligibility, converted into standard idempotent operation jobs, and retained as dispatched, cancelled, or skipped history. Firefox created and cancelled a future stop, dispatched a scheduled start through Celery Beat, followed its linked job to success, and restored the acceptance lab to its original stopped state with no pending test actions.

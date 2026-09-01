@@ -9,6 +9,7 @@ const baseUrl = (process.env.TRAINING_BASE_URL || "").replace(/\/$/, "");
 const username = process.env.TRAINING_USERNAME || "";
 const password = process.env.TRAINING_PASSWORD || "";
 const deploymentId = process.env.SCHEDULE_DEPLOYMENT_ID || "";
+const cleanupScheduleId = process.env.SCHEDULE_CLEANUP_ID || "";
 const output = path.resolve(process.env.SCHEDULE_SCREENSHOT || "training/51-scheduled-lab-lifecycle.png");
 if (!baseUrl || !username || !password || !deploymentId) {
   throw new Error("Set TRAINING_BASE_URL, TRAINING_USERNAME, TRAINING_PASSWORD, and SCHEDULE_DEPLOYMENT_ID.");
@@ -50,6 +51,13 @@ try {
   await page.locator("#runtime-schedules").waitFor({ state: "visible" });
   const before = await runtime();
   if (before.deployment.observed_state !== "stopped") throw new Error(`Expected a stopped acceptance runtime, found ${before.deployment.observed_state}.`);
+  if (cleanupScheduleId) {
+    await page.locator(`[data-cancel-schedule="${cleanupScheduleId}"]`).click();
+    await page.waitForFunction(async ({ runtimeUrl, cleanupScheduleId }) => {
+      const data = await (await fetch(runtimeUrl, { cache: "no-store" })).json();
+      return data.schedules.some((schedule) => schedule.id === cleanupScheduleId && schedule.status === "cancelled");
+    }, { runtimeUrl, cleanupScheduleId });
+  }
   const existing = new Set(before.schedules.map((schedule) => schedule.id));
 
   await createSchedule("stop_lab", Date.now() + 10 * 60_000);
