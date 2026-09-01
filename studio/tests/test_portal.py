@@ -592,6 +592,7 @@ def test_deployment_detail_is_native_and_scoped(client):
     assert "SELECTED DEVICE OPERATION" in response.content.decode() and "device-bulk-preview" in response.content.decode()
     assert "⌫ Reset" in response.content.decode() and "expected_devices" in response.content.decode()
     assert "LIVE NETWORK STATE" in response.content.decode() and "inspect_device" in response.content.decode()
+    assert "Traffic and rate" in response.content.decode() and "interfaceCounterSamples" in response.content.decode()
     assert "OPERATIONAL TOPOLOGY" in response.content.decode() and "runtime-map-viewport" in response.content.decode()
     assert "open-device-console" in response.content.decode() and "data-runtime-map-action" in response.content.decode()
     client.force_login(stranger)
