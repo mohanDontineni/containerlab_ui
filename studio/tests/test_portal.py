@@ -40,6 +40,48 @@ def test_product_navigation_never_links_to_model_admin(client):
     assert '/admin/studio/' not in html
 
 @pytest.mark.django_db
+def test_native_platform_user_administration_is_staff_only_and_audited(client):
+    operator=User.objects.create_user("ordinary-operator",password="Original-Password-2026!")
+    client.force_login(operator)
+    assert client.get("/users/").status_code==403
+    admin=User.objects.create_user("platform-admin",password="Original-Password-2026!",is_staff=True)
+    client.force_login(admin)
+    response=client.post("/users/",{"username":"new-operator","first_name":"Network","last_name":"Engineer",
+        "email":"ENGINEER@EXAMPLE.TEST","timezone":"America/Chicago","password1":"Secure-Onboarding-2026!","password2":"Secure-Onboarding-2026!"},follow=True)
+    assert response.status_code==200 and b"created and ready for project access" in response.content
+    created=User.objects.get(username="new-operator")
+    assert created.is_active and created.check_password("Secure-Onboarding-2026!") and created.email=="engineer@example.test"
+    event=AuditEvent.objects.get(action="account.created",target_id=created.id)
+    assert event.actor==admin and event.metadata=={"username":"new-operator"}
+
+@pytest.mark.django_db
+def test_guarded_account_status_preserves_roles_revokes_consoles_and_blocks_owners(client):
+    admin=User.objects.create_user("status-admin",password="Original-Password-2026!",is_staff=True)
+    target=User.objects.create_user("status-target",password="Original-Password-2026!")
+    owner=User.objects.create_user("active-owner",password="Original-Password-2026!")
+    project=Project.objects.create(owner=owner,name="Owned project")
+    ProjectMembership.objects.create(project=project,user=target,role=ProjectMembership.Role.EDITOR)
+    client.force_login(admin)
+    own_preview=client.get(f"/users/{owner.id}/status/").json()
+    assert own_preview["can_change"] is False and "Transfer or retire" in own_preview["blockers"][0]
+    assert client.post(f"/users/{owner.id}/status/",{"expected_action":"deactivate"}).status_code==409
+    preview=client.get(f"/users/{target.id}/status/")
+    assert preview.status_code==200 and preview.json()["can_change"] is True and preview.json()["references"]["memberships"]==1
+    changed=client.post(f"/users/{target.id}/status/",{"expected_action":"deactivate"})
+    assert changed.status_code==200 and changed.json()["is_active"] is False
+    target.refresh_from_db();assert not target.is_active and ProjectMembership.objects.filter(project=project,user=target).exists()
+    assert AuditEvent.objects.get(action="account.deactivated",target_id=target.id).metadata["revoked_consoles"]==0
+    activated=client.post(f"/users/{target.id}/status/",{"expected_action":"activate"})
+    assert activated.status_code==200 and activated.json()["is_active"] is True
+    assert AuditEvent.objects.filter(action="account.activated",target_id=target.id).exists()
+
+@pytest.mark.django_db
+def test_platform_admin_cannot_deactivate_self(client):
+    admin=User.objects.create_user("self-admin",password="Original-Password-2026!",is_staff=True)
+    client.force_login(admin);preview=client.get(f"/users/{admin.id}/status/").json()
+    assert preview["can_change"] is False and "current account" in preview["blockers"][0]
+
+@pytest.mark.django_db
 def test_project_create_is_native_and_scoped(client):
     user = User.objects.create_user("project-owner", password="long-enough-password")
     client.force_login(user)

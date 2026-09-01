@@ -28,6 +28,7 @@
         <a class="nav-item" href="/device-templates/"><span>⬡</span> Device templates</a>
         <p class="nav-label">Operations</p>
         <a class="nav-item" href="/operations/"><span>↻</span> Jobs & events</a>
+        {% if request.user.is_staff %}<a class="nav-item" href="/users/"><span>◎</span> User administration</a>{% endif %}
         <a class="nav-item" href="/api/v1/docs/"><span>⌘</span> API explorer</a>
       </nav>
       <div class="sidebar-status">
@@ -51,7 +52,7 @@
           <a class="primary-button compact" href="/labs/new/"><span>＋</span> New lab</a>
         </div>
       </header>
-      <main class="content">{% block content %}{% endblock %}</main>
+      <main class="content">{% if messages %}<div class="global-messages" role="status">{% for message in messages %}<p class="{{ message.tags }}">{{ message }}</p>{% endfor %}</div>{% endif %}{% block content %}{% endblock %}</main>
     </div>
   </div>
   <script src="{% static 'studio/app.js' %}"></script>

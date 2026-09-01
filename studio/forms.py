@@ -1,5 +1,7 @@
 from django import forms
 from django.contrib.auth.forms import PasswordChangeForm
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError
 from django.db.models import Q
 from zoneinfo import available_timezones
 from .models import Lab, Project, User
@@ -22,6 +24,24 @@ class StudioPasswordChangeForm(PasswordChangeForm):
         self.fields["old_password"].widget.attrs.update({"autocomplete":"current-password"})
         self.fields["new_password1"].widget.attrs.update({"autocomplete":"new-password"})
         self.fields["new_password2"].widget.attrs.update({"autocomplete":"new-password"})
+
+class PlatformUserCreateForm(forms.ModelForm):
+    password1=forms.CharField(label="Temporary password",widget=forms.PasswordInput(attrs={"autocomplete":"new-password"}),help_text="At least 12 characters. Share it through a secure channel.")
+    password2=forms.CharField(label="Confirm temporary password",widget=forms.PasswordInput(attrs={"autocomplete":"new-password"}))
+    class Meta:
+        model=User
+        fields=("username","first_name","last_name","email","timezone")
+        widgets={"username":forms.TextInput(attrs={"autocomplete":"off"}),"email":forms.EmailInput(attrs={"autocomplete":"email"})}
+    def clean_username(self): return self.cleaned_data["username"].strip()
+    def clean_email(self): return self.cleaned_data["email"].strip().lower()
+    def clean(self):
+        cleaned=super().clean();first=cleaned.get("password1");second=cleaned.get("password2")
+        if first and second and first!=second: self.add_error("password2","The passwords do not match.")
+        if first:
+            candidate=User(username=cleaned.get("username",""),email=cleaned.get("email",""),first_name=cleaned.get("first_name",""),last_name=cleaned.get("last_name",""))
+            try: validate_password(first,candidate)
+            except ValidationError as exc: self.add_error("password1",exc)
+        return cleaned
 
 class ProjectForm(forms.ModelForm):
     class Meta:

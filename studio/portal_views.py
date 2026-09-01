@@ -9,12 +9,13 @@ from django.db import transaction
 from django.db.models import Count, F, Max, Q
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.utils import timezone
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_http_methods
-from .forms import LabEditForm, LabForm, ProfileForm, ProjectForm, RegistryImageForm, StudioPasswordChangeForm
+from .forms import LabEditForm, LabForm, PlatformUserCreateForm, ProfileForm, ProjectForm, RegistryImageForm, StudioPasswordChangeForm
 from .models import (AuditEvent, ConfigurationVersion, DeviceTemplate, DeviceTemplateVersion, ImageArtifact, Lab, LabDeployment,
                      LabInterface, LabLink, LabNode, LabRevision, OperationJob, Project,
-                     ProjectMembership, PublishedImage)
+                     ProjectMembership, PublishedImage, User)
 from .permissions import project_role
 from .configurations import decrypt_configuration, encrypt_configuration
 from .quotas import normalized_quotas,project_usage,quota_exceeded
@@ -23,6 +24,50 @@ from .edit_leases import acquire as acquire_edit_lease, conflict_payload as edit
 
 def visible_projects(user):
     return Project.objects.filter(Q(owner=user) | Q(memberships__user=user),deleted_at__isnull=True).distinct()
+
+def _require_platform_admin(request):
+    if not request.user.is_staff: raise PermissionDenied
+
+@login_required
+@require_http_methods(["GET","POST"])
+def platform_users(request):
+    _require_platform_admin(request);form=PlatformUserCreateForm(request.POST or None)
+    if request.method=="POST" and form.is_valid():
+        with transaction.atomic():
+            user=form.save(commit=False);user.is_active=True;user.set_password(form.cleaned_data["password1"]);user.save()
+            AuditEvent.objects.create(actor=request.user,action="account.created",target_type="User",target_id=user.id,
+                correlation_id=getattr(request,"correlation_id",""),metadata={"username":user.username})
+        messages.success(request,f'Account “{user.username}” created and ready for project access.');return redirect("portal-users")
+    users=User.objects.annotate(owned_project_count=Count("owned_projects",filter=Q(owned_projects__deleted_at__isnull=True),distinct=True),
+        membership_count=Count("project_memberships",distinct=True)).order_by("username")
+    return render(request,"studio/users.html",{"users":users,"form":form,"active_count":users.filter(is_active=True).count()})
+
+@login_required
+@require_http_methods(["GET","POST"])
+def platform_user_status(request,user_id):
+    _require_platform_admin(request);target=get_object_or_404(User,pk=user_id);action="deactivate" if target.is_active else "activate"
+    blockers=[]
+    if action=="deactivate":
+        if target==request.user: blockers.append("You cannot deactivate your current account.")
+        if target.is_superuser and not request.user.is_superuser: blockers.append("Only a superuser can deactivate another superuser.")
+        owned=target.owned_projects.filter(deleted_at__isnull=True).count()
+        if owned: blockers.append(f"Transfer or retire {owned} active owned project{'s' if owned!=1 else ''} first.")
+    payload={"user_id":str(target.id),"username":target.username,"action":action,"is_active":target.is_active,"updated_at":target.date_joined.isoformat(),
+        "references":{"owned_projects":target.owned_projects.filter(deleted_at__isnull=True).count(),"memberships":target.project_memberships.count(),
+            "active_consoles":target.consolesession_set.filter(revoked_at__isnull=True,expires_at__gt=timezone.now()).count()},"can_change":not blockers,"blockers":blockers,
+        "impact":["Revoke active browser console sessions immediately." if action=="deactivate" else "Allow this account to sign in again.",
+            "Preserve project memberships, audit history, and authored records.","Do not change project roles or ownership."]}
+    if request.method=="GET":
+        response=JsonResponse(payload);response["Cache-Control"]="no-store";return response
+    if request.POST.get("expected_action")!=action: return JsonResponse({"error":{"code":"account_status_changed","details":"The account status changed after preview."}},status=409)
+    if blockers: return JsonResponse({"error":{"code":"account_status_blocked","details":blockers}},status=409)
+    with transaction.atomic():
+        target=User.objects.select_for_update().get(pk=target.pk);target.is_active=action=="activate";target.save(update_fields=["is_active"])
+        revoked=0
+        if action=="deactivate": revoked=target.consolesession_set.filter(revoked_at__isnull=True).update(revoked_at=timezone.now())
+        AuditEvent.objects.create(actor=request.user,action=f"account.{action}d",target_type="User",target_id=target.id,
+            correlation_id=getattr(request,"correlation_id",""),metadata={"username":target.username,"revoked_consoles":revoked})
+    return JsonResponse({"user_id":str(target.id),"username":target.username,"is_active":target.is_active,"action":action})
 
 @login_required
 def projects(request):
