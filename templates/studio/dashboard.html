@@ -40,12 +40,12 @@
     {% endif %}
   </section>
 
-  <aside class="panel health-panel">
+  <aside class="panel health-panel" style="align-self:start">
     <div class="panel-header"><div><p class="eyebrow">INFRASTRUCTURE</p><h2>Platform health</h2></div><span class="all-systems"><i></i> Online</span></div>
     <div class="health-score"><div class="score-ring"><span>✓</span></div><div><strong>Core services ready</strong><p>Application services are connected.</p></div></div>
     <div class="service-list">
       <div><span class="service-icon db">▤</span><p><strong>PostgreSQL</strong><small>Application database</small></p><b class="healthy">Ready</b></div>
-      <div><span class="service-icon queue">↯</span><p><strong>Redis & Celery</strong><small>Jobs and live events</small></p><b class="healthy">Ready</b></div>
+      <div><span class="service-icon queue">↯</span><p><strong>Redis & Celery</strong><small>{% if platform_health.runtime %}Worker heartbeat · shared cache{% else %}Awaiting worker heartbeat{% endif %}</small></p><b class="{% if platform_health.runtime.available %}healthy{% else %}unavailable{% endif %}">{% if platform_health.runtime.available %}Ready{% else %}Pending{% endif %}</b></div>
       <div><span class="service-icon cluster">⬡</span><p><strong>Clabernetes</strong><small>{% if platform_health.runtime %}Runtime v{{ platform_health.runtime.version }} · reconciled{% else %}Awaiting first runtime reconciliation{% endif %}</small></p><b class="{% if platform_health.runtime.available %}healthy{% else %}unavailable{% endif %}">{% if platform_health.runtime.available %}Ready{% else %}Pending{% endif %}</b></div>
       <div><span class="service-icon storage">▰</span><p><strong>Resource metrics</strong><small>{% if platform_health.metrics.checked_at %}Metrics API · worker verified{% else %}Awaiting capability probe{% endif %}</small></p><b class="{% if platform_health.metrics.available %}healthy{% else %}unavailable{% endif %}">{% if platform_health.metrics.available %}Ready{% elif platform_health.metrics %}Unavailable{% else %}Pending{% endif %}</b></div>
     </div>
