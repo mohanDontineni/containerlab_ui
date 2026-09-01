@@ -7,7 +7,7 @@ def immutable_publication(image):
     if OCI_DIGEST.search(reference): return True
     result=image.compatibility_result if isinstance(image.compatibility_result,dict) else {}
     expected=f":sha256-{image.artifact.checksum}"
-    return result.get("publication_mode")=="node-containerd" and reference.endswith(expected)
+    return result.get("publication_mode") in ("node-containerd","node-containerd+internal-registry") and reference.endswith(expected)
 
 def evaluate(template_version,image):
     configured=getattr(template_version,"image_requirements",{})

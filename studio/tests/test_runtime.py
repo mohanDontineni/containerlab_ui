@@ -1,9 +1,50 @@
 import yaml
 import base64
 import struct
+import hashlib
+import uuid
+from email.message import Message
 from types import SimpleNamespace
 from studio.runtime import ClabernetesAdapter,API_GROUP,API_VERSION,RUNTIME_VERSION,CapabilityError,CAPTURE_STOP_MARKER,CAPTURE_STOP_DESTINATION,DISABLE_DEPLOYMENTS_LABEL,strip_capture_stop_packets
 def test_adapter_is_pinned(): assert (API_GROUP,API_VERSION,RUNTIME_VERSION)==("c9s.run","v1alpha1","0.8.0")
+
+def test_image_publication_pushes_and_verifies_internal_registry_manifest(tmp_path,settings,monkeypatch):
+    payload=b"validated docker archive";archive=tmp_path/"images"/"router.tar";archive.parent.mkdir();archive.write_bytes(payload)
+    checksum=hashlib.sha256(payload).hexdigest();project_id=uuid.uuid4();artifact_id=uuid.uuid4()
+    artifact=SimpleNamespace(id=artifact_id,project_id=project_id,checksum=checksum,storage_reference=str(archive),
+        inspection_result={"import_source":"sha256:"+"b"*64})
+    build=SimpleNamespace(id=uuid.uuid4(),job_identity="studio-publish-registry")
+    settings.MEDIA_ROOT=tmp_path;settings.STUDIO_NAMESPACE="containerlab";settings.PUBLISHER_IMAGE="launcher:test"
+    settings.PUBLISHER_NODE_SELECTOR={};settings.PUBLISHER_TIMEOUT_SECONDS=5
+    settings.REGISTRY_INTERNAL_URL="http://containerlab-studio-registry:5000"
+    jobs=[]
+    batch=SimpleNamespace(create_namespaced_job=lambda namespace,body:jobs.append((namespace,body)),
+        read_namespaced_job_status=lambda *_:SimpleNamespace(status=SimpleNamespace(succeeded=1,failed=0)))
+    core=SimpleNamespace(list_namespaced_pod=lambda *_args,**_kwargs:SimpleNamespace(items=[SimpleNamespace(metadata=SimpleNamespace(name="publisher-pod"))]),
+        read_namespaced_pod_log=lambda *_args,**_kwargs:"registry-manifest-pushed")
+    class RegistryResponse:
+        status=200
+        headers=Message()
+        def __enter__(self): self.headers["Docker-Content-Digest"]="sha256:"+"c"*64;return self
+        def __exit__(self,*_): return False
+    requests=[];monkeypatch.setattr("studio.runtime.urlopen",lambda request,timeout:requests.append((request,timeout)) or RegistryResponse())
+    result=ClabernetesAdapter(custom_api=SimpleNamespace(),core_api=core,batch_api=batch).publish_local_image(artifact,build)
+    command=jobs[0][1].spec.template.spec.containers[0].command[-1]
+    assert "images push --local --plain-http" in command and "CONTAINERLAB_STUDIO_REGISTRY_SERVICE_HOST" in command
+    assert result["publication_mode"]=="node-containerd+internal-registry" and result["registry_mirror"]=={
+        "reference":f"containerlab-studio-registry:5000/studio/{project_id.hex}/{artifact_id.hex}:sha256-{checksum}",
+        "repository":f"studio/{project_id.hex}/{artifact_id.hex}","tag":f"sha256-{checksum}",
+        "manifest_digest":"sha256:"+"c"*64,"verified":True}
+    assert requests[0][0].get_method()=="HEAD" and "/v2/studio/" in requests[0][0].full_url
+
+def test_image_publication_requires_internal_registry_configuration(tmp_path,settings):
+    archive=tmp_path/"router.tar";archive.write_bytes(b"archive");checksum=hashlib.sha256(b"archive").hexdigest()
+    artifact=SimpleNamespace(id=uuid.uuid4(),project_id=uuid.uuid4(),checksum=checksum,storage_reference=str(archive),inspection_result={"import_source":"sha256:x"})
+    settings.MEDIA_ROOT=tmp_path;settings.REGISTRY_INTERNAL_URL=""
+    adapter=ClabernetesAdapter(custom_api=SimpleNamespace(),core_api=SimpleNamespace(),batch_api=SimpleNamespace())
+    try: adapter.publish_local_image(artifact,SimpleNamespace(id=uuid.uuid4(),job_identity="job"))
+    except CapabilityError as exc: assert "registry is not configured" in str(exc)
+    else: raise AssertionError("publication must not claim success without its registry mirror")
 def test_unsupported_capability_is_explicit():
     adapter=object.__new__(ClabernetesAdapter)
     deployment=SimpleNamespace(id="deployment")

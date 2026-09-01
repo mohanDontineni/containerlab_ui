@@ -6,6 +6,8 @@ import json
 import shlex
 import time
 import struct
+from urllib.parse import urlsplit
+from urllib.request import Request, urlopen
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from django.conf import settings
@@ -96,11 +98,25 @@ class ClabernetesAdapter:
         if digest!=artifact.checksum: raise CapabilityError("Archive checksum changed after inspection")
         repository=f"containerlab.local/studio/{artifact.project_id.hex}/{artifact.id.hex}"
         reference=f"{repository}:sha256-{artifact.checksum}"
+        registry_url=settings.REGISTRY_INTERNAL_URL.rstrip("/")
+        if not registry_url: raise CapabilityError("The internal OCI registry is not configured")
+        registry_parts=urlsplit(registry_url)
+        if registry_parts.scheme!="http" or not registry_parts.netloc:
+            raise CapabilityError("The internal OCI registry endpoint must be a valid HTTP service URL")
+        mirror_repository=f"studio/{artifact.project_id.hex}/{artifact.id.hex}"
+        mirror_tag=f"sha256-{artifact.checksum}"
+        mirror_reference=f"{registry_parts.netloc}/{mirror_repository}:{mirror_tag}"
         source=artifact.inspection_result.get("import_source")
         if not source: raise CapabilityError("Archive inspection did not identify an import source")
         archive=f"/artifacts/{path.relative_to(settings.MEDIA_ROOT)}"
         staged_archive="/work/image-archive.tar"
-        command=f"set -eu; ctr -a /run/containerd/containerd.sock -n k8s.io images import --digests '{staged_archive}'; ctr -a /run/containerd/containerd.sock -n k8s.io images tag --force '{source}' '{reference}'; ctr -a /run/containerd/containerd.sock -n k8s.io images label '{reference}' io.cri-containerd.image=managed"
+        command=(f"set -eu; ctr -a /run/containerd/containerd.sock -n k8s.io images import --digests '{staged_archive}'; "
+            f"ctr -a /run/containerd/containerd.sock -n k8s.io images tag --force '{source}' '{reference}'; "
+            f"ctr -a /run/containerd/containerd.sock -n k8s.io images label '{reference}' io.cri-containerd.image=managed; "
+            f"mirror=\"${{CONTAINERLAB_STUDIO_REGISTRY_SERVICE_HOST}}:${{CONTAINERLAB_STUDIO_REGISTRY_SERVICE_PORT}}/{mirror_repository}:{mirror_tag}\"; "
+            f"ctr -a /run/containerd/containerd.sock -n k8s.io images tag --force '{source}' \"$mirror\"; "
+            "ctr -a /run/containerd/containerd.sock -n k8s.io images push --local --plain-http \"$mirror\"; "
+            "echo registry-manifest-pushed")
         pod=client.V1PodTemplateSpec(metadata=client.V1ObjectMeta(labels={"studio.containerlab.io/image-build":str(build.id)}),spec=client.V1PodSpec(
             restart_policy="Never",service_account_name="containerlab-studio-reconciler",node_selector=settings.PUBLISHER_NODE_SELECTOR,
             security_context=client.V1PodSecurityContext(run_as_user=0,run_as_non_root=False,fs_group=10001,seccomp_profile=client.V1SeccompProfile(type="RuntimeDefault")),
@@ -118,7 +134,20 @@ class ClabernetesAdapter:
         else: raise CapabilityError("Node image publication timed out")
         pods=self.core.list_namespaced_pod(settings.STUDIO_NAMESPACE,label_selector=f"job-name={build.job_identity}").items
         logs=self.core.read_namespaced_pod_log(pods[0].metadata.name,settings.STUDIO_NAMESPACE,tail_lines=200) if pods else ""
-        return {"reference":reference,"repository":repository,"archive_checksum":digest,"logs":logs[-12000:],"publication_mode":"node-containerd"}
+        manifest_url=f"{registry_url}/v2/{mirror_repository}/manifests/{mirror_tag}"
+        request=Request(manifest_url,method="HEAD",headers={"Accept":", ".join((
+            "application/vnd.oci.image.manifest.v1+json","application/vnd.docker.distribution.manifest.v2+json",
+            "application/vnd.oci.image.index.v1+json","application/vnd.docker.distribution.manifest.list.v2+json"))})
+        try:
+            with urlopen(request,timeout=10) as response:
+                manifest_digest=response.headers.get("Docker-Content-Digest","")
+                if response.status!=200 or not manifest_digest.startswith("sha256:"):
+                    raise CapabilityError("The internal registry did not return a verified manifest digest")
+        except CapabilityError: raise
+        except Exception as exc: raise CapabilityError(f"The internal registry could not verify the mirrored manifest: {exc}") from exc
+        return {"reference":reference,"repository":repository,"archive_checksum":digest,"logs":logs[-12000:],
+            "publication_mode":"node-containerd+internal-registry","registry_mirror":{"reference":mirror_reference,
+                "repository":mirror_repository,"tag":mirror_tag,"manifest_digest":manifest_digest,"verified":True}}
     def plan_deployment(self,deployment):
         revision=deployment.revision
         nodes={};config_maps=[];files_from_config_map={};resources={}

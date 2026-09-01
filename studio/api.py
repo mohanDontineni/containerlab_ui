@@ -926,7 +926,7 @@ class ImageArtifactViewSet(viewsets.ReadOnlyModelViewSet):
         with transaction.atomic():
             if published:
                 published.lifecycle_status="reconciling";published.save(update_fields=["lifecycle_status","updated_at"])
-            build_id=uuid.uuid4(); build=models.ImageBuild.objects.create(id=build_id,artifact=artifact,recipe_version="node-containerd-v1",job_identity=f"studio-publish-{build_id.hex[:20]}")
+            build_id=uuid.uuid4(); build=models.ImageBuild.objects.create(id=build_id,artifact=artifact,recipe_version="node-containerd-registry-v2",job_identity=f"studio-publish-{build_id.hex[:20]}")
             job=models.OperationJob.objects.create(owner=request.user,operation_type="publish_image",target_id=artifact.id,idempotency_key=key,state="scheduled",request_payload={"build_id":str(build.id),"force":force})
             models.AuditEvent.objects.create(actor=request.user,project=artifact.project,action="image.republication_scheduled" if force else "image.publication_scheduled",target_type="ImageArtifact",target_id=artifact.id,correlation_id=getattr(request,"correlation_id",""),metadata={"build":str(build.id),"operation":str(job.id),"force":force})
             transaction.on_commit(lambda: execute_operation.delay(str(job.id)))
