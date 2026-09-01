@@ -19,6 +19,11 @@ redis:
   image: redis:8.2.1-alpine
 registry:
   image: registry:3.1.1
+  storageClass: studio-local
+  localPersistence:
+    enabled: true
+    path: /var/lib/containerlab-studio/registry
+    nodeHostname: trading
 resources:
   web: {requests: {cpu: 100m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
   worker: {requests: {cpu: 100m, memory: 256Mi}, limits: {cpu: "2", memory: 2Gi}}

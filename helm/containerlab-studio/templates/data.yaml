@@ -29,14 +29,27 @@ spec:
   {{- end }}
 ---
 apiVersion: v1
+kind: PersistentVolume
+metadata: {name: containerlab-studio-registry-pv}
+spec:
+  capacity: {storage: {{ .Values.storage.registry }}}
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: {{ .Values.registry.storageClass }}
+  local: {path: {{ .Values.registry.localPersistence.path | quote }}}
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+      - matchExpressions: [{key: kubernetes.io/hostname,operator: In,values: [{{ .Values.registry.localPersistence.nodeHostname | quote }}]}]
+  claimRef: {namespace: {{ .Release.Namespace }},name: containerlab-studio-registry}
+---
+apiVersion: v1
 kind: PersistentVolumeClaim
 metadata: {name: containerlab-studio-registry}
 spec:
   accessModes: [ReadWriteOnce]
   resources: {requests: {storage: {{ .Values.storage.registry }}}}
-  {{- if .Values.storageClass }}
-  storageClassName: {{ .Values.storageClass }}
-  {{- end }}
+  storageClassName: {{ .Values.registry.storageClass }}
 ---
 apiVersion: apps/v1
 kind: StatefulSet
