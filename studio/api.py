@@ -1104,6 +1104,105 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
             transaction.on_commit(lambda job_ids=[job.id for job in jobs]:[execute_operation.delay(str(job_id)) for job_id in job_ids])
         return Response({"count":len(jobs),"jobs":serializers.OperationSerializer(jobs,many=True).data},status=202)
 
+    def _configuration_snapshot_data(self,deployment):
+        nodes=list(deployment.revision.nodes.select_related("template_version","startup_configuration").order_by("name"))
+        supported=[node for node in nodes if node.template_version.launch_profile.get("configuration_collect_command")]
+        events=models.AuditEvent.objects.filter(action="configuration.collected",project=deployment.revision.lab.project,
+            metadata__deployment=str(deployment.id)).order_by("-occurred_at")[:2000]
+        latest={}
+        for event in events:
+            device=str(event.metadata.get("device","")).strip()
+            if device and device not in latest:latest[device]=event
+        configurations={row.id:row for row in models.ConfigurationVersion.objects.filter(
+            id__in=[event.target_id for event in latest.values()],project=deployment.revision.lab.project)}
+        rows=[];blockers=[];total=0
+        for node in supported:
+            event=latest.get(node.name);configuration=configurations.get(event.target_id) if event else None
+            if not configuration:
+                blockers.append({"device":node.name,"reason":"Collect a current configuration before saving the lab."});continue
+            if not node.template_version.launch_profile.get("startup_config_target"):
+                blockers.append({"device":node.name,"reason":"The pinned template cannot deliver startup configuration."});continue
+            byte_size=int(event.metadata.get("byte_size",0));total+=max(byte_size,0)
+            rows.append({"device":node.name,"configuration_id":str(configuration.id),"version":configuration.version,
+                "checksum":configuration.checksum,"byte_size":byte_size,
+                "current_checksum":node.startup_configuration.checksum if node.startup_configuration_id else None,
+                "changed":not node.startup_configuration_id or node.startup_configuration.checksum!=configuration.checksum})
+        if not supported:blockers.append({"device":"Lab","reason":"No device has a verified configuration collector."})
+        if len(supported)>200:blockers.append({"device":"Lab","reason":"Whole-lab save supports at most 200 devices."})
+        if total>20*1024*1024:blockers.append({"device":"Lab","reason":"Collected configurations exceed the 20 MiB save limit."})
+        identity={"deployment":str(deployment.id),"revision":str(deployment.revision_id),
+            "configurations":[{"device":row["device"],"id":row["configuration_id"],"checksum":row["checksum"]} for row in rows]}
+        checksum=hashlib.sha256(json.dumps(identity,sort_keys=True,separators=(",",":")).encode()).hexdigest()
+        return {"deployment_id":str(deployment.id),"lab":deployment.revision.lab.name,"source_revision":deployment.revision.revision_number,
+            "expected_current_draft":str(deployment.revision.lab.current_draft_id) if deployment.revision.lab.current_draft_id else None,
+            "snapshot_checksum":checksum,"configurations":rows,"device_count":len(rows),"changed_count":sum(row["changed"] for row in rows),
+            "total_bytes":total,"blockers":blockers,"can_save":not blockers and bool(rows) and any(row["changed"] for row in rows),
+            "running_deployment_unchanged":True}
+
+    @action(detail=True,methods=["get"],url_path="configurations/save-preview")
+    def configuration_save_preview(self,request,pk=None):
+        deployment=self.get_object();self._require_operator(deployment);data=self._configuration_snapshot_data(deployment)
+        data["impact"]=[f"Create a new editable draft from immutable revision {deployment.revision.revision_number}.",
+            f"Pin the latest collected startup configuration for {data['device_count']} supported device(s).",
+            "Replace the current editable draft only after its preview token is revalidated.",
+            "Leave the running deployment, immutable revision, and collected history unchanged."]
+        if not data["blockers"] and not data["changed_count"]:data["blockers"]=[{"device":"Lab","reason":"Latest collected configurations already match the deployed startup configurations."}]
+        response=Response(data);response["Cache-Control"]="no-store";response["X-Content-Type-Options"]="nosniff";return response
+
+    @action(detail=True,methods=["post"],url_path="configurations/save")
+    def save_configurations(self,request,pk=None):
+        deployment=self.get_object();self._require_operator(deployment)
+        conflict=require_edit_lease(request,deployment.revision.lab)
+        if conflict:return conflict
+        key=request.headers.get("Idempotency-Key");expected_header=request.headers.get("X-Expected-Draft")
+        expected_snapshot=str(request.data.get("expected_snapshot_checksum","")).strip().lower()
+        if not key:return Response({"error":{"code":"idempotency_key_required"}},status=400)
+        if expected_header is None:return Response({"error":{"code":"expected_draft_required"}},status=400)
+        expected_draft=None if expected_header.lower()=="none" else expected_header
+        if expected_draft:
+            try:expected_draft=str(uuid.UUID(expected_draft))
+            except (ValueError,TypeError,AttributeError):return Response({"error":{"code":"invalid_expected_draft"}},status=422)
+        if len(expected_snapshot)!=64:return Response({"error":{"code":"expected_snapshot_required"}},status=400)
+        existing=models.OperationJob.objects.filter(owner=request.user,idempotency_key=key).first()
+        if existing:
+            if (existing.operation_type!="save_collected_configurations" or existing.target_id!=deployment.id or
+                existing.deployment_id!=deployment.id or existing.request_payload!={"expected_current_draft":expected_draft,"snapshot_checksum":expected_snapshot}):
+                return Response({"error":{"code":"idempotency_conflict"}},status=409)
+            return Response(existing.result_payload,status=200)
+        try:
+            with transaction.atomic():
+                lab=models.Lab.objects.select_for_update().get(pk=deployment.revision.lab_id)
+                actual=str(lab.current_draft_id) if lab.current_draft_id else None
+                if actual!=expected_draft:return Response({"error":{"code":"draft_changed","details":"The active draft changed after the save preview.","current_draft":actual}},status=409)
+                deployment.revision.lab=lab;preview=self._configuration_snapshot_data(deployment)
+                if preview["snapshot_checksum"]!=expected_snapshot:
+                    return Response({"error":{"code":"configuration_snapshot_changed","details":"Collected configuration history changed after the preview.",
+                        "snapshot_checksum":preview["snapshot_checksum"]}},status=409)
+                if preview["blockers"]:return Response({"error":{"code":"configuration_save_blocked","devices":preview["blockers"]}},status=409)
+                if not preview["changed_count"]:return Response({"error":{"code":"configuration_snapshot_unchanged"}},status=409)
+                job=models.OperationJob.objects.create(deployment=deployment,owner=request.user,operation_type="save_collected_configurations",
+                    target_id=deployment.id,idempotency_key=key,state="started",progress=25,
+                    request_payload={"expected_current_draft":expected_draft,"snapshot_checksum":expected_snapshot})
+                bundle=export_lab_bundle(lab,deployment.revision);by_name={item["name"]:item for item in bundle["topology"]["nodes"]}
+                configurations={str(row.id):row for row in models.ConfigurationVersion.objects.filter(
+                    id__in=[row["configuration_id"] for row in preview["configurations"]],project=lab.project)}
+                for row in preview["configurations"]:
+                    configuration=configurations.get(row["configuration_id"])
+                    if not configuration:raise BundleError(f"Collected configuration for {row['device']} is unavailable")
+                    by_name[row["device"]]["startupConfiguration"]=decrypt_configuration(configuration.encrypted_content)
+                restored=import_lab_bundle(lab,request.user,bundle)
+                result={"revision_id":str(restored.id),"revision_number":restored.revision_number,"device_count":preview["device_count"],
+                    "snapshot_checksum":expected_snapshot,"workspace_url":f"/labs/{lab.id}/topology/","operation_id":str(job.id)}
+                job.state="succeeded";job.progress=100;job.result_payload=result;job.save(update_fields=["state","progress","result_payload","updated_at"])
+                models.AuditEvent.objects.create(actor=request.user,project=lab.project,action="configuration.snapshot_draft_created",
+                    target_type="LabRevision",target_id=restored.id,correlation_id=getattr(request,"correlation_id",""),
+                    metadata={"deployment":str(deployment.id),"source_revision":str(deployment.revision_id),"device_count":preview["device_count"],
+                        "configuration_ids":[row["configuration_id"] for row in preview["configurations"]],
+                        "configuration_checksums":[row["checksum"] for row in preview["configurations"]],"snapshot_checksum":expected_snapshot,"operation":str(job.id)})
+        except BundleError as exc:return Response({"error":{"code":"configuration_save_failed","details":str(exc)}},status=422)
+        except IntegrityError:return Response({"error":{"code":"operation_conflict"}},status=409)
+        return Response(result,status=201)
+
     @action(detail=True,methods=["post"],url_path="configuration-compare")
     def compare_configurations(self,request,pk=None):
         deployment=self.get_object();self._require_operator(deployment)

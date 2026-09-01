@@ -1360,6 +1360,55 @@ def test_whole_lab_configuration_collection_is_atomic_idempotent_and_operator_on
     assert AuditEvent.objects.filter(action="device.collect_configuration",metadata__whole_lab=True).count()==2
 
 @pytest.mark.django_db
+def test_whole_lab_configuration_snapshot_creates_concurrency_safe_draft_without_touching_runtime():
+    owner=User.objects.create_user("snapshot-owner",password="long-enough-password")
+    viewer=User.objects.create_user("snapshot-viewer",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="snapshot-project");ProjectMembership.objects.create(project=project,user=viewer,role="viewer")
+    lab=Lab.objects.create(project=project,name="snapshot-lab");template=DeviceTemplateVersion.objects.get(template__name="FRR Router")
+    source=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="a"*64,immutable=True)
+    latest={}
+    for index,name in enumerate(("r1","r2"),1):
+        old_content=f"hostname {name}\nrouter bgp 64{index:03d}\n"
+        old=ConfigurationVersion.objects.create(project=project,name=f"snapshot/{name}/startup",version=1,
+            encrypted_content=encrypt_configuration(old_content),checksum=hashlib.sha256(old_content.encode()).hexdigest(),created_by=owner)
+        node=LabNode.objects.create(revision=source,name=name,template_version=template,startup_configuration=old,position={"x":index*100,"y":50})
+        for number in range(1,9):LabInterface.objects.create(node=node,name=f"eth{number}")
+        new_content=f"hostname {name}\nrouter bgp 65{index:03d}\n"
+        configuration=ConfigurationVersion.objects.create(project=project,name=f"snapshot/{name}/collected",version=2,
+            encrypted_content=encrypt_configuration(new_content),checksum=hashlib.sha256(new_content.encode()).hexdigest(),created_by=owner)
+        latest[name]=(configuration,new_content)
+    nodes=list(source.nodes.order_by("name"));LabLink.objects.create(revision=source,endpoint_a=nodes[0].interfaces.get(name="eth1"),endpoint_b=nodes[1].interfaces.get(name="eth1"))
+    deployment=LabDeployment.objects.create(revision=source,cluster_identity="test",namespace="clab-snapshot",runtime_version="0.8.0",observed_state="running")
+    for name,(configuration,content) in latest.items():
+        AuditEvent.objects.create(actor=owner,project=project,action="configuration.collected",target_type="ConfigurationVersion",target_id=configuration.id,
+            correlation_id="snapshot-test",metadata={"deployment":str(deployment.id),"device":name,"version":2,
+                "checksum":configuration.checksum,"byte_size":len(content.encode())})
+    previous_draft=LabRevision.objects.create(lab=lab,revision_number=2,topology_checksum="b"*64);lab.current_draft=previous_draft;lab.save(update_fields=["current_draft"])
+    endpoint=f"/api/v1/deployments/{deployment.id}/configurations";client=APIClient();client.force_authenticate(viewer)
+    assert client.get(f"{endpoint}/save-preview/").status_code==403
+    client.force_authenticate(owner);preview=client.get(f"{endpoint}/save-preview/")
+    assert preview.status_code==200 and preview.data["can_save"] is True and preview.data["changed_count"]==2
+    assert [row["device"] for row in preview.data["configurations"]]==["r1","r2"] and "encrypted_content" not in str(preview.data)
+    stale=client.post(f"{endpoint}/save/",{"expected_snapshot_checksum":"0"*64},format="json",
+        HTTP_X_EXPECTED_DRAFT=str(previous_draft.id),HTTP_IDEMPOTENCY_KEY="stale-snapshot")
+    assert stale.status_code==409 and stale.data["error"]["code"]=="configuration_snapshot_changed"
+    payload={"expected_snapshot_checksum":preview.data["snapshot_checksum"]}
+    saved=client.post(f"{endpoint}/save/",payload,format="json",HTTP_X_EXPECTED_DRAFT=str(previous_draft.id),HTTP_IDEMPOTENCY_KEY="save-snapshot")
+    replay=client.post(f"{endpoint}/save/",payload,format="json",HTTP_X_EXPECTED_DRAFT=str(previous_draft.id),HTTP_IDEMPOTENCY_KEY="save-snapshot")
+    assert saved.status_code==201 and replay.status_code==200 and replay.data==saved.data and saved.data["device_count"]==2
+    lab.refresh_from_db();deployment.refresh_from_db();draft=lab.current_draft
+    assert draft.id==uuid.UUID(saved.data["revision_id"]) and draft.revision_number==3 and not draft.immutable
+    assert not LabRevision.objects.filter(id=previous_draft.id).exists() and LabRevision.objects.filter(id=source.id,immutable=True).exists()
+    for name,(configuration,content) in latest.items():
+        restored=draft.nodes.get(name=name).startup_configuration
+        assert restored.id!=configuration.id and restored.checksum==configuration.checksum and decrypt_configuration(restored.encrypted_content)==content
+    assert deployment.revision_id==source.id and deployment.observed_state=="running"
+    job=OperationJob.objects.get(operation_type="save_collected_configurations",idempotency_key="save-snapshot")
+    assert job.state=="succeeded" and job.result_payload["revision_id"]==str(draft.id)
+    audit=AuditEvent.objects.get(action="configuration.snapshot_draft_created",target_id=draft.id)
+    assert audit.metadata["device_count"]==2 and "hostname" not in json.dumps(audit.metadata) and "content" not in audit.metadata
+
+@pytest.mark.django_db
 def test_configuration_compare_and_restore_creates_concurrency_safe_draft_without_touching_runtime():
     owner=User.objects.create_user("restore-config-owner",password="long-enough-password")
     viewer=User.objects.create_user("restore-config-viewer",password="long-enough-password")
