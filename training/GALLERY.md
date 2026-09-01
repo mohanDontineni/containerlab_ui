@@ -337,3 +337,9 @@ The dashboard reports database connectivity, Redis-backed worker execution, Clab
 ![Saved topology startup plan](56-saved-topology-startup-plan.png)
 
 The visual topology inspector lets operators assign each device a bounded startup priority from 1–250. Those priorities persist with drafts, immutable revisions, clones, backups, and runtime instances; equal priorities are resolved deterministically by device name. When all planned devices are stopped, the runtime's Saved plan action selects them automatically and opens the existing guarded staged-start preview, where the operator can still review the exact order and choose a bounded interval. Firefox restored the production BGP design as revision 3, saved `r2=10` and `r1=20`, deployed it, stopped both routers, loaded `r2 → r1` without manual selection, and ran the durable sequence 8.101 seconds apart. Both routers returned Ready and routed reachability passed 3/3 with 0% loss.
+
+## 57 — Native packet analysis
+
+![Native packet analysis](57-native-packet-analysis.png)
+
+The operator opens a completed interface capture directly in the runtime GUI instead of leaving Studio for Wireshark or a CLI decoder. A bounded, read-only classic-PCAP parser reports packet and byte totals, protocol distribution, normalized bidirectional conversations, relative timestamps, endpoints, lengths, and safe protocol summaries; raw payload bytes are never rendered. Firefox captured `r1:eth1` while the GUI ran five live pings to `10.2.2.2`, then verified all 10 request/reply frames as one ICMP conversation. The same dialog retains an authorized raw-PCAP download for advanced offline analysis.

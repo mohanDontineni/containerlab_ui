@@ -66,6 +66,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 | `54-live-device-resource-telemetry.png` | Live device resource telemetry | Compares current launcher CPU and memory use with each device's enforced limits, worker placement, sample window, and freshness. |
 | `55-verified-platform-capabilities.png` | Verified platform capabilities | Shows database, worker/cache, Clabernetes reconciliation, and resource metrics as expiring evidence-backed health states. |
 | `56-saved-topology-startup-plan.png` | Saved topology startup plan | Loads device priorities saved in the visual topology into the guarded staged-start workflow without selecting or reordering devices again. |
+| `57-native-packet-analysis.png` | Native packet analysis | Decodes a bounded completed PCAP into protocol totals, conversations, and packet rows without external tools. |
 
 ## No-YAML operating model
 
@@ -96,6 +97,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 24. Monitor each running device's live CPU and memory use against its enforced template limits without Kubernetes access or CLI commands.
 25. Confirm the shared platform services are healthy from the dashboard; worker and metrics status expires automatically if verification stops.
 26. Assign bounded startup priorities in each device's topology properties, then load and run that saved dependency order from the runtime page.
+27. Open a completed interface capture in Studio to inspect protocol mix, top conversations, and decoded packet metadata; download the raw PCAP only when deeper offline analysis is needed.
 
 Containerlab/Kubernetes YAML is an internal adapter concern. It may be inspected by platform administrators for troubleshooting, but it is not part of the normal user workflow.
 
