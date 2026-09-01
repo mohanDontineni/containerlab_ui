@@ -308,7 +308,9 @@ def test_lab_clone_is_deep_project_scoped_audited_and_quota_enforced():
     assert response.status_code==201 and response.data["node_count"]==2 and response.data["link_count"]==1
     assert response.data["current_draft"] and response.data["workspace_url"]==f"/labs/{response.data['id']}/topology/"
     clone=Lab.objects.get(pk=response.data["id"]);cloned=clone.current_draft
-    assert clone.description=="reference" and clone.tags==["bgp"] and cloned.id!=revision.id and cloned.annotations==revision.annotations
+    assert clone.description=="reference" and clone.tags==["bgp"] and cloned.id!=revision.id
+    assert revision.annotations==[{"type":"text","text":"edge"}]
+    assert cloned.annotations[0]["type"]=="note" and cloned.annotations[0]["text"]=="edge" and uuid.UUID(cloned.annotations[0]["id"])
     assert set(cloned.nodes.values_list("name",flat=True))=={"client","server"} and cloned.links.get().label=="data"
     cloned_config=cloned.nodes.get(name="client").startup_configuration
     assert cloned_config.id!=configuration.id and decrypt_configuration(cloned_config.encrypted_content)=="hostname client\n"
@@ -351,7 +353,8 @@ def test_revision_history_restore_creates_new_draft_is_concurrency_safe_and_idem
     assert replay.status_code==200 and replay.data["revision_id"]==restored.data["revision_id"]
     lab.refresh_from_db();new_draft=lab.current_draft
     assert new_draft.id==uuid.UUID(restored.data["revision_id"]) and not LabRevision.objects.filter(id=draft.id).exists()
-    assert LabRevision.objects.filter(id=published.id,immutable=True).exists() and new_draft.annotations==[{"text":"known-good"}]
+    assert LabRevision.objects.filter(id=published.id,immutable=True,annotations=[{"text":"known-good"}]).exists()
+    assert new_draft.annotations[0]["type"]=="note" and new_draft.annotations[0]["text"]=="known-good" and uuid.UUID(new_draft.annotations[0]["id"])
     cloned_node=new_draft.nodes.get();assert cloned_node.name=="r1" and cloned_node.id!=source_node.id
     assert decrypt_configuration(cloned_node.startup_configuration.encrypted_content)=="hostname restored\n"
     assert OperationJob.objects.filter(owner=owner,operation_type="restore_revision",idempotency_key="restore-v1",state="succeeded").count()==1

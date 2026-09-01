@@ -119,6 +119,22 @@ def test_topology_annotations_are_bounded_persisted_and_checksum_protected(clien
     assert rejected.status_code==422 and "2000" in rejected.json()["error"]
 
 @pytest.mark.django_db
+def test_legacy_text_annotations_upgrade_deterministically_and_remain_editable(client):
+    owner=User.objects.create_user("legacy-annotation-owner",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="Legacy annotation project");lab=Lab.objects.create(project=project,name="Legacy lab")
+    revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="a"*64,
+        annotations=[{"type":"text","x":125,"y":80,"text":"Pre-canvas BGP note"}])
+    lab.current_draft=revision;lab.save(update_fields=["current_draft"]);client.force_login(owner)
+    first=client.get(f"/api/v1/labs/{lab.id}/topology/").json();second=client.get(f"/api/v1/labs/{lab.id}/topology/").json()
+    annotation=first["annotations"][0]
+    assert annotation==second["annotations"][0]
+    assert annotation["type"]=="note" and annotation["text"]=="Pre-canvas BGP note"
+    assert uuid.UUID(annotation["id"])
+    saved=client.put(f"/api/v1/labs/{lab.id}/topology/",json.dumps({"editVersion":first["editVersion"],"nodes":[],"links":[],"annotations":first["annotations"]}),content_type="application/json")
+    assert saved.status_code==200
+    revision.refresh_from_db();assert revision.annotations[0]==annotation and revision.edit_version==2
+
+@pytest.mark.django_db
 def test_firewall_catalog_exposes_policy_and_interface_requirements(client):
     user=User.objects.create_user("firewall-catalog",password="long-enough-password")
     client.force_login(user)

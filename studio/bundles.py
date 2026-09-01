@@ -10,6 +10,7 @@ from rest_framework.exceptions import ParseError
 from .configurations import decrypt_configuration, encrypt_configuration
 from .models import (ConfigurationVersion, DeviceTemplateVersion, LabInterface,
                      LabLink, LabNode, LabRevision, PublishedImage)
+from .topology_annotations import normalize_legacy_topology_annotations
 
 BUNDLE_FORMAT = "io.containerlab.studio.lab"
 BUNDLE_VERSION = 1
@@ -60,7 +61,7 @@ def export_lab_bundle(lab, revision=None):
     return {
         "format": BUNDLE_FORMAT, "version": BUNDLE_VERSION,
         "lab": {"name": lab.name, "description": lab.description, "tags": lab.tags},
-        "topology": {"nodes": nodes, "links": links, "annotations": revision.annotations if revision else []},
+        "topology": {"nodes": nodes, "links": links, "annotations": normalize_legacy_topology_annotations(revision.annotations,revision.id) if revision else []},
     }
 
 
@@ -82,7 +83,8 @@ def inspect_lab_bundle(lab, raw):
     topology=bundle.get("topology")
     if not isinstance(topology,dict) or not isinstance(topology.get("nodes"),list) or not isinstance(topology.get("links"),list):
         raise BundleError("Bundle topology must contain node and link lists")
-    if not isinstance(topology.get("annotations",[]),list): raise BundleError("Bundle annotations must be a list")
+    try: topology["annotations"]=normalize_legacy_topology_annotations(topology.get("annotations",[]),lab.id)
+    except ValueError as exc: raise BundleError(str(exc)) from exc
     if len(topology["nodes"])>250 or len(topology["links"])>1000: raise BundleError("Bundle exceeds workspace topology limits")
     source_ids=set();names=set();interfaces=set();templates=set();images=set();configured=0;node_checks={}
     for item in topology["nodes"]:

@@ -4,7 +4,6 @@ from django.contrib.auth import update_session_auth_hash
 from django.core.exceptions import PermissionDenied
 import hashlib
 import json
-import math
 import uuid
 from django.db import transaction
 from django.db.models import Count, F, Max, Q
@@ -19,41 +18,10 @@ from .models import (AuditEvent, ConfigurationVersion, DeviceTemplate, DeviceTem
 from .permissions import project_role
 from .configurations import decrypt_configuration, encrypt_configuration
 from .quotas import normalized_quotas,project_usage,quota_exceeded
+from .topology_annotations import normalize_legacy_topology_annotations,validate_topology_annotations
 
 def visible_projects(user):
     return Project.objects.filter(Q(owner=user) | Q(memberships__user=user),deleted_at__isnull=True).distinct()
-
-ANNOTATION_COLORS={"cyan","blue","violet","amber","rose","green","slate"}
-def validate_topology_annotations(value):
-    if not isinstance(value,list): raise ValueError("Annotations must be a list")
-    if len(value)>200: raise ValueError("A topology can contain at most 200 annotations")
-    normalized=[];identities=set()
-    for index,item in enumerate(value,1):
-        if not isinstance(item,dict): raise ValueError(f"Annotation {index} must be an object")
-        try: identity=str(uuid.UUID(str(item.get("id"))))
-        except (TypeError,ValueError,AttributeError): raise ValueError(f"Annotation {index} needs a valid UUID")
-        if identity in identities: raise ValueError("Annotation IDs must be unique")
-        identities.add(identity);kind=item.get("type")
-        if kind not in ("note","region"): raise ValueError(f"Annotation {index} has an unsupported type")
-        geometry={}
-        for field,minimum,maximum in (("x",-10000,10000),("y",-10000,10000),("width",80,2000),("height",40,1600)):
-            number=item.get(field)
-            if isinstance(number,bool) or not isinstance(number,(int,float)) or not math.isfinite(number) or number<minimum or number>maximum:
-                raise ValueError(f"Annotation {index} has an invalid {field}")
-            geometry[field]=round(float(number),2)
-        text=item.get("text","")
-        if not isinstance(text,str) or not text.strip() or len(text.encode("utf-8"))>2000:
-            raise ValueError(f"Annotation {index} text must be between 1 and 2000 UTF-8 bytes")
-        color=item.get("color","cyan")
-        if color not in ANNOTATION_COLORS: raise ValueError(f"Annotation {index} has an invalid color")
-        font_size=item.get("fontSize",14);z_index=item.get("zIndex",0)
-        if isinstance(font_size,bool) or not isinstance(font_size,int) or not 10<=font_size<=32:
-            raise ValueError(f"Annotation {index} has an invalid font size")
-        if isinstance(z_index,bool) or not isinstance(z_index,int) or not -100<=z_index<=100:
-            raise ValueError(f"Annotation {index} has an invalid layer")
-        normalized.append({"id":identity,"type":kind,**geometry,"text":text.strip(),"color":color,
-            "fontSize":font_size,"zIndex":z_index})
-    return normalized
 
 @login_required
 def projects(request):
@@ -183,7 +151,7 @@ def topology_document(request, lab_id):
             "targetNode": str(link.endpoint_b.node_id), "targetInterface": link.endpoint_b.name, "label": link.label,
             "properties": link.properties} for link in revision.links.select_related("endpoint_a__node", "endpoint_b__node")]
         return JsonResponse({"lab": {"id": str(lab.id), "name": lab.name}, "revisionId": str(revision.id), "editVersion": revision.edit_version,
-            "nodes": nodes, "links": links, "annotations": revision.annotations})
+            "nodes": nodes, "links": links, "annotations": normalize_legacy_topology_annotations(revision.annotations,revision.id)})
     if project_role(request.user, lab.project) not in (ProjectMembership.Role.ADMIN, ProjectMembership.Role.EDITOR):
         return JsonResponse({"error": "Editor access is required to change this topology"}, status=403)
     try: payload = json.loads(request.body)
