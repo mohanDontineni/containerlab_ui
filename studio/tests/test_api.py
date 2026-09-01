@@ -894,6 +894,40 @@ def test_reachability_matrix_is_bounded_authorized_idempotent_and_normalized(mon
     assert observations["reachability"]["id"]==str(job.id) and observations["traffic"] is None
 
 @pytest.mark.django_db
+def test_network_health_archive_is_scoped_integrity_described_and_spreadsheet_safe():
+    owner=User.objects.create_user("health-owner",password="long-enough-password")
+    viewer=User.objects.create_user("health-viewer",password="long-enough-password")
+    stranger=User.objects.create_user("health-stranger",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="health-project");ProjectMembership.objects.create(project=project,user=viewer,role="viewer")
+    lab=Lab.objects.create(project=project,name="Health Evidence");revision=LabRevision.objects.create(lab=lab,revision_number=3,topology_checksum="6"*64,immutable=True)
+    deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-health",runtime_version="0.8.0",observed_state="running")
+    stats={"rx":{"bytes":1200,"packets":12,"errors":0,"dropped":0},"tx":{"bytes":1500,"packets":15,"errors":0,"dropped":0}}
+    traffic=OperationJob.objects.create(deployment=deployment,owner=owner,operation_type="inspect_topology_traffic",target_id=deployment.id,
+        idempotency_key="health-traffic",state="succeeded",result_payload={"device_count":2,"link_count":1,"links":[{"id":"link-1","label":"=unsafe",
+            "endpoint_a":{"node":"r1","interface":"eth1","state":"UP","statistics":stats},"endpoint_b":{"node":"r2","interface":"eth1","state":"UP","statistics":stats}}]})
+    reachability=OperationJob.objects.create(deployment=deployment,owner=owner,operation_type="diagnose_topology_reachability",target_id=deployment.id,
+        idempotency_key="health-reachability",state="succeeded",result_payload={"device_count":2,"probe_count":2,"successful":2,
+            "results":[{"source":"r1","target":"r2","target_address":"10.0.12.2","success":True,"transmitted":1,"received":1,"loss_percent":0,"average_ms":0.4}]})
+    endpoint=f"/api/v1/deployments/{deployment.id}/observations/export/";client=APIClient();client.force_authenticate(viewer)
+    response=client.get(endpoint)
+    assert response.status_code==200 and response["Content-Type"]=="application/zip" and response["Cache-Control"]=="no-store"
+    assert response["X-Archive-SHA256"]==hashlib.sha256(response.content).hexdigest()
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        assert set(archive.namelist())=={"traffic.csv","reachability.csv","manifest.json"}
+        manifest=json.loads(archive.read("manifest.json"));traffic_csv=archive.read("traffic.csv");reachability_csv=archive.read("reachability.csv")
+        assert manifest["evidence_type"]=="network-health" and manifest["revision"]==3
+        assert manifest["observations"]["traffic"]["operation_id"]==str(traffic.id) and manifest["observations"]["traffic"]["rows"]==2
+        assert manifest["observations"]["reachability"]["operation_id"]==str(reachability.id) and manifest["observations"]["reachability"]["rows"]==1
+        assert manifest["files"]["traffic.csv"]["sha256"]==hashlib.sha256(traffic_csv).hexdigest()
+        assert manifest["files"]["reachability.csv"]["sha256"]==hashlib.sha256(reachability_csv).hexdigest()
+        assert b"'=unsafe" in traffic_csv and b"10.0.12.2" in reachability_csv
+    audit=AuditEvent.objects.get(action="network_health.archive_exported",target_id=deployment.id)
+    assert audit.actor==viewer and audit.metadata["traffic_rows"]==2 and audit.metadata["reachability_rows"]==1
+    client.force_authenticate(stranger);assert client.get(endpoint).status_code==404
+    empty=LabDeployment.objects.create(revision=revision,cluster_identity="empty",namespace="clab-empty",runtime_version="0.8.0")
+    client.force_authenticate(owner);assert client.get(f"/api/v1/deployments/{empty.id}/observations/export/").status_code==409
+
+@pytest.mark.django_db
 def test_runtime_device_contract_exposes_logical_node_identity():
     owner=User.objects.create_user("device-owner",password="long-enough-password")
     project=Project.objects.create(owner=owner,name="devices")

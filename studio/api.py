@@ -4,6 +4,7 @@ import hashlib
 import json
 import difflib
 import io
+import csv
 import zipfile
 from pathlib import Path
 from django.conf import settings
@@ -1339,6 +1340,59 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
             "operations":serializers.OperationSerializer(deployment.operations.order_by("-created_at")[:20],many=True).data,"observations":observations,
             "schedules":serializers.DeploymentScheduleSerializer(deployment.schedules.select_related("created_by","operation").order_by("-created_at")[:50],many=True).data})
         response["Cache-Control"]="no-store";response["X-Content-Type-Options"]="nosniff";return response
+
+    @action(detail=True,methods=["get"],url_path="observations/export")
+    def export_observations(self,request,pk=None):
+        deployment=self.get_object()
+        jobs={operation_type:deployment.operations.filter(operation_type=operation_type,state="succeeded").order_by("-updated_at").first()
+            for operation_type in ("inspect_topology_traffic","diagnose_topology_reachability")}
+        if not any(jobs.values()):
+            return Response({"error":{"code":"network_health_export_empty","details":"Run a topology traffic snapshot or reachability matrix before exporting network health evidence."}},status=409)
+        def safe(value):
+            text=str(value if value is not None else "")
+            return "'"+text if text.lstrip().startswith(("=","+","-","@")) else text
+        def csv_payload(headers,rows):
+            output=io.StringIO(newline="");writer=csv.writer(output,lineterminator="\n");writer.writerow(headers)
+            for row in rows: writer.writerow([safe(value) for value in row])
+            return output.getvalue().encode("utf-8")
+        traffic_rows=[];traffic=jobs["inspect_topology_traffic"]
+        if traffic:
+            for link in traffic.result_payload.get("links",[])[:200]:
+                for side in ("endpoint_a","endpoint_b"):
+                    endpoint=link.get(side,{})
+                    statistics=endpoint.get("statistics",{})
+                    traffic_rows.append([link.get("id",""),link.get("label",""),side,endpoint.get("node",""),endpoint.get("interface",""),endpoint.get("state",""),
+                        statistics.get("rx",{}).get("bytes",0),statistics.get("rx",{}).get("packets",0),statistics.get("rx",{}).get("errors",0),statistics.get("rx",{}).get("dropped",0),
+                        statistics.get("tx",{}).get("bytes",0),statistics.get("tx",{}).get("packets",0),statistics.get("tx",{}).get("errors",0),statistics.get("tx",{}).get("dropped",0)])
+        reachability_rows=[];reachability=jobs["diagnose_topology_reachability"]
+        if reachability:
+            for row in reachability.result_payload.get("results",[])[:90]:
+                reachability_rows.append([row.get("source",""),row.get("target",""),row.get("target_address",""),row.get("success",False),
+                    row.get("transmitted",0),row.get("received",0),row.get("loss_percent",0),row.get("average_ms","")])
+        members={}
+        if traffic: members["traffic.csv"]=csv_payload(["link_id","link_label","endpoint","node","interface","state","rx_bytes","rx_packets","rx_errors","rx_dropped","tx_bytes","tx_packets","tx_errors","tx_dropped"],traffic_rows)
+        if reachability: members["reachability.csv"]=csv_payload(["source","target","target_address","success","transmitted","received","loss_percent","average_ms"],reachability_rows)
+        manifest={"schema":1,"product":"containerlab-studio","evidence_type":"network-health","deployment_id":str(deployment.id),
+            "lab":deployment.revision.lab.name,"revision":deployment.revision.revision_number,"exported_at":timezone.now().isoformat(),
+            "observations":{
+                "traffic":{"operation_id":str(traffic.id),"completed_at":traffic.updated_at.isoformat(),"rows":len(traffic_rows)} if traffic else None,
+                "reachability":{"operation_id":str(reachability.id),"completed_at":reachability.updated_at.isoformat(),"rows":len(reachability_rows)} if reachability else None},
+            "files":{name:{"bytes":len(payload),"sha256":hashlib.sha256(payload).hexdigest()} for name,payload in members.items()}}
+        buffer=io.BytesIO()
+        with zipfile.ZipFile(buffer,"w",compression=zipfile.ZIP_DEFLATED,compresslevel=6) as archive:
+            for name,payload in members.items(): archive.writestr(name,payload)
+            archive.writestr("manifest.json",json.dumps(manifest,indent=2,sort_keys=True)+"\n")
+        payload=buffer.getvalue();archive_checksum=hashlib.sha256(payload).hexdigest()
+        models.AuditEvent.objects.create(actor=request.user,project=deployment.revision.lab.project,action="network_health.archive_exported",
+            target_type="LabDeployment",target_id=deployment.id,correlation_id=getattr(request,"correlation_id",""),metadata={
+                "revision":deployment.revision.revision_number,"traffic_operation":str(traffic.id) if traffic else None,
+                "reachability_operation":str(reachability.id) if reachability else None,"traffic_rows":len(traffic_rows),
+                "reachability_rows":len(reachability_rows),"archive_checksum":archive_checksum,"archive_bytes":len(payload)})
+        response=HttpResponse(payload,content_type="application/zip")
+        response["Content-Disposition"]=f'attachment; filename="{slugify(deployment.revision.lab.name)[:64] or "lab"}-revision-{deployment.revision.revision_number}-network-health.zip"'
+        response["Content-Length"]=str(len(payload));response["X-Archive-SHA256"]=archive_checksum
+        response["Cache-Control"]="no-store";response["Pragma"]="no-cache";response["X-Content-Type-Options"]="nosniff"
+        return response
     @action(detail=True,methods=["get"],url_path="redeploy-preview")
     def redeploy_preview(self,request,pk=None):
         deployment=self.get_object()
