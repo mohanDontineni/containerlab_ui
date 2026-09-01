@@ -134,7 +134,10 @@ def execute_operation(self,job_id):
 def execute_staged_start(self,job_id):
     try:
         with transaction.atomic():
-            job=OperationJob.objects.select_for_update().select_related("deployment__revision__lab__project","owner").get(pk=job_id)
+            # OperationJob.deployment is nullable; PostgreSQL rejects a row lock
+            # that traverses that nullable outer join. Lock the job alone and
+            # load its protected deployment relation separately when accessed.
+            job=OperationJob.objects.select_for_update().get(pk=job_id)
             if job.operation_type!="staged_start_devices":raise RuntimeError("Operation is not a staged start")
             if job.state in ("succeeded","failed"):return job.result_payload
             ordered_ids=job.request_payload["device_ids"];started=list(job.result_payload.get("devices",[]));index=len(started)
@@ -145,7 +148,7 @@ def execute_staged_start(self,job_id):
                 update_fields=["state","attempts","heartbeat","progress","updated_at"])
         step=ClabernetesAdapter().start_device(job.deployment,device)
         with transaction.atomic():
-            job=OperationJob.objects.select_for_update().select_related("deployment__revision__lab__project","owner").get(pk=job_id)
+            job=OperationJob.objects.select_for_update().get(pk=job_id)
             device=DeviceInstance.objects.select_for_update().select_related("lab_node").get(pk=ordered_ids[index],deployment=job.deployment)
             device.observed_readiness=step["readiness"]
             resources={**device.runtime_resources,"manual_lifecycle":"staged_start","manual_lifecycle_at":timezone.now().isoformat()}
