@@ -381,3 +381,11 @@ The image onboarding page retains the operator's 20 most recent upload sessions 
 The overview reports running, pending/deploying, stopped/removed, degraded, and failed runtime totals without collapsing lifecycle states into an ambiguous count. Each visible project shows actual lab, active-runtime, member, image, upload-reservation, and largest-draft consumption beside its enforced limits. CPU and memory are never invented: the dashboard directs operators to measured live deployment telemetry only while the Metrics API capability is verified, otherwise it says `Unavailable`.
 
 The recovery workspace presents bounded failure type and message evidence without exposing request payloads or internal storage. Each job receives a resource-specific next step instead of an unsafe generic retry. Firefox rendered a real failed packet-capture operation, followed `Open deployment` to production deployment `c4b5d50e…`, and reached `BGP Reference 76c24c1`. The exact release `73813bd` was running on all four Studio services, while production routers `r1` and `r2` remained Running/Ready.
+
+## 64 — Searchable operations job center
+
+![Searchable operations job center](64-operations-job-center.png)
+
+The native job center replaces the passive operation list with durable lifecycle totals, active-job monitoring, server-side search, state and operation filters, 30-row pagination, attempt and heartbeat evidence, progress, and target-aware actions. It remains scoped to the signed-in operator. Request and result payloads are never rendered; credential-like fragments in exception messages are redacted and the visible failure type, message, and guidance are bounded.
+
+Studio deliberately does not offer a generic job cancel or retry because a worker may already be changing Kubernetes when its database row is observed. Operators instead follow a typed recovery path to the deployment, project, lab, image, or template surface, whose guarded actions revalidate current state before scheduling more work. Firefox filtered 165 retained jobs to two failed BGP packet captures, expanded the real `CapabilityError`, followed `Open deployment` to `BGP Reference 76c24c1`, and confirmed the exact release `6c8de01` on web, worker, scheduler, and console. Production routers `r1` and `r2` remained Running/Ready.
