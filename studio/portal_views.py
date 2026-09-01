@@ -186,7 +186,7 @@ def lab_folder_create(request):
         folder=form.save(commit=False);folder.full_clean();folder.save()
         AuditEvent.objects.create(actor=request.user,project=folder.project,action="lab_folder.created",target_type="LabFolder",target_id=folder.id,
             correlation_id=getattr(request,"correlation_id",""),metadata={"parent_id":str(folder.parent_id) if folder.parent_id else None,"depth":len(folder.path.split(" / "))})
-        messages.success(request,f'Folder “{folder.path}” created.');return redirect("portal-labs")
+        messages.success(request,f'Folder “{folder.path}” created.');return redirect(f"/labs/?folder={folder.id}")
     return render(request,"studio/form.html",{"form":form,"title":"Create lab folder","eyebrow":"ORGANIZE LABS","cancel_url":"/labs/","submit_label":"Create folder"})
 
 @login_required
@@ -198,7 +198,7 @@ def lab_folder_edit(request,folder_id):
         before={"name":folder.name,"parent_id":str(folder.parent_id) if folder.parent_id else None};updated=form.save(commit=False);updated.full_clean();updated.save()
         AuditEvent.objects.create(actor=request.user,project=updated.project,action="lab_folder.updated",target_type="LabFolder",target_id=updated.id,
             correlation_id=getattr(request,"correlation_id",""),metadata={"changed_fields":[key for key,value in before.items() if value!=(str(updated.parent_id) if key=="parent_id" and updated.parent_id else getattr(updated,key,None))]})
-        messages.success(request,f'Folder “{updated.path}” updated.');return redirect("portal-labs")
+        messages.success(request,f'Folder “{updated.path}” updated.');return redirect(f"/labs/?folder={updated.id}")
     return render(request,"studio/form.html",{"form":form,"title":f"Edit {folder.name}","eyebrow":"LAB FOLDER","cancel_url":"/labs/","submit_label":"Save folder"})
 
 @login_required
@@ -207,6 +207,7 @@ def lab_folder_delete(request,folder_id):
     folder=get_object_or_404(LabFolder.objects.filter(project__in=visible_projects(request.user),deleted_at__isnull=True),id=folder_id)
     if project_role(request.user,folder.project) not in (ProjectMembership.Role.ADMIN,ProjectMembership.Role.EDITOR): return JsonResponse({"error":"Editor access is required"},status=403)
     active_labs=folder.labs.filter(deleted_at__isnull=True).count();children=folder.children.filter(deleted_at__isnull=True).count()
+    return_url=f"/labs/?folder={folder.parent_id}" if folder.parent_id else "/labs/"
     if active_labs or children:
         messages.error(request,f'Folder “{folder.path}” cannot be deleted while it contains {active_labs} lab(s) and {children} subfolder(s).')
     else:
@@ -214,7 +215,7 @@ def lab_folder_delete(request,folder_id):
         AuditEvent.objects.create(actor=request.user,project=folder.project,action="lab_folder.deleted",target_type="LabFolder",target_id=folder.id,
             correlation_id=getattr(request,"correlation_id",""),metadata={"path":folder.path})
         messages.success(request,f'Folder “{folder.path}” deleted.')
-    return redirect("portal-labs")
+    return redirect(return_url)
 
 @login_required
 def lab_create(request):
@@ -231,7 +232,7 @@ def lab_create(request):
             if used>=limit: form.add_error("project",f"This project has reached its {limit}-lab quota.")
             else:
                 lab=form.save(commit=False);lab.project=project;lab.save();messages.success(request,f'Lab “{lab.name}” created.')
-                return redirect("portal-labs")
+                return redirect(f"/labs/?folder={lab.folder_id}" if lab.folder_id else "/labs/")
     return render(request, "studio/form.html", {"form": form, "title": "Create lab", "eyebrow": "NEW TOPOLOGY", "cancel_url": "/labs/", "submit_label": "Create lab"})
 
 @login_required
@@ -248,7 +249,7 @@ def lab_edit(request,lab_id):
             changed=[key for key,value in before.items() if value!=getattr(locked,key)]
             AuditEvent.objects.create(actor=request.user,project=locked.project,action="lab.metadata_updated",target_type="Lab",target_id=locked.id,
                 correlation_id=getattr(request,"correlation_id",""),metadata={"changed_fields":changed})
-        messages.success(request,f'Lab “{locked.name}” updated.');return redirect("portal-labs")
+        messages.success(request,f'Lab “{locked.name}” updated.');return redirect(f"/labs/?folder={locked.folder_id}" if locked.folder_id else "/labs/")
     return render(request,"studio/form.html",{"form":form,"title":f"Edit {lab.name}","eyebrow":"LAB SETTINGS","cancel_url":"/labs/","submit_label":"Save changes"})
 
 @login_required
