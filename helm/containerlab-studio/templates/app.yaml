@@ -50,7 +50,7 @@ spec:
       - name: console
         image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
         imagePullPolicy: {{ .Values.image.pullPolicy }}
-        command: [gunicorn,config.asgi:application,-k,uvicorn.workers.UvicornWorker,--bind,0.0.0.0:8000,--workers,1,--access-logfile,-]
+        command: [gunicorn,config.asgi:application,-k,uvicorn.workers.UvicornWorker,--bind,0.0.0.0:8000,--workers,"1",--access-logfile,-]
         envFrom: [{configMapRef: {name: containerlab-studio-config}},{secretRef: {name: containerlab-studio-secrets}}]
         ports: [{containerPort: 8000}]
         securityContext: {allowPrivilegeEscalation: false,capabilities: {drop: [ALL]}}
