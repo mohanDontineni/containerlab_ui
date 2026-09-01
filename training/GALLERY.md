@@ -325,3 +325,9 @@ The runtime page now preserves the designer's saved node placement in a responsi
 ![Live device resource telemetry](54-live-device-resource-telemetry.png)
 
 The runtime page displays current CPU and memory use for every device launcher beside its enforced template limits, worker placement, metrics window, and sample freshness. Proportional bars make capacity pressure visible without Kubernetes access, CLI commands, or YAML. The reconciler alone receives narrowly scoped read permission for pod metrics and persists bounded snapshots for authorized viewers; released compute and unavailable metrics render explicit non-error states. Firefox verified real metrics for both production BGP routers against their 500m CPU and 512Mi memory limits.
+
+## 55 — Verified platform capabilities
+
+![Verified platform capabilities](55-verified-platform-capabilities.png)
+
+The dashboard reports database connectivity, Redis-backed worker execution, Clabernetes reconciliation, and the Kubernetes Metrics API in the native product instead of relying on static optimistic labels. Worker and runtime evidence is published through the shared cache with a two-minute expiry, so stale control-plane observations return to Pending automatically. The production preflight requires a serving metrics API, accepts the release's own occupied NodePort during upgrades, and offers an explicit pinned metrics-server installer for new clusters. Firefox rendered all four services Ready after a real reconciliation, and the idempotent installer retained live BGP pod samples.
