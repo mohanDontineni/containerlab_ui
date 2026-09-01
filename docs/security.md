@@ -18,7 +18,7 @@ The native account page requires an authenticated same-origin session and CSRF t
 
 The single-node installation publishes validated Docker/OCI archives through a short-lived Kubernetes Job. A non-root init container reads the artifact PVC and stages only the selected archive into an `emptyDir`; the publisher then runs as UID 0 with all Linux capabilities dropped and can access the host containerd socket. The worker ServiceAccount can create and observe Jobs, while the web ServiceAccount has no Kubernetes token.
 
-Writing to the containerd socket is equivalent to node-runtime administration. Publication remains limited to administrator/editor roles and retains checksum re-verification, license acknowledgement, idempotency, and audit events. This mode is not an image distribution mechanism for multi-node clusters; use a trusted registry there.
+Writing to the containerd socket is equivalent to node-runtime administration. Publication remains limited to administrator/editor roles and retains checksum re-verification, license acknowledgement, idempotency, and audit events. The chart now deploys a namespace-local Distribution registry with a retained filesystem PV, internal ClusterIP, network-policy-restricted ingress, and worker health evidence. Uploaded archives are still published to the selected node's containerd store; mirroring them into the registry and configuring verified multi-node launcher pulls remain separate required work before claiming multi-node distribution.
 
 ## Upload quarantine lifecycle
 
