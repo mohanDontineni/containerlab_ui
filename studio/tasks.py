@@ -106,6 +106,8 @@ def execute_operation(self,job_id):
                     job.request_payload["timeout"],job.request_payload["probes"])
         elif job.operation_type=="inspect_topology_traffic":
             result=adapter.inspect_topology_traffic(job.deployment)
+        elif job.operation_type=="diagnose_topology_reachability":
+            result=adapter.diagnose_topology_reachability(job.deployment)
         elif job.operation_type=="capture_packets":
             capture=CaptureSession.objects.select_related("interface__node").get(pk=job.target_id,deployment=job.deployment)
             capture.status="capturing"; capture.save(update_fields=["status","updated_at"])
@@ -180,18 +182,18 @@ def execute_operation(self,job_id):
             AuditEvent.objects.create(actor=job.owner,project=deployment.revision.lab.project,action="deployment.removed",
                 target_type="LabDeployment",target_id=deployment.id,correlation_id="",metadata={"operation":str(job.id),
                     "namespace":deployment.namespace,"namespace_deleted":bool(result.get("namespaceDeleted")),"revision":deployment.revision.revision_number})
-        if job.operation_type not in ("publish_image","ping","traceroute","capture_packets","set_link_condition","inspect_topology_traffic",*device_operations):
+        if job.operation_type not in ("publish_image","ping","traceroute","capture_packets","set_link_condition","inspect_topology_traffic","diagnose_topology_reachability",*device_operations):
             deployment.last_reconciliation=timezone.now()
             deployment.error_details={}
             deployment.save(update_fields=["observed_state","requested_desired_state","resource_identities","last_reconciliation","error_details","removed_at","updated_at"])
         job.state="succeeded"; job.progress=100; job.error_details={}
-        if job.operation_type in ("publish_image","ping","traceroute","capture_packets","set_link_condition","inspect_topology_traffic","delete_runtime") or job.operation_type in device_operations: job.result_payload=result
+        if job.operation_type in ("publish_image","ping","traceroute","capture_packets","set_link_condition","inspect_topology_traffic","diagnose_topology_reachability","delete_runtime") or job.operation_type in device_operations: job.result_payload=result
     except Exception as exc:
         if job.operation_type=="publish_image":
             ImageBuild.objects.filter(pk=job.request_payload.get("build_id")).update(status="failed",finished_at=timezone.now(),failure_details={"type":type(exc).__name__,"message":str(exc)[:2000]})
             if job.request_payload.get("force"): PublishedImage.objects.filter(artifact_id=job.target_id,lifecycle_status="reconciling").update(lifecycle_status="failed")
         if job.operation_type=="capture_packets": CaptureSession.objects.filter(pk=job.target_id).update(status="failed")
-        if job.deployment_id and job.operation_type not in ("ping","traceroute","capture_packets","set_link_condition","inspect_topology_traffic",*device_operations):
+        if job.deployment_id and job.operation_type not in ("ping","traceroute","capture_packets","set_link_condition","inspect_topology_traffic","diagnose_topology_reachability",*device_operations):
             LabDeployment.objects.filter(pk=job.deployment_id).update(observed_state=LabDeployment.State.FAILED,
                 error_details={"type":type(exc).__name__,"message":str(exc)[:2000]},last_reconciliation=timezone.now())
         job.state="failed"; job.error_details={"type":type(exc).__name__,"message":str(exc)[:2000]}; raise

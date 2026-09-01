@@ -858,6 +858,38 @@ def test_topology_traffic_snapshot_is_atomic_authorized_idempotent_and_observati
     assert deployment.observed_state=="running"
 
 @pytest.mark.django_db
+def test_reachability_matrix_is_bounded_authorized_idempotent_and_normalized(monkeypatch):
+    monkeypatch.setattr("studio.api.execute_operation.delay",lambda *_:None)
+    owner=User.objects.create_user("matrix-owner",password="long-enough-password")
+    viewer=User.objects.create_user("matrix-viewer",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="matrix-project");ProjectMembership.objects.create(project=project,user=viewer,role="viewer")
+    lab=Lab.objects.create(project=project,name="matrix-lab");revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="7"*64,immutable=True)
+    template=DeviceTemplateVersion.objects.get(template__name="FRR Router")
+    nodes=[LabNode.objects.create(revision=revision,name=name,template_version=template) for name in ("r1","r2")]
+    interfaces=[LabInterface.objects.create(node=node,name="eth1") for node in nodes]
+    LabLink.objects.create(revision=revision,endpoint_a=interfaces[0],endpoint_b=interfaces[1])
+    deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-matrix",runtime_version="0.8.0",observed_state="running")
+    for node in nodes:DeviceInstance.objects.create(deployment=deployment,lab_node=node,observed_readiness="ready",runtime_resources={"pod":f"{node.name}-pod"})
+    endpoint=f"/api/v1/deployments/{deployment.id}/reachability-matrix/";client=APIClient();client.force_authenticate(viewer)
+    assert client.post(endpoint,{},format="json",HTTP_IDEMPOTENCY_KEY="matrix-viewer").status_code==403
+    client.force_authenticate(owner);first=client.post(endpoint,{},format="json",HTTP_IDEMPOTENCY_KEY="matrix-once")
+    replay=client.post(endpoint,{},format="json",HTTP_IDEMPOTENCY_KEY="matrix-once")
+    assert first.status_code==replay.status_code==202 and first.data["id"]==replay.data["id"]
+    audit=AuditEvent.objects.get(action="topology.reachability_matrix_requested",target_id=deployment.id)
+    assert audit.metadata=={"operation":str(first.data["id"]),"devices":2,"probes":2}
+    class Adapter:
+        def diagnose_topology_reachability(self,received):
+            assert received.id==deployment.id
+            return {"deployment_id":str(deployment.id),"device_count":2,"probe_count":2,"successful":2,
+                "targets":{"r1":{"address":"10.0.12.1","interface":"eth1"},"r2":{"address":"10.0.12.2","interface":"eth1"}},
+                "results":[{"source":"r1","target":"r2","target_address":"10.0.12.2","success":True,"transmitted":1,"received":1,"loss_percent":0,"average_ms":0.4},
+                    {"source":"r2","target":"r1","target_address":"10.0.12.1","success":True,"transmitted":1,"received":1,"loss_percent":0,"average_ms":0.5}]}
+    monkeypatch.setattr("studio.tasks.ClabernetesAdapter",Adapter);execute_operation.run(str(first.data["id"]))
+    job=OperationJob.objects.get(id=first.data["id"]);deployment.refresh_from_db()
+    assert job.state=="succeeded" and job.result_payload["successful"]==2 and "output" not in json.dumps(job.result_payload)
+    assert deployment.observed_state=="running"
+
+@pytest.mark.django_db
 def test_runtime_device_contract_exposes_logical_node_identity():
     owner=User.objects.create_user("device-owner",password="long-enough-password")
     project=Project.objects.create(owner=owner,name="devices")

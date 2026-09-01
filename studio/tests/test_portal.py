@@ -597,6 +597,7 @@ def test_deployment_detail_is_native_and_scoped(client):
     assert "OPERATIONAL TOPOLOGY" in response.content.decode() and "runtime-map-viewport" in response.content.decode()
     assert "Inspect link traffic" in response.content.decode() and "traffic-snapshot" in response.content.decode()
     assert "counter reset detected" in response.content.decode() and "user-triggered rates" in response.content.decode()
+    assert "Data-plane reachability matrix" in response.content.decode() and "reachability-matrix" in response.content.decode()
     assert "open-device-console" in response.content.decode() and "data-runtime-map-action" in response.content.decode()
     client.force_login(stranger)
     assert client.get(f"/deployments/{deployment.id}/").status_code == 404

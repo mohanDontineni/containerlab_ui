@@ -3,6 +3,8 @@ import ast
 import base64
 import binascii
 import json
+import ipaddress
+import re
 import shlex
 import time
 import struct
@@ -323,6 +325,47 @@ class ClabernetesAdapter:
                 return {"node":interface.node.name,"interface":interface.name,"state":row["state"],"statistics":row["statistics"]}
             rows.append({"id":str(link.id),"label":link.label,"endpoint_a":endpoint(link.endpoint_a),"endpoint_b":endpoint(link.endpoint_b)})
         return {"deployment_id":str(deployment.id),"device_count":len(linked_names),"link_count":len(rows),"links":rows}
+    def diagnose_topology_reachability(self,deployment):
+        links=list(deployment.revision.links.select_related("endpoint_a__node","endpoint_b__node")[:46])
+        if not links: raise CapabilityError("This topology has no point-to-point links")
+        linked_interfaces={}
+        for link in links:
+            for interface in (link.endpoint_a,link.endpoint_b):linked_interfaces.setdefault(interface.node.name,set()).add(interface.name)
+        names=sorted(linked_interfaces)
+        if len(names)>10: raise CapabilityError("Reachability matrix supports at most 10 linked devices")
+        devices={device.lab_node.name:device for device in deployment.devices.select_related("lab_node").filter(lab_node__name__in=names)}
+        unavailable=[name for name in names if name not in devices or devices[name].observed_readiness!="ready" or not devices[name].runtime_resources.get("pod")]
+        if unavailable: raise CapabilityError(f"Every linked device must be ready: {', '.join(unavailable)}")
+        targets={}
+        for name in names:
+            snapshot=self.inspect_device(deployment,devices[name]);candidates=[]
+            for interface in snapshot["interfaces"]:
+                if interface["name"] not in linked_interfaces[name]:continue
+                for address in interface["addresses"]:
+                    try:parsed=ipaddress.ip_address(address["local"])
+                    except ValueError:continue
+                    if parsed.is_loopback or parsed.is_link_local or parsed.is_multicast or parsed.is_unspecified:continue
+                    candidates.append((parsed.version,address["local"],interface["name"]))
+            if not candidates: raise CapabilityError(f"{name} has no usable address on a linked interface")
+            _,address,interface=sorted(candidates,key=lambda value:(value[0],value[2],value[1]))[0]
+            targets[name]={"address":address,"interface":interface}
+        results=[]
+        for source in names:
+            for target in names:
+                if source==target:continue
+                try:
+                    output=self.ping(deployment,devices[source].lab_node,targets[target]["address"],count=1,timeout=1)["output"]
+                    transmitted=re.search(r"(\d+)\s+packets transmitted",output);received=re.search(r"(\d+)\s+(?:packets\s+)?received",output)
+                    loss=re.search(r"([\d.]+)%\s+packet loss",output);timing=re.search(r"=\s*[\d.]+/([\d.]+)/",output)
+                    sent=int(transmitted.group(1)) if transmitted else 1;got=int(received.group(1)) if received else 0
+                    results.append({"source":source,"target":target,"target_address":targets[target]["address"],"success":got>0,
+                        "transmitted":sent,"received":got,"loss_percent":float(loss.group(1)) if loss else (0 if got else 100),
+                        "average_ms":float(timing.group(1)) if timing else None})
+                except Exception:
+                    results.append({"source":source,"target":target,"target_address":targets[target]["address"],"success":False,
+                        "transmitted":1,"received":0,"loss_percent":100,"average_ms":None})
+        return {"deployment_id":str(deployment.id),"device_count":len(names),"probe_count":len(results),"targets":targets,
+            "successful":sum(row["success"] for row in results),"results":results}
     def capture_packets(self,deployment,node,interface,duration=10,packet_limit=500):
         if not 1<=duration<=30 or not 1<=packet_limit<=5000: raise CapabilityError("Capture bounds are invalid")
         device=deployment.devices.get(lab_node=node)
