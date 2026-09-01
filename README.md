@@ -34,6 +34,8 @@ pnpm --dir frontend build
 
 The production image uses Python 3.13, Gunicorn with Uvicorn workers, a multi-stage React build, and a non-root UID. See `scripts/` for preflight, install, smoke test, backup, restore, and uninstall entry points.
 
+Administrative installation is plan-first and context-bound. `scripts/install.sh` defaults to a non-mutating render; `apply` refuses the mutable `latest` tag, requires the TLS/application Secrets, records the selected context and exact image in-cluster, runs Helm with readiness waits, and performs the HTTPS smoke test. `scripts/uninstall.sh` also defaults to a non-mutating ownership/data preview. `remove` deletes the Helm workloads and labeled Studio runtime namespaces while Helm keep policies preserve all four PVCs and the registry PV; `purge` additionally deletes those exact Kubernetes storage objects only after `PURGE_CONFIRM=purge:<namespace>`. See [`docs/installation-lifecycle.md`](docs/installation-lifecycle.md).
+
 Platform disaster recovery uses a mandatory-quiesce, integrity-manifested bundle of PostgreSQL, artifacts, registry, Redis, protected Secrets, and deployment metadata. Always validate with `scripts/restore.sh BUNDLE --verify-only` before an isolated restore rehearsal; see [`docs/backup-restore.md`](docs/backup-restore.md).
 
 The labeled operator screenshot catalog and its read-only capture procedure are in [`training/README.md`](training/README.md).
