@@ -53,4 +53,19 @@ describe("topology interface helpers", () => {
     const column=alignSelectedNodes(nodes,new Set(["a","b"]),"column");
     expect(column.map((node)=>node.position)).toEqual([{x:50,y:10},{x:50,y:30},{x:200,y:90}]);
   });
+
+  it("keeps arranged devices clear of notes and regions", () => {
+    const nodes=[
+      {id:"a",position:{x:0,y:0},data:{label:"a",interfaces:["eth0","eth1"]}},
+      {id:"b",position:{x:0,y:0},data:{label:"b",interfaces:["eth0","eth1"]}},
+    ];
+    const obstacle={x:80,y:60,width:500,height:230};
+    const arranged=arrangeTopology(nodes,[{source:"a",target:"b"}],[obstacle]);
+    arranged.forEach((node)=>{
+      const height=Math.max(120,60+node.data.interfaces.length*15);
+      const overlaps=node.position.x<obstacle.x+obstacle.width+30&&node.position.x+160>obstacle.x-30&&
+        node.position.y<obstacle.y+obstacle.height+30&&node.position.y+height>obstacle.y-30;
+      expect(overlaps).toBe(false);
+    });
+  });
 });

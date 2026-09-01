@@ -609,7 +609,7 @@ function Workspace() {
     setNotice(`Duplicated ${result.nodes.length} device${result.nodes.length===1?"":"s"} and ${result.edges.length} internal link${result.edges.length===1?"":"s"}`);
   };
   const arrangeAll = () => {
-    if(nodes.length<2||!workspaceReady)return;snapshot();setNodes(arrangeTopology(nodes,edges));setDirty(true);setSelected(null);
+    if(nodes.length<2||!workspaceReady)return;snapshot();setNodes(arrangeTopology(nodes,edges,annotations));setDirty(true);setSelected(null);
     setNotice(`Arranged ${nodes.length} devices into linked groups`);requestAnimationFrame(()=>rf?.fitView({padding:.2,duration:350}));
   };
   const alignSelection = (axis:"row"|"column") => {
