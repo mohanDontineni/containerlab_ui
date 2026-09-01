@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import ast
 import base64
 import binascii
 import json
@@ -211,7 +212,9 @@ class ClabernetesAdapter:
                 _request_timeout=12)
             if len(output.encode("utf-8",errors="replace"))>256_000: raise CapabilityError("Device state exceeded the 256 KB inspection limit")
             try: rows=json.loads(output)
-            except (TypeError,ValueError) as exc: raise CapabilityError("Device did not return structured network state") from exc
+            except (TypeError,ValueError):
+                try: rows=ast.literal_eval(output)
+                except (SyntaxError,ValueError,TypeError) as exc: raise CapabilityError("Device did not return structured network state") from exc
             if not isinstance(rows,list): raise CapabilityError("Device returned an invalid network-state document")
             return rows[:limit],len(rows)>limit
         addresses,address_truncated=read_ip(["address","show"],256)

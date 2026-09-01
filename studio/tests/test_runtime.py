@@ -45,7 +45,7 @@ def test_traceroute_is_bounded_and_executes_inside_selected_appliance(monkeypatc
 def test_device_inspection_uses_fixed_bounded_iproute_queries(monkeypatch):
     calls=[]
     outputs=iter([
-        '[{"ifname":"eth1","operstate":"UP","mtu":1500,"address":"aa:bb:cc:dd:ee:ff","addr_info":[{"family":"inet","local":"10.0.0.1","prefixlen":30,"scope":"global"}]}]',
+        "[{'ifname': 'eth1', 'operstate': 'UP', 'mtu': 1500, 'address': 'aa:bb:cc:dd:ee:ff', 'addr_info': [{'family': 'inet', 'local': '10.0.0.1', 'prefixlen': 30, 'scope': 'global'}]}]",
         '[{"dst":"default","gateway":"10.0.0.2","dev":"eth1","protocol":"static","metric":20},{"dst":"10.0.0.0/30","dev":"eth1","protocol":"kernel","prefsrc":"10.0.0.1"}]',
         '[{"dst":"10.0.0.2","dev":"eth1","lladdr":"00:11:22:33:44:55","state":["REACHABLE"]}]'])
     monkeypatch.setattr("studio.runtime.stream",lambda method,pod,namespace,**kwargs:calls.append(kwargs["command"]) or next(outputs))
