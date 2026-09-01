@@ -355,3 +355,9 @@ The operator selects Kubernetes events from the same native device-evidence dial
 ![Image supply-chain evidence](59-image-supply-chain-evidence.png)
 
 The image library now combines free-text search with working validation, architecture, and size filters. Its project-authorized evidence dialog presents SHA-256 identity, safe archive inspection, license acknowledgement, immutable publication digest, node-containerd compatibility, build lineage, failure details, and the final 12,000 characters of retained build output without exposing private storage paths. Firefox filtered the validated amd64 FRR 10.4.1 archive, requested a real node-copy repair through the GUI, waited for the isolated publisher job, and displayed its 425-character retained output and ready immutable publication. Both production BGP routers remained ready after republication.
+
+## 60 — Image catalog metadata
+
+![Image catalog metadata](60-image-metadata-management.png)
+
+Project administrators and editors can give uploaded device software a searchable vendor, category, and version without renaming or mutating its archive, checksum, inspection, or immutable publication. The dialog reads a fresh safe metadata projection before editing, rejects controls and overlong values, uses an exact optimistic timestamp to prevent stale overwrites, and records field-level before/after audit evidence. Firefox assigned `FRRouting / Router / 10.4.1` to the real production archive, found it through the combined catalog search, reopened the persisted values, and verified both image list and detail APIs omit internal storage paths. Production routers `r1` and `r2` remained ready.

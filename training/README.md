@@ -69,6 +69,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 | `57-native-packet-analysis.png` | Native packet analysis | Decodes a bounded completed PCAP into protocol totals, conversations, and packet rows without external tools. |
 | `58-kubernetes-device-events.png` | Kubernetes device events | Shows launcher scheduling, image, creation, start, warning, and retry evidence without cluster access. |
 | `59-image-supply-chain-evidence.png` | Image supply-chain evidence | Filters validated device software and shows inspection, immutable publication compatibility, build history, and retained bounded build output. |
+| `60-image-metadata-management.png` | Image catalog metadata | Assigns searchable vendor, category, and version details without changing immutable archive or publication identity. |
 
 ## No-YAML operating model
 
@@ -102,6 +103,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 27. Open a completed interface capture in Studio to inspect protocol mix, top conversations, and decoded packet metadata; download the raw PCAP only when deeper offline analysis is needed.
 28. Select Kubernetes events in a device's runtime-evidence dialog to diagnose launcher scheduling, image pulls, container starts, probes, and controller warnings without `kubectl`.
 29. Filter the image library by validation, architecture, and size; open supply-chain evidence to review checksums, safe inspection, immutable node publication, compatibility, and retained bounded build output.
+30. Edit a device image's vendor, category, and version in the catalog; Studio protects against stale saves, audits the change, and keeps checksums and publication digests immutable.
 
 Containerlab/Kubernetes YAML is an internal adapter concern. It may be inspected by platform administrators for troubleshooting, but it is not part of the normal user workflow.
 
