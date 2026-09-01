@@ -129,6 +129,21 @@ def test_lab_folders_are_hierarchical_project_scoped_and_guarded(client):
     assert not client.post("/labs/folders/new/",{"project":other.id,"name":"Leaked","parent":""}).wsgi_request.user.is_anonymous
     assert not LabFolder.objects.filter(project=other,name="Leaked").exists()
     lab=Lab.objects.create(project=project,folder=nested,name="Peering")
+    root_page=client.get("/labs/").content.decode()
+    assert "Routing" in root_page and "BGP" not in root_page and "Peering" not in root_page
+    assert f'/labs/?folder={root.id}' in root_page
+    routing_page=client.get(f"/labs/?folder={root.id}").content.decode()
+    assert "All projects" in routing_page and "Routing" in routing_page and "BGP" in routing_page and "Peering" not in routing_page
+    bgp_page=client.get(f"/labs/?folder={nested.id}").content.decode()
+    assert "Routing" in bgp_page and "BGP" in bgp_page and "Peering" in bgp_page
+    assert f'/labs/new/?project={project.id}&amp;folder={nested.id}' in bgp_page
+    assert f'/labs/folders/new/?parent={nested.id}' in bgp_page
+    folder_form=client.get(f"/labs/folders/new/?parent={nested.id}").context["form"]
+    lab_form=client.get(f"/labs/new/?project={project.id}&folder={nested.id}").context["form"]
+    assert folder_form.initial["project"]==project.id and folder_form.initial["parent"]==nested.id
+    assert lab_form.initial["project"]==project.id and lab_form.initial["folder"]==nested.id
+    assert client.get("/labs/?folder=not-a-uuid").status_code==404
+    assert client.get(f"/labs/?folder={nested.id}").status_code==200
     blocked=client.post(f"/labs/folders/{nested.id}/delete/",follow=True)
     nested.refresh_from_db();assert blocked.status_code==200 and nested.deleted_at is None and b"cannot be deleted" in blocked.content
     lab.folder=None;lab.save(update_fields=["folder"])
@@ -150,7 +165,25 @@ def test_lab_folder_rejects_cross_project_parent_and_descendant_cycle(client):
     root.refresh_from_db();child.refresh_from_db()
     assert cross.status_code==200 and b"selected project" in cross.content and child.parent_id==root.id
     assert cycle.status_code==200 and b"descendants" in cycle.content and root.parent_id is None
-    assert project_move.status_code==200 and b"cannot be moved between projects" in project_move.content and root.project_id==first.id
+    assert project_move.status_code==302 and root.project_id==first.id
+
+@pytest.mark.django_db
+def test_lab_folder_navigation_is_read_only_for_viewer_and_cross_project_safe(client):
+    owner=User.objects.create_user("folder-nav-owner",password="long-enough-password")
+    viewer=User.objects.create_user("folder-nav-viewer",password="long-enough-password")
+    outsider=User.objects.create_user("folder-nav-outsider",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="Shared");private=Project.objects.create(owner=outsider,name="Private")
+    ProjectMembership.objects.create(project=project,user=viewer,role=ProjectMembership.Role.VIEWER)
+    folder=LabFolder.objects.create(project=project,name="Visible");hidden=LabFolder.objects.create(project=private,name="Hidden")
+    Lab.objects.create(project=project,folder=folder,name="Readable")
+    client.force_login(viewer)
+    page=client.get(f"/labs/?folder={folder.id}")
+    html=page.content.decode();heading=html.split('<section class="page-heading">',1)[1].split("</section>",1)[0]
+    assert page.status_code==200 and "Readable" in html and "New subfolder" not in heading and f"folder={folder.id}" not in heading
+    assert client.get(f"/labs/?folder={hidden.id}").status_code==404
+    assert client.get(f"/labs/folders/new/?parent={hidden.id}").status_code==404
+    assert client.get(f"/labs/folders/new/?parent={folder.id}").status_code==403
+    assert client.get(f"/labs/new/?project={project.id}&folder={folder.id}").status_code==403
 
 @pytest.mark.django_db
 def test_lab_create_and_edit_assign_active_folder_only(client):

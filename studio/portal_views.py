@@ -7,7 +7,7 @@ import json
 import uuid
 from django.db import transaction
 from django.db.models import Count, F, Max, Q
-from django.http import JsonResponse
+from django.http import Http404, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.csrf import ensure_csrf_cookie
@@ -24,6 +24,13 @@ from .edit_leases import acquire as acquire_edit_lease, conflict_payload as edit
 
 def visible_projects(user):
     return Project.objects.filter(Q(owner=user) | Q(memberships__user=user),deleted_at__isnull=True).distinct()
+
+def requested_folder(request,key="folder"):
+    raw=request.GET.get(key)
+    if not raw: return None
+    try: folder_id=uuid.UUID(raw)
+    except (TypeError,ValueError): raise Http404("Lab folder not found")
+    return get_object_or_404(LabFolder.objects.filter(project__in=visible_projects(request.user),deleted_at__isnull=True).select_related("project","parent"),id=folder_id)
 
 def _require_platform_admin(request):
     if not request.user.is_staff: raise PermissionDenied
@@ -149,16 +156,32 @@ def project_edit(request,project_id):
 
 @login_required
 def labs(request):
-    queryset = Lab.objects.filter(project__in=visible_projects(request.user),deleted_at__isnull=True).select_related("project","folder","folder__parent").annotate(revision_count=Count("revisions")).order_by("project__name","folder__name","name")
+    projects=visible_projects(request.user)
+    selected_folder=requested_folder(request)
+    queryset = Lab.objects.filter(project__in=projects,deleted_at__isnull=True,folder=selected_folder).select_related("project","folder","folder__parent").annotate(revision_count=Count("revisions")).order_by("project__name","name")
     for lab in queryset: lab.can_manage=project_role(request.user,lab.project) in (ProjectMembership.Role.ADMIN,ProjectMembership.Role.EDITOR)
-    folders=LabFolder.objects.filter(project__in=visible_projects(request.user),deleted_at__isnull=True).select_related("project","parent").annotate(lab_count=Count("labs",filter=Q(labs__deleted_at__isnull=True)),child_count=Count("children",filter=Q(children__deleted_at__isnull=True))).order_by("project__name","name")
+    folders=LabFolder.objects.filter(project__in=projects,parent=selected_folder,deleted_at__isnull=True).select_related("project","parent").annotate(lab_count=Count("labs",filter=Q(labs__deleted_at__isnull=True)),child_count=Count("children",filter=Q(children__deleted_at__isnull=True))).order_by("project__name","name")
     for folder in folders: folder.can_manage=project_role(request.user,folder.project) in (ProjectMembership.Role.ADMIN,ProjectMembership.Role.EDITOR)
+    breadcrumbs=[];ancestor=selected_folder
+    while ancestor:
+        breadcrumbs.append(ancestor);ancestor=ancestor.parent
+    breadcrumbs.reverse()
+    can_manage_folder=selected_folder and project_role(request.user,selected_folder.project) in (ProjectMembership.Role.ADMIN,ProjectMembership.Role.EDITOR)
+    can_create_any=Project.objects.filter(Q(owner=request.user)|Q(memberships__user=request.user,memberships__role__in=(ProjectMembership.Role.ADMIN,ProjectMembership.Role.EDITOR)),deleted_at__isnull=True).exists()
+    create_url=(f"/labs/new/?project={selected_folder.project_id}&folder={selected_folder.id}" if selected_folder else "/labs/new/") if (can_manage_folder or (not selected_folder and can_create_any)) else None
     return render(request, "studio/catalog.html", {"section": "labs", "title": "Lab library", "eyebrow": "TOPOLOGY DESIGNS", "items": queryset,
-        "folders":folders,"description": "Create, organize, and publish reusable network topology designs.", "create_url": "/labs/new/", "create_label": "New lab"})
+        "folders":folders,"selected_folder":selected_folder,"folder_breadcrumbs":breadcrumbs,"can_manage_folder":can_manage_folder,
+        "description": "Create, organize, and publish reusable network topology designs.","create_url":create_url,"create_label": "New lab"})
 
 @login_required
 def lab_folder_create(request):
-    form=LabFolderForm(request.user,request.POST or None)
+    parent=requested_folder(request,"parent")
+    if parent and project_role(request.user,parent.project) not in (ProjectMembership.Role.ADMIN,ProjectMembership.Role.EDITOR):
+        raise PermissionDenied("Editor access is required to create a subfolder.")
+    if not parent and not Project.objects.filter(Q(owner=request.user)|Q(memberships__user=request.user,memberships__role__in=(ProjectMembership.Role.ADMIN,ProjectMembership.Role.EDITOR)),deleted_at__isnull=True).exists():
+        raise PermissionDenied("Editor access is required to create a folder.")
+    initial={"project":parent.project_id,"parent":parent.id} if parent else {}
+    form=LabFolderForm(request.user,request.POST or None,initial=initial)
     if request.method=="POST" and form.is_valid():
         folder=form.save(commit=False);folder.full_clean();folder.save()
         AuditEvent.objects.create(actor=request.user,project=folder.project,action="lab_folder.created",target_type="LabFolder",target_id=folder.id,
@@ -195,7 +218,12 @@ def lab_folder_delete(request,folder_id):
 
 @login_required
 def lab_create(request):
-    form = LabForm(request.user, request.POST or None)
+    folder=requested_folder(request)
+    if folder and project_role(request.user,folder.project) not in (ProjectMembership.Role.ADMIN,ProjectMembership.Role.EDITOR):
+        raise PermissionDenied("Editor access is required to create a lab in this folder.")
+    requested_project=folder.project_id if folder else request.GET.get("project")
+    initial={"project":requested_project,"folder":folder.id if folder else None} if requested_project else {}
+    form = LabForm(request.user, request.POST or None,initial=initial)
     if request.method == "POST" and form.is_valid():
         project=form.cleaned_data["project"]
         with transaction.atomic():

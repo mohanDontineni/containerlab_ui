@@ -18,6 +18,7 @@ class LabFolderForm(forms.ModelForm):
         folders=LabFolder.objects.filter(project__in=projects,deleted_at__isnull=True).select_related("parent").order_by("project__name","name")
         if self.instance.pk: folders=folders.exclude(pk=self.instance.pk)
         self.fields["parent"].queryset=folders
+        if not self.instance._state.adding: self.fields["project"].disabled=True
     def clean(self):
         cleaned=super().clean();project=cleaned.get("project");parent=cleaned.get("parent")
         if not self.instance._state.adding and project and project.id!=LabFolder.objects.only("project_id").get(pk=self.instance.pk).project_id:
