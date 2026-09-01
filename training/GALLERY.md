@@ -151,3 +151,9 @@ The operator or automation engineer reviews the authenticated API behind the GUI
 ![Redeploy preview](25-redeploy-preview.png)
 
 Before replacing device compute, the operator reviews the pinned revision, device and link counts, current state, preserved records, session impact, and any conflicting active job. Redeploy is submitted only after explicit confirmation.
+
+## 26 — Device runtime logs
+
+![Device runtime logs](26-device-runtime-logs.png)
+
+The operator opens the device inspector from a live device, switches between appliance and Clabernetes launcher sources, selects a bounded line count, refreshes, and copies the audited no-store result without using Kubernetes or Containerlab commands.

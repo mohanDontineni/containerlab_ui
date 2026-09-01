@@ -29,7 +29,8 @@
 - Topology revision-history workspace with immutable/deployed/draft status, counts and checksums, optimistic draft-conflict protection, idempotent restore into a new editable revision, encrypted configuration re-versioning, and audited provenance.
 - Native self-service account and security page with profile/timezone management, normalized email, verified current-password changes, strengthened password validation, CSRF protection, session continuity, legacy-route safety, and content-free audit events.
 - Explicit GUI-only operator contract: topology Backup/Restore is labeled as a product-native bundle workflow, while Containerlab/Kubernetes YAML remains internal to the validated runtime adapter.
-- A 25-screen, read-only Firefox training capture catalog covering projects, labs, visual topology design, images, deployment/device lifecycle, safe redeploy preview, link controls, diagnostics, packet capture, console, configuration history, templates, jobs, security, and API discovery.
+- Bounded per-device appliance and Clabernetes launcher log inspection through audited worker jobs, with operator authorization, selectable 20-1000 line limits, 100 KB output caps, no-store polling, refresh, and copy controls.
+- A 26-screen, read-only Firefox training capture catalog covering projects, labs, visual topology design, images, deployment/device lifecycle, safe redeploy preview, runtime logs, link controls, diagnostics, packet capture, console, configuration history, templates, jobs, security, and API discovery.
 
 ## Acceptance results
 
@@ -70,8 +71,9 @@
 | 33 | Self-service account security | PASS | A temporary production account rendered the native page, rejected an incorrect current password, normalized and saved profile/timezone data, changed to a policy-compliant password, authenticated with the replacement credential, retained its active session, and emitted content-free profile/password audit events; the temporary user was then removed. |
 | 34 | Packet-corruption impairment | PASS | The authenticated product API applied 0.5% corruption to a live two-router link, `tc netem` reported `corrupt 0.5%` on both launcher endpoints, and a second idempotent operation restored the persisted/runtime condition to 0%. |
 | 35 | Safe whole-lab redeploy | PASS | Firefox verified the read-only impact preview; an authenticated audited redeploy recreated a stopped two-device/one-link Alpine runtime from pinned revision 1, reached 2/2 ready and `running`, and a final stop restored its original stopped state. |
+| 36 | Device and launcher logs | PASS | Authenticated worker jobs collected 2,682 bytes of live FRR appliance startup output and 11,799 bytes of Clabernetes launcher output for the same router; both completed successfully through bounded, audited, no-store GUI contracts. |
 
-Automated tests: **97 passed**. Django checks and migration drift checks: **pass**. React TypeScript/Vite production build: **pass**. Firefox training capture: **25 live screens passed**. Helm lint/render: **pass**. Native runtime ping: **3 transmitted, 3 received, 0% loss, 0.445 ms average RTT**. Bidirectional 120 ms link condition: **240.563 ms average RTT**. Disabled link: **100% loss**. Restored qdiscs: **native `noqueue` on both endpoints**.
+Automated tests: **99 passed**. Django checks and migration drift checks: **pass**. React TypeScript/Vite production build: **pass**. Firefox training capture: **26 live screens passed**. Helm lint/render: **pass**. Native runtime ping: **3 transmitted, 3 received, 0% loss, 0.445 ms average RTT**. Bidirectional 120 ms link condition: **240.563 ms average RTT**. Disabled link: **100% loss**. Restored qdiscs: **native `noqueue` on both endpoints**.
 
 ## Known limitations
 

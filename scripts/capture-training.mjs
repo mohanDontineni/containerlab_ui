@@ -170,6 +170,16 @@ try {
       await dialog.waitFor();
       return dialog;
     });
+    await capture("26-device-runtime-logs.png", deploymentHref, async (p) => {
+      await p.locator("button[data-device-log]:not([disabled])").first().click();
+      const dialog = p.locator("#device-log-dialog");
+      await dialog.waitFor();
+      await p.waitForFunction(() => {
+        const output = document.querySelector("#device-log-output")?.textContent || "";
+        return !output.includes("Reading bounded runtime logs") && output.length > 20;
+      });
+      return dialog;
+    });
   }
 
   await capture("21-device-templates.png", "/device-templates/");
