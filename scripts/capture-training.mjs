@@ -114,6 +114,14 @@ try {
   }
 
   await capture("10-image-library.png", "/images/");
+  await capture("31-guarded-image-deletion.png", "/images/", async (p) => {
+    const row = p.locator(".catalog-row").filter({ hasText: /Deletion Acceptance Artifact\.bin/i }).first();
+    await row.waitFor();
+    await row.locator("button[data-delete-image]").click();
+    const dialog = p.locator("#image-delete-dialog");
+    await dialog.waitFor();
+    return dialog;
+  });
   await capture("11-upload-image.png", "/images/upload/");
   await capture("12-register-image.png", "/images/register/");
   await capture("13-deployments.png", "/deployments/");

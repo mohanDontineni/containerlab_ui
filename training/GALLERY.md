@@ -181,3 +181,9 @@ Before restoring a collected configuration, the operator reviews the device, ver
 ![Traceroute diagnostic](30-traceroute-diagnostic.png)
 
 The operator selects a ready appliance, literal IPv4/IPv6 destination, probes per hop, timeout, and maximum hop count. The authenticated worker executes the bounded command inside the owned device and returns the real hop path without exposing a launcher shell or accepting arbitrary command text.
+
+## 31 — Guarded image deletion
+
+![Guarded image deletion](31-guarded-image-deletion.png)
+
+Before deletion, the server counts publications, build records, lab revisions, and active jobs. Only an unreferenced artifact may be confirmed; Studio then removes its owned quarantine file, releases project quota, hides the artifact from image/topology libraries, and retains upload, operation, and audit provenance.
