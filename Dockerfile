@@ -1,9 +1,10 @@
 FROM node:22.19.0-alpine AS frontend
 WORKDIR /src/frontend
-COPY frontend/package*.json ./
-RUN npm install --ignore-scripts
+COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml ./
+RUN corepack enable && corepack prepare pnpm@11.19.0 --activate \
+    && pnpm install --frozen-lockfile
 COPY frontend/ ./
-RUN npm run build
+RUN pnpm build
 
 FROM python:3.13.7-slim AS wheels
 WORKDIR /build

@@ -30,6 +30,7 @@ import "@xyflow/react/dist/style.css";
 import "./style.css";
 import "./clone.css";
 import "./configuration.css";
+import { interfaceFromHandle } from "./topology-utils";
 
 type Template = {
   id: string;
@@ -99,8 +100,7 @@ const csrf = () =>
     .split("; ")
     .find((x) => x.startsWith("csrftoken="))
     ?.split("=")[1] || "";
-const ifaceFromHandle = (value: string | null | undefined) =>
-  value?.split(":").slice(1).join(":") || "";
+const ifaceFromHandle = interfaceFromHandle;
 const iconFor = (icon: string) =>
   ({ router: "↔", switch: "▦", firewall: "◆", host: "□" })[icon] || "◇";
 
