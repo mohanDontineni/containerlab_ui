@@ -74,6 +74,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 | `62-stale-upload-cleanup.png` | Automatic stale-upload cleanup | Shows a partial upload after its 24-hour resume window expired and its quarantined storage was safely released. |
 | `63-dashboard-failure-capacity.png` | Failure triage and project capacity | Summarizes every runtime state, real project quota consumption, telemetry availability, and failed jobs with resource-specific recovery actions. |
 | `64-operations-job-center.png` | Searchable operations job center | Filters durable jobs by state, type, and lab, expands sanitized failure evidence, and navigates to the affected resource. |
+| `65-template-image-compatibility.png` | Template-to-image compatibility | Evaluates accessible immutable publications against template architecture, category, verification, format, and lifecycle requirements. |
 
 ## No-YAML operating model
 
@@ -112,6 +113,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 32. Review upload-session history to distinguish resumable, completed, failed, cancelled, and expired sessions; stale quarantine storage is released automatically and audited.
 33. Triage failed background work from the overview, follow its bounded error evidence to the affected resource, and compare project usage with enforced quota allocations; live CPU and memory are shown only when measured telemetry is available.
 34. Search and filter durable operations by lifecycle state, operation type, lab name, or correlation key; expand sanitized failures and follow the resource-aware recovery action instead of issuing an unsafe generic retry.
+35. Review each template version's image policy and accessible publication matrix; the topology editor disables incompatible choices, explains warnings, and the server revalidates compatibility during draft save and runtime preflight.
 
 Containerlab/Kubernetes YAML is an internal adapter concern. It may be inspected by platform administrators for troubleshooting, but it is not part of the normal user workflow.
 
