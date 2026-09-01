@@ -39,3 +39,5 @@ The labeled operator screenshot catalog and its read-only capture procedure are 
 ## Important limitations
 
 Advanced acceptance remains in progress. Multi-node image distribution and several advanced CRUD surfaces remain incomplete. VM-backed devices are blocked on this node because `/dev/kvm` is absent. Native self-service account security, browser consoles, packet capture, node-local image publication and repair, guarded topology/runtime removal, Save As and revision restore, durable per-device suspend/resume, project role management, resource quotas, encrypted startup and collected configuration versioning, BGP routing, and default-deny nftables firewall policy are implemented and live-tested on the single-node deployment.
+
+The frontend build is reproducible from its frozen pnpm lockfile and currently reports zero known dependency vulnerabilities. The deployed interface is self-contained and does not require third-party font or asset hosts at runtime.
