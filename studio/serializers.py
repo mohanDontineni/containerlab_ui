@@ -122,6 +122,8 @@ class DeploymentScheduleSerializer(serializers.ModelSerializer):
 class DeviceInstanceSerializer(serializers.ModelSerializer):
     name=serializers.CharField(source="lab_node.name",read_only=True)
     kind=serializers.CharField(source="lab_node.template_version.containerlab_kind",read_only=True)
+    template_name=serializers.CharField(source="lab_node.template_version.template.name",read_only=True)
+    position=serializers.JSONField(source="lab_node.position",read_only=True)
     node_id=serializers.UUIDField(source="lab_node_id",read_only=True)
     interfaces=serializers.SerializerMethodField()
     configuration_collection_supported=serializers.SerializerMethodField()
@@ -134,4 +136,4 @@ class DeviceInstanceSerializer(serializers.ModelSerializer):
         requirements=obj.lab_node.template_version.resource_requirements or {}
         return {"cpu":requirements.get("cpu"),"memory":requirements.get("memory"),
             "template_version":obj.lab_node.template_version.version}
-    class Meta: model=models.DeviceInstance; fields=("id","node_id","name","kind","interfaces","configuration_collection_supported","resource_profile","observed_readiness","worker_placement","runtime_resources","console_endpoints")
+    class Meta: model=models.DeviceInstance; fields=("id","node_id","name","kind","template_name","position","interfaces","configuration_collection_supported","resource_profile","observed_readiness","worker_placement","runtime_resources","console_endpoints")

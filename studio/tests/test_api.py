@@ -628,12 +628,13 @@ def test_runtime_device_contract_exposes_logical_node_identity():
     lab=Lab.objects.create(project=project,name="lab")
     revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="f"*64,immutable=True)
     template=DeviceTemplateVersion.objects.first()
-    node=LabNode.objects.create(revision=revision,name="r1",template_version=template)
+    node=LabNode.objects.create(revision=revision,name="r1",template_version=template,position={"x":240,"y":120})
     deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-device-test",runtime_version="0.8.0")
     DeviceInstance.objects.create(deployment=deployment,lab_node=node,observed_readiness="ready")
     c=APIClient(); c.force_authenticate(owner)
     device=c.get(f"/api/v1/deployments/{deployment.id}/runtime/").data["devices"][0]
-    assert str(device["node_id"])==str(node.id)
+    assert str(device["node_id"])==str(node.id) and device["position"]=={"x":240,"y":120}
+    assert device["template_name"]==template.template.name
 
 @pytest.mark.django_db
 def test_redeploy_preview_and_operation_are_authorized_audited_and_idempotent(monkeypatch):

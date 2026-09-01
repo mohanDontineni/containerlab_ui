@@ -872,7 +872,7 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
         conditions=deployment.resource_identities.get("link_conditions",{})
         links=deployment.revision.links.select_related("endpoint_a__node","endpoint_b__node")
         response=Response({"deployment":serializers.DeploymentSerializer(deployment).data,
-            "devices":serializers.DeviceInstanceSerializer(deployment.devices.select_related("lab_node__template_version").prefetch_related("lab_node__interfaces"),many=True).data,
+            "devices":serializers.DeviceInstanceSerializer(deployment.devices.select_related("lab_node__template_version__template").prefetch_related("lab_node__interfaces"),many=True).data,
             "links":[{"id":str(link.id),"label":link.label,"endpoint_a":{"node":link.endpoint_a.node.name,"interface":link.endpoint_a.name},
                 "endpoint_b":{"node":link.endpoint_b.node.name,"interface":link.endpoint_b.name},"condition":conditions.get(str(link.id),{"active":False,
                     "disabled":False,"latency_ms":0,"jitter_ms":0,"loss_percent":0,"corruption_percent":0,"rate_kbps":0})} for link in links],

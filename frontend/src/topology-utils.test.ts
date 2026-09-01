@@ -1,8 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import { alignSelectedNodes, arrangeTopology, duplicateSubgraph, interfaceFromHandle, interfaceIsAvailable } from "./topology-utils";
+import { requestedConsoleDevice } from "./console-utils";
 
 describe("topology interface helpers", () => {
+  it("accepts only same-origin live-map console requests", () => {
+    const message={type:"open-device-console",deviceId:"device-1"};
+    expect(requestedConsoleDevice("https://studio.example","https://studio.example",message)).toBe("device-1");
+    expect(requestedConsoleDevice("https://attacker.example","https://studio.example",message)).toBe("");
+    expect(requestedConsoleDevice("https://studio.example","https://studio.example",{...message,deviceId:42})).toBe("");
+  });
   it("maps React Flow endpoint handles to device interface names", () => {
     expect(interfaceFromHandle("router-1:eth1")).toBe("eth1");
     expect(interfaceFromHandle("router-1:ge-0/0/1")).toBe("ge-0/0/1");
