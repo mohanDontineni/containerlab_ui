@@ -234,6 +234,7 @@ function Workspace() {
   const [dirty, setDirty] = useState(false);
   const [workspaceReady,setWorkspaceReady]=useState(false);
   const [editLease,setEditLease]=useState<EditLease|null>(null);
+  const [leaseChecking,setLeaseChecking]=useState(false);
   const leaseToken=useRef("");
   const [templateQuery,setTemplateQuery]=useState("");
   const [notice, setNotice] = useState("Ready");
@@ -322,6 +323,19 @@ function Workspace() {
     const release=()=>{if(leaseToken.current)fetch(`/api/v1/labs/${labId}/topology/edit-lease/`,{method:"DELETE",credentials:"same-origin",keepalive:true,headers:{"X-CSRFToken":csrf(),"X-Edit-Lease":leaseToken.current}}).catch(()=>{})};
     addEventListener("pagehide",release);return()=>{clearInterval(renew);removeEventListener("pagehide",release)};
   },[editLease?.can_edit]);
+  useEffect(()=>{
+    if(!editLease||editLease.can_edit)return;
+    const refresh=async()=>{try{const response=await fetch(`/api/v1/labs/${labId}/topology/edit-lease/`,{credentials:"same-origin",cache:"no-store"});const data=await response.json();if(response.ok)setEditLease(data)}catch{/* Keep the last authoritative lease state while connectivity recovers. */}};
+    const poll=window.setInterval(refresh,15000);return()=>clearInterval(poll);
+  },[editLease?.can_edit]);
+  const tryAcquireLease=async()=>{
+    if(leaseChecking)return;setLeaseChecking(true);
+    try{const response=await fetch(`/api/v1/labs/${labId}/topology/edit-lease/`,{method:"POST",credentials:"same-origin",headers:{"X-CSRFToken":csrf()}});const data=await response.json();
+      if(!response.ok){setEditLease(data.error||data);setNotice(`${data.error?.owner||"Another operator"} still holds the editing session`);return}
+      setNotice("Editing access secured · refreshing the latest draft");location.reload();
+    }catch{setNotice("Unable to request editing access")}
+    finally{setLeaseChecking(false)}
+  };
   const canEdit=Boolean(editLease?.can_edit);
   useEffect(() => {
     const warn = (e: BeforeUnloadEvent) => {
@@ -817,7 +831,7 @@ function Workspace() {
           </button>
         </div>
       </header>
-      {editLease&&!canEdit&&<div className="edit-lease-banner" role="status"><strong>Read-only workspace</strong><span>{editLease.owner||"Another operator"} is editing this topology. Your view is protected from overwriting their changes.</span><small>{editLease.expires_at?`Available after ${new Date(editLease.expires_at).toLocaleTimeString()}`:"Waiting for the editing session to be released"}</small></div>}
+      {editLease&&!canEdit&&<div className={`edit-lease-banner ${editLease.active?"held":"available"}`} role="status"><strong>{editLease.active?"Read-only workspace":"Editing available"}</strong><span>{editLease.active?`${editLease.owner||"Another operator"} is editing this topology. Your view is protected from overwriting their changes.`:"The previous editing session ended. Refresh from the latest saved draft before making changes."}</span><small>{editLease.active&&editLease.expires_at?`Lease expires at ${new Date(editLease.expires_at).toLocaleTimeString()}`:"No active editor"}</small><button onClick={tryAcquireLease} disabled={leaseChecking}>{leaseChecking?"Checking…":"Try editing now"}</button></div>}
       {interopOpen&&<div className="modal-backdrop" role="presentation" onMouseDown={()=>!containerlabImporting&&setInteropOpen(false)}>
         <section className="interop-dialog" role="dialog" aria-modal="true" aria-labelledby="interop-title" onMouseDown={event=>event.stopPropagation()}>
           <header><div><p className="dialog-eyebrow">GUARDED MIGRATION WORKFLOW</p><h2 id="interop-title">Containerlab interoperability</h2><p>Import an existing topology through explicit Studio mappings or export the saved visual design. Normal lab operation remains GUI-only.</p></div><button aria-label="Close Containerlab interoperability" onClick={()=>setInteropOpen(false)} disabled={containerlabImporting}>×</button></header>

@@ -88,7 +88,12 @@ def test_topology_edit_lease_blocks_second_editor_and_expires(client):
     client.force_login(editor)
     conflict=client.post(f"/api/v1/labs/{lab.id}/topology/edit-lease/")
     assert conflict.status_code==409 and conflict.json()["error"]["owner"]=="lease-owner"
+    observed=client.get(f"/api/v1/labs/{lab.id}/topology/edit-lease/")
+    assert observed.status_code==200 and observed.json()["active"] is True and observed.json()["can_edit"] is False
+    assert "token" not in observed.json()
     lab.refresh_from_db();lab.edit_lock_expires_at=timezone.now()-timedelta(seconds=1);lab.save(update_fields=["edit_lock_expires_at"])
+    available=client.get(f"/api/v1/labs/{lab.id}/topology/edit-lease/")
+    assert available.status_code==200 and available.json()["active"] is False and available.json()["can_edit"] is False
     takeover=client.post(f"/api/v1/labs/{lab.id}/topology/edit-lease/")
     assert takeover.status_code==200 and takeover.json()["token"]!=token
 

@@ -15,6 +15,13 @@
 }
 .edit-lease-banner strong { color: #ffd88b; text-transform: uppercase; letter-spacing: .7px; }
 .edit-lease-banner small { margin-left: auto; color: #987d52; }
+.edit-lease-banner button { height: 30px; padding: 0 11px; border: 1px solid #816b41; border-radius: 6px; background: #241e12; color: #f2cf84; font-size: 9px; font-weight: 700; cursor: pointer; }
+.edit-lease-banner button:disabled { opacity: .55; cursor: wait; }
+.edit-lease-banner.available { border-color: rgba(55, 211, 154, .35); background: linear-gradient(90deg, rgba(55, 211, 154, .15), rgba(55, 211, 154, .04)); color: #8ddfc3; }
+.edit-lease-banner.available strong { color: #65d7b1; }
+.edit-lease-banner.available small { color: #639985; }
+.edit-lease-banner.available button { border-color: #287c64; background: #102b23; color: #81e2c2; }
+@media(max-width:760px){.edit-lease-banner{position:relative;top:0;flex-wrap:wrap}.edit-lease-banner small{margin-left:0}.edit-lease-banner button{margin-left:auto}}
 .workspace-shell.read-only .inspector input,
 .workspace-shell.read-only .inspector select,
 .workspace-shell.read-only .inspector textarea,
