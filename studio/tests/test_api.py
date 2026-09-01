@@ -825,6 +825,39 @@ def test_structured_device_inspection_is_authorized_idempotent_audited_and_execu
     assert job.state=="succeeded" and job.result_payload["interfaces"][0]["name"]=="eth1"
 
 @pytest.mark.django_db
+def test_topology_traffic_snapshot_is_atomic_authorized_idempotent_and_observational(monkeypatch):
+    monkeypatch.setattr("studio.api.execute_operation.delay",lambda *_:None)
+    owner=User.objects.create_user("traffic-owner",password="long-enough-password")
+    viewer=User.objects.create_user("traffic-viewer",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="traffic-project");ProjectMembership.objects.create(project=project,user=viewer,role="viewer")
+    lab=Lab.objects.create(project=project,name="traffic-lab");revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="8"*64,immutable=True)
+    template=DeviceTemplateVersion.objects.get(template__name="FRR Router")
+    nodes=[LabNode.objects.create(revision=revision,name=name,template_version=template) for name in ("r1","r2")]
+    interfaces=[LabInterface.objects.create(node=node,name="eth1") for node in nodes]
+    link=LabLink.objects.create(revision=revision,endpoint_a=interfaces[0],endpoint_b=interfaces[1],label="transit")
+    deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-traffic",runtime_version="0.8.0",observed_state="running")
+    for node in nodes:DeviceInstance.objects.create(deployment=deployment,lab_node=node,observed_readiness="ready",runtime_resources={"pod":f"{node.name}-pod"})
+    endpoint=f"/api/v1/deployments/{deployment.id}/traffic-snapshot/";client=APIClient();client.force_authenticate(viewer)
+    assert client.post(endpoint,{},format="json",HTTP_IDEMPOTENCY_KEY="viewer-traffic").status_code==403
+    client.force_authenticate(owner)
+    first=client.post(endpoint,{},format="json",HTTP_IDEMPOTENCY_KEY="traffic-once")
+    replay=client.post(endpoint,{},format="json",HTTP_IDEMPOTENCY_KEY="traffic-once")
+    assert first.status_code==replay.status_code==202 and first.data["id"]==replay.data["id"]
+    audit=AuditEvent.objects.get(action="topology.traffic_snapshot_requested",target_id=deployment.id)
+    assert audit.metadata=={"operation":str(first.data["id"]),"devices":2,"links":1}
+    class Adapter:
+        def inspect_topology_traffic(self,received):
+            assert received.id==deployment.id
+            stats={"rx":{"bytes":1200,"packets":12,"errors":0,"dropped":0},"tx":{"bytes":1500,"packets":15,"errors":0,"dropped":0}}
+            return {"deployment_id":str(deployment.id),"device_count":2,"link_count":1,"links":[{"id":str(link.id),"label":"transit",
+                "endpoint_a":{"node":"r1","interface":"eth1","state":"UP","statistics":stats},
+                "endpoint_b":{"node":"r2","interface":"eth1","state":"UP","statistics":stats}}]}
+    monkeypatch.setattr("studio.tasks.ClabernetesAdapter",Adapter);execute_operation.run(str(first.data["id"]))
+    job=OperationJob.objects.get(id=first.data["id"]);deployment.refresh_from_db()
+    assert job.state=="succeeded" and job.result_payload["links"][0]["endpoint_a"]["statistics"]["rx"]["packets"]==12
+    assert deployment.observed_state=="running"
+
+@pytest.mark.django_db
 def test_runtime_device_contract_exposes_logical_node_identity():
     owner=User.objects.create_user("device-owner",password="long-enough-password")
     project=Project.objects.create(owner=owner,name="devices")

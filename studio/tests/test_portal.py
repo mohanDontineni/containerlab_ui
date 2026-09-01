@@ -595,6 +595,7 @@ def test_deployment_detail_is_native_and_scoped(client):
     assert "Traffic and rate" in response.content.decode() and "interfaceCounterSamples" in response.content.decode()
     assert "telemetryHistoryLimit=30" in response.content.decode() and "browser-local history" in response.content.decode()
     assert "OPERATIONAL TOPOLOGY" in response.content.decode() and "runtime-map-viewport" in response.content.decode()
+    assert "Inspect link traffic" in response.content.decode() and "traffic-snapshot" in response.content.decode()
     assert "open-device-console" in response.content.decode() and "data-runtime-map-action" in response.content.decode()
     client.force_login(stranger)
     assert client.get(f"/deployments/{deployment.id}/").status_code == 404

@@ -302,6 +302,27 @@ class ClabernetesAdapter:
             for row in neighbors if isinstance(row,dict)]
         return {"device_id":str(device.id),"device":device.lab_node.name,"interfaces":interfaces,"routes":safe_routes,
             "neighbors":safe_neighbors,"truncated":{"interfaces":address_truncated or link_truncated,"routes":route_truncated,"neighbors":neighbor_truncated}}
+    def inspect_topology_traffic(self,deployment):
+        links=list(deployment.revision.links.select_related("endpoint_a__node","endpoint_b__node")[:201])
+        if not links: raise CapabilityError("This topology has no point-to-point links")
+        if len(links)>200: raise CapabilityError("Topology traffic inspection supports at most 200 links")
+        linked_names={endpoint.node.name for link in links for endpoint in (link.endpoint_a,link.endpoint_b)}
+        if len(linked_names)>50: raise CapabilityError("Topology traffic inspection supports at most 50 linked devices")
+        devices={device.lab_node.name:device for device in deployment.devices.select_related("lab_node").filter(lab_node__name__in=linked_names)}
+        unavailable=sorted(name for name in linked_names if name not in devices or devices[name].observed_readiness!="ready" or not devices[name].runtime_resources.get("pod"))
+        if unavailable: raise CapabilityError(f"Every linked device must be ready: {', '.join(unavailable[:10])}")
+        interfaces={}
+        for name in sorted(linked_names):
+            snapshot=self.inspect_device(deployment,devices[name])
+            interfaces[name]={row["name"]:row for row in snapshot["interfaces"]}
+        rows=[]
+        for link in links:
+            def endpoint(interface):
+                row=interfaces.get(interface.node.name,{}).get(interface.name)
+                if not row: raise CapabilityError(f"{interface.node.name}:{interface.name} was not present in live network state")
+                return {"node":interface.node.name,"interface":interface.name,"state":row["state"],"statistics":row["statistics"]}
+            rows.append({"id":str(link.id),"label":link.label,"endpoint_a":endpoint(link.endpoint_a),"endpoint_b":endpoint(link.endpoint_b)})
+        return {"deployment_id":str(deployment.id),"device_count":len(linked_names),"link_count":len(rows),"links":rows}
     def capture_packets(self,deployment,node,interface,duration=10,packet_limit=500):
         if not 1<=duration<=30 or not 1<=packet_limit<=5000: raise CapabilityError("Capture bounds are invalid")
         device=deployment.devices.get(lab_node=node)

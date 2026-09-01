@@ -1407,6 +1407,35 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
         if deployment.removed_at: return Response({"error":{"code":"runtime_removed","details":"Removed deployments are retained as history and are not reconciled."}},status=409)
         reconcile_deployment.delay(str(deployment.id))
         return Response({"state":"scheduled"},status=202)
+    @action(detail=True,methods=["post"],url_path="traffic-snapshot")
+    def traffic_snapshot(self,request,pk=None):
+        deployment=self.get_object();self._require_operator(deployment)
+        key=request.headers.get("Idempotency-Key")
+        if not key:return Response({"error":{"code":"idempotency_key_required"}},status=400)
+        existing=models.OperationJob.objects.filter(owner=request.user,idempotency_key=key).first()
+        if existing:
+            if existing.deployment_id!=deployment.id or existing.operation_type!="inspect_topology_traffic" or existing.target_id!=deployment.id:
+                return Response({"error":{"code":"idempotency_conflict"}},status=409)
+            if existing.state in ("accepted","scheduled"):execute_operation.delay(str(existing.id))
+            return Response(serializers.OperationSerializer(existing).data,status=202)
+        links=list(deployment.revision.links.select_related("endpoint_a__node","endpoint_b__node")[:201])
+        if not links:return Response({"error":{"code":"topology_has_no_links"}},status=409)
+        if len(links)>200:return Response({"error":{"code":"traffic_snapshot_limit","details":"Topology traffic inspection supports at most 200 links."}},status=422)
+        linked_names={endpoint.node.name for link in links for endpoint in (link.endpoint_a,link.endpoint_b)}
+        if len(linked_names)>50:return Response({"error":{"code":"traffic_snapshot_limit","details":"Topology traffic inspection supports at most 50 linked devices."}},status=422)
+        ready=set(deployment.devices.filter(lab_node__name__in=linked_names,observed_readiness="ready",runtime_resources__has_key="pod").values_list("lab_node__name",flat=True))
+        unavailable=sorted(linked_names-ready)
+        if unavailable:return Response({"error":{"code":"traffic_snapshot_blocked","details":"Every linked device must be ready before inspection.","devices":unavailable[:10]}},status=409)
+        active=deployment.operations.filter(operation_type="inspect_topology_traffic",state__in=("accepted","scheduled","started")).first()
+        if active:return Response({"error":{"code":"traffic_snapshot_in_progress","operation":str(active.id)}},status=409)
+        with transaction.atomic():
+            job=models.OperationJob.objects.create(deployment=deployment,owner=request.user,operation_type="inspect_topology_traffic",
+                target_id=deployment.id,idempotency_key=key,state="scheduled",request_payload={})
+            models.AuditEvent.objects.create(actor=request.user,project=deployment.revision.lab.project,action="topology.traffic_snapshot_requested",
+                target_type="LabDeployment",target_id=deployment.id,correlation_id=getattr(request,"correlation_id",""),
+                metadata={"operation":str(job.id),"devices":len(linked_names),"links":len(links)})
+            transaction.on_commit(lambda:execute_operation.delay(str(job.id)))
+        return Response(serializers.OperationSerializer(job).data,status=202)
     @action(detail=True,methods=["post"])
     def operations(self,request,pk=None):
         deployment=self.get_object(); op=request.data.get("operation")
