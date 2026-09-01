@@ -1,5 +1,6 @@
 import pytest
 import uuid
+import hashlib
 from pathlib import Path
 from django.conf import settings
 from django.utils import timezone
@@ -542,8 +543,58 @@ def test_live_configuration_collection_is_operator_only_versioned_and_encrypted(
     assert AuditEvent.objects.filter(action="configuration.downloaded",target_id=collected.id).exists()
     history=client.get(f"/api/v1/deployments/{deployment.id}/configurations/")
     assert history.status_code==200 and history.data==[{"id":str(collected.id),"name":collected.name,"version":1,
-        "checksum":collected.checksum,"byte_size":29,"created_at":collected.created_at,
+        "checksum":collected.checksum,"byte_size":29,"created_at":collected.created_at,"device":"r1","restorable":True,
         "download":job.result_payload["download"]}]
+
+@pytest.mark.django_db
+def test_configuration_compare_and_restore_creates_concurrency_safe_draft_without_touching_runtime():
+    owner=User.objects.create_user("restore-config-owner",password="long-enough-password")
+    viewer=User.objects.create_user("restore-config-viewer",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="restore-config-project");ProjectMembership.objects.create(project=project,user=viewer,role="viewer")
+    lab=Lab.objects.create(project=project,name="restore-config-lab")
+    template=DeviceTemplateVersion.objects.get(template__name="FRR Router")
+    startup=ConfigurationVersion.objects.create(project=project,name="r1/startup",version=1,
+        encrypted_content=encrypt_configuration("hostname r1\nrouter bgp 65000\n"),checksum="1"*64,created_by=owner)
+    revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="2"*64,immutable=True)
+    node=LabNode.objects.create(revision=revision,name="r1",template_version=template,startup_configuration=startup,position={"x":25,"y":50})
+    for number in range(1,9): LabInterface.objects.create(node=node,name=f"eth{number}")
+    deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-restore-config",runtime_version="0.8.0",observed_state="running")
+    DeviceInstance.objects.create(deployment=deployment,lab_node=node,observed_readiness="ready",runtime_resources={"pod":"r1-pod"})
+    contents=("hostname r1\nrouter bgp 65001\n","hostname r1\nrouter bgp 65100\n network 10.1.1.1/32\n")
+    collected=[]
+    for version,content in enumerate(contents,1):
+        config=ConfigurationVersion.objects.create(project=project,name=f"{lab.name}/r1/collected",version=version,
+            encrypted_content=encrypt_configuration(content),checksum=hashlib.sha256(content.encode()).hexdigest(),created_by=owner);collected.append(config)
+        AuditEvent.objects.create(actor=owner,project=project,action="configuration.collected",target_type="ConfigurationVersion",target_id=config.id,
+            correlation_id="test",metadata={"deployment":str(deployment.id),"device":"r1","version":version,"checksum":config.checksum,"byte_size":len(content)})
+    endpoint=f"/api/v1/deployments/{deployment.id}"
+    client=APIClient();client.force_authenticate(viewer)
+    assert client.post(f"{endpoint}/configuration-compare/",{"left_id":str(collected[0].id),"right_id":str(collected[1].id)},format="json").status_code==403
+    client.force_authenticate(owner)
+    compared=client.post(f"{endpoint}/configuration-compare/",{"left_id":str(collected[0].id),"right_id":str(collected[1].id)},format="json")
+    assert compared.status_code==200 and compared.data["changed"] is True and "65001" in compared.data["diff"] and "65100" in compared.data["diff"]
+    assert compared["Cache-Control"]=="no-store" and AuditEvent.objects.filter(action="configuration.compared",target_id=deployment.id).exists()
+    preview=client.get(f"{endpoint}/configurations/{collected[1].id}/restore-preview/")
+    assert preview.status_code==200 and preview.data["requires_deploy"] is True and preview.data["expected_current_draft"] is None
+    missing_key=client.post(f"{endpoint}/configurations/{collected[1].id}/restore/",{},format="json",HTTP_X_EXPECTED_DRAFT="none")
+    assert missing_key.status_code==400
+    restored=client.post(f"{endpoint}/configurations/{collected[1].id}/restore/",{},format="json",
+        HTTP_X_EXPECTED_DRAFT="none",HTTP_IDEMPOTENCY_KEY="restore-collected-v2")
+    assert restored.status_code==201 and restored.data["device"]=="r1"
+    replay=client.post(f"{endpoint}/configurations/{collected[1].id}/restore/",{},format="json",
+        HTTP_X_EXPECTED_DRAFT="none",HTTP_IDEMPOTENCY_KEY="restore-collected-v2")
+    assert replay.status_code==200 and replay.data==restored.data
+    lab.refresh_from_db();deployment.refresh_from_db();draft=lab.current_draft
+    assert draft and not draft.immutable and draft.id!=revision.id
+    restored_configuration=draft.nodes.get(name="r1").startup_configuration
+    assert restored_configuration.id!=collected[1].id and restored_configuration.checksum==collected[1].checksum
+    assert decrypt_configuration(restored_configuration.encrypted_content)==contents[1]
+    assert deployment.revision_id==revision.id and deployment.observed_state=="running" and revision.immutable
+    assert OperationJob.objects.filter(operation_type="restore_configuration",state="succeeded").count()==1
+    assert AuditEvent.objects.filter(action="configuration.restore_draft_created",target_id=draft.id).exists()
+    stale=client.post(f"{endpoint}/configurations/{collected[0].id}/restore/",{},format="json",
+        HTTP_X_EXPECTED_DRAFT="none",HTTP_IDEMPOTENCY_KEY="stale-config-restore")
+    assert stale.status_code==409 and stale.data["error"]["code"]=="draft_changed"
 
 @pytest.mark.django_db
 def test_reconciliation_drops_manual_lifecycle_after_launcher_replacement(monkeypatch):

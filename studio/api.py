@@ -2,6 +2,7 @@ import uuid
 import ipaddress
 import hashlib
 import json
+import difflib
 from pathlib import Path
 from django.conf import settings
 from django.db import IntegrityError, transaction
@@ -368,17 +369,26 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
             metadata__deployment=str(deployment.id)).order_by("-occurred_at")[:100]
         event_by_target={event.target_id:event for event in events}
         rows=models.ConfigurationVersion.objects.filter(id__in=event_by_target).order_by("-created_at")
-        return Response([{"id":str(row.id),"name":row.name,"version":row.version,"checksum":row.checksum,
+        nodes={node.name:node for node in deployment.revision.nodes.select_related("template_version")}
+        response=Response([{"id":str(row.id),"name":row.name,"version":row.version,"checksum":row.checksum,
             "byte_size":event_by_target[row.id].metadata.get("byte_size",0),"created_at":row.created_at,
+            "device":event_by_target[row.id].metadata.get("device","") ,
+            "restorable":bool(nodes.get(event_by_target[row.id].metadata.get("device","")) and
+                nodes[event_by_target[row.id].metadata["device"]].template_version.launch_profile.get("startup_config_target")),
             "download":f"/api/v1/deployments/{deployment.id}/configurations/{row.id}/download/"} for row in rows])
+        response["Cache-Control"]="no-store";response["X-Content-Type-Options"]="nosniff";return response
+
+    def _collected_configuration(self,deployment,configuration_id):
+        try: configuration_uuid=uuid.UUID(str(configuration_id))
+        except (ValueError,TypeError,AttributeError): return None,None
+        configuration=models.ConfigurationVersion.objects.filter(id=configuration_uuid,project=deployment.revision.lab.project).first()
+        event=models.AuditEvent.objects.filter(action="configuration.collected",target_id=configuration_uuid,
+            metadata__deployment=str(deployment.id)).order_by("-occurred_at").first()
+        return (configuration,event) if configuration and event else (None,None)
     @action(detail=True,methods=["get"],url_path=r"configurations/(?P<configuration_id>[^/.]+)/download")
     def download_configuration(self,request,pk=None,configuration_id=None):
         deployment=self.get_object();self._require_operator(deployment)
-        try: configuration_uuid=uuid.UUID(str(configuration_id))
-        except (ValueError,TypeError,AttributeError): return Response({"error":{"code":"invalid_configuration"}},status=422)
-        configuration=models.ConfigurationVersion.objects.filter(id=configuration_uuid,project=deployment.revision.lab.project).first()
-        evidence=models.AuditEvent.objects.filter(action="configuration.collected",target_id=configuration_uuid,
-            metadata__deployment=str(deployment.id)).exists()
+        configuration,evidence=self._collected_configuration(deployment,configuration_id)
         if not configuration or not evidence: return Response({"error":{"code":"configuration_not_found"}},status=404)
         payload=decrypt_configuration(configuration.encrypted_content).encode("utf-8")
         models.AuditEvent.objects.create(actor=request.user,project=configuration.project,action="configuration.downloaded",
@@ -388,6 +398,97 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
         response["Content-Disposition"]=f'attachment; filename="{slugify(configuration.name)[:80] or "configuration"}-v{configuration.version}.txt"'
         response["Cache-Control"]="no-store";response["X-Content-Type-Options"]="nosniff"
         return response
+
+    @action(detail=True,methods=["post"],url_path="configuration-compare")
+    def compare_configurations(self,request,pk=None):
+        deployment=self.get_object();self._require_operator(deployment)
+        left,left_event=self._collected_configuration(deployment,request.data.get("left_id"))
+        right,right_event=self._collected_configuration(deployment,request.data.get("right_id"))
+        if not left or not right: return Response({"error":{"code":"configuration_not_found"}},status=404)
+        left_device=left_event.metadata.get("device","");right_device=right_event.metadata.get("device","")
+        if left_device!=right_device:
+            return Response({"error":{"code":"configuration_device_mismatch","details":"Compare versions collected from the same device."}},status=422)
+        left_text=decrypt_configuration(left.encrypted_content);right_text=decrypt_configuration(right.encrypted_content)
+        diff="".join(difflib.unified_diff(left_text.splitlines(keepends=True),right_text.splitlines(keepends=True),
+            fromfile=f"{left_device} v{left.version}",tofile=f"{right_device} v{right.version}",n=3))
+        encoded=diff.encode("utf-8");truncated=len(encoded)>256*1024
+        if truncated: diff=encoded[:256*1024].decode("utf-8","ignore")+"\n… diff truncated at 256 KiB …\n"
+        models.AuditEvent.objects.create(actor=request.user,project=left.project,action="configuration.compared",
+            target_type="LabDeployment",target_id=deployment.id,correlation_id=getattr(request,"correlation_id",""),
+            metadata={"device":left_device,"left":str(left.id),"right":str(right.id),"left_checksum":left.checksum,
+                "right_checksum":right.checksum,"changed":left.checksum!=right.checksum,"truncated":truncated})
+        response=Response({"device":left_device,"left":{"id":str(left.id),"version":left.version,"checksum":left.checksum},
+            "right":{"id":str(right.id),"version":right.version,"checksum":right.checksum},"changed":left.checksum!=right.checksum,
+            "diff":diff,"truncated":truncated})
+        response["Cache-Control"]="no-store";response["Pragma"]="no-cache";response["X-Content-Type-Options"]="nosniff";return response
+
+    @action(detail=True,methods=["get"],url_path=r"configurations/(?P<configuration_id>[^/.]+)/restore-preview")
+    def configuration_restore_preview(self,request,pk=None,configuration_id=None):
+        deployment=self.get_object();self._require_operator(deployment)
+        configuration,event=self._collected_configuration(deployment,configuration_id)
+        if not configuration: return Response({"error":{"code":"configuration_not_found"}},status=404)
+        device_name=event.metadata.get("device","")
+        node=deployment.revision.nodes.select_related("template_version","startup_configuration").filter(name=device_name).first()
+        if not node: return Response({"error":{"code":"configuration_device_not_found"}},status=409)
+        if not node.template_version.launch_profile.get("startup_config_target"):
+            return Response({"error":{"code":"configuration_restore_unsupported","details":"This template cannot deliver a startup configuration."}},status=422)
+        lab=deployment.revision.lab
+        response=Response({"configuration_id":str(configuration.id),"device":device_name,"version":configuration.version,
+            "checksum":configuration.checksum,"source_revision":deployment.revision.revision_number,
+            "current_startup_checksum":node.startup_configuration.checksum if node.startup_configuration_id else None,
+            "expected_current_draft":str(lab.current_draft_id) if lab.current_draft_id else None,
+            "running_deployment_unchanged":True,"requires_deploy":True,
+            "impact":["Create a new editable draft from the deployed immutable revision",
+                f"Pin collected version {configuration.version} as {device_name}'s startup configuration",
+                "Leave the current running deployment and collected history unchanged",
+                "Apply the restored configuration only when the new draft is explicitly deployed"]})
+        response["Cache-Control"]="no-store";response["X-Content-Type-Options"]="nosniff";return response
+
+    @action(detail=True,methods=["post"],url_path=r"configurations/(?P<configuration_id>[^/.]+)/restore")
+    def restore_configuration(self,request,pk=None,configuration_id=None):
+        deployment=self.get_object();self._require_operator(deployment)
+        configuration,event=self._collected_configuration(deployment,configuration_id)
+        if not configuration: return Response({"error":{"code":"configuration_not_found"}},status=404)
+        device_name=event.metadata.get("device","")
+        source_node=deployment.revision.nodes.select_related("template_version").filter(name=device_name).first()
+        if not source_node: return Response({"error":{"code":"configuration_device_not_found"}},status=409)
+        if not source_node.template_version.launch_profile.get("startup_config_target"):
+            return Response({"error":{"code":"configuration_restore_unsupported","details":"This template cannot deliver a startup configuration."}},status=422)
+        key=request.headers.get("Idempotency-Key")
+        if not key: return Response({"error":{"code":"idempotency_key_required"}},status=400)
+        expected_header=request.headers.get("X-Expected-Draft")
+        if expected_header is None: return Response({"error":{"code":"expected_draft_required"}},status=400)
+        expected=None if expected_header.lower()=="none" else expected_header
+        if expected:
+            try: expected=str(uuid.UUID(expected))
+            except (ValueError,TypeError,AttributeError): return Response({"error":{"code":"invalid_expected_draft"}},status=422)
+        existing=models.OperationJob.objects.filter(owner=request.user,idempotency_key=key).first()
+        if existing:
+            if existing.operation_type!="restore_configuration" or existing.target_id!=configuration.id or existing.deployment_id!=deployment.id:
+                return Response({"error":{"code":"idempotency_conflict"}},status=409)
+            return Response(existing.result_payload,status=200)
+        try:
+            with transaction.atomic():
+                lab=models.Lab.objects.select_for_update().get(pk=deployment.revision.lab_id)
+                actual=str(lab.current_draft_id) if lab.current_draft_id else None
+                if actual!=expected: return Response({"error":{"code":"draft_changed","details":"The active draft changed after restore preview.","current_draft":actual}},status=409)
+                job=models.OperationJob.objects.create(deployment=deployment,owner=request.user,operation_type="restore_configuration",
+                    target_id=configuration.id,idempotency_key=key,state="started",progress=25,
+                    request_payload={"configuration_id":str(configuration.id),"device":device_name,"expected_current_draft":expected})
+                bundle=export_lab_bundle(lab,deployment.revision)
+                target_document=next(item for item in bundle["topology"]["nodes"] if item["name"]==device_name)
+                target_document["startupConfiguration"]=decrypt_configuration(configuration.encrypted_content)
+                restored=import_lab_bundle(lab,request.user,bundle)
+                result={"revision_id":str(restored.id),"revision_number":restored.revision_number,"configuration_id":str(configuration.id),
+                    "device":device_name,"checksum":configuration.checksum,"workspace_url":f"/labs/{lab.id}/topology/","operation_id":str(job.id)}
+                job.state="succeeded";job.progress=100;job.result_payload=result;job.save(update_fields=["state","progress","result_payload","updated_at"])
+                models.AuditEvent.objects.create(actor=request.user,project=lab.project,action="configuration.restore_draft_created",
+                    target_type="LabRevision",target_id=restored.id,correlation_id=getattr(request,"correlation_id",""),
+                    metadata={"deployment":str(deployment.id),"source_revision":str(deployment.revision_id),"device":device_name,
+                        "configuration":str(configuration.id),"checksum":configuration.checksum,"operation":str(job.id)})
+        except BundleError as exc: return Response({"error":{"code":"configuration_restore_failed","details":str(exc)}},status=422)
+        except IntegrityError: return Response({"error":{"code":"operation_conflict"}},status=409)
+        return Response(result,status=201)
     @action(detail=True,methods=["get"])
     def runtime(self,request,pk=None):
         deployment=self.get_object()

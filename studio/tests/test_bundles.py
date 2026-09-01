@@ -15,7 +15,7 @@ from studio.models import (AuditEvent, ConfigurationVersion, DeviceTemplateVersi
 def _lab(owner, name="portable"):
     project=Project.objects.create(owner=owner,name=f"project-{name}")
     lab=Lab.objects.create(project=project,name=name)
-    template=DeviceTemplateVersion.objects.filter(template__active_version_id=F("id"),containerlab_kind="linux").first()
+    template=DeviceTemplateVersion.objects.get(template__name="Linux Host",template__active_version_id=F("id"))
     artifact=ImageArtifact.objects.create(project=project,owner=owner,source_type="registry",original_filename="alpine",
         detected_format="oci-registry",byte_size=0,checksum=uuid.uuid4().hex.ljust(64,"0")[:64],architecture="amd64",
         storage_reference="docker.io/alpine",validation_status="validated")
