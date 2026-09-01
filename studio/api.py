@@ -301,7 +301,7 @@ class LabViewSet(viewsets.ModelViewSet):
         lab=serializer.instance
         if project_role(self.request.user,lab.project) not in (models.ProjectMembership.Role.ADMIN,models.ProjectMembership.Role.EDITOR):
             from rest_framework.exceptions import PermissionDenied; raise PermissionDenied()
-        before={key:getattr(lab,key) for key in ("name","description","tags")};updated=serializer.save()
+        before={key:getattr(lab,key) for key in ("folder_id","name","description","tags")};updated=serializer.save()
         changed=[key for key,value in before.items() if value!=getattr(updated,key)]
         models.AuditEvent.objects.create(actor=self.request.user,project=updated.project,action="lab.metadata_updated",target_type="Lab",target_id=updated.id,
             correlation_id=getattr(self.request,"correlation_id",""),metadata={"changed_fields":changed})
@@ -375,7 +375,7 @@ class LabViewSet(viewsets.ModelViewSet):
             if used>=limit: return Response(quota_exceeded("labs",limit,used),status=409)
             if project.labs.filter(name=name,deleted_at__isnull=True).exists():
                 return Response({"error":{"code":"lab_name_conflict","details":"A lab with this name already exists in the project."}},status=409)
-            clone=models.Lab.objects.create(project=project,name=name,description=source.description,tags=source.tags)
+            clone=models.Lab.objects.create(project=project,folder=source.folder,name=name,description=source.description,tags=source.tags)
             try: revision=import_lab_bundle(clone,request.user,bundle)
             except BundleError as exc:
                 transaction.set_rollback(True)

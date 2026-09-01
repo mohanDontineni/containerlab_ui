@@ -4,7 +4,26 @@ from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.db.models import Q
 from zoneinfo import available_timezones
-from .models import Lab, Project, User
+from .models import Lab, LabFolder, Project, User
+
+def editable_projects(user):
+    return Project.objects.filter(Q(owner=user) | Q(memberships__user=user, memberships__role__in=("administrator", "editor")),deleted_at__isnull=True).distinct()
+
+class LabFolderForm(forms.ModelForm):
+    class Meta:
+        model=LabFolder;fields=("project","parent","name")
+        widgets={"name":forms.TextInput(attrs={"placeholder":"e.g. Routing / BGP"})}
+    def __init__(self,user,*args,**kwargs):
+        super().__init__(*args,**kwargs);projects=editable_projects(user);self.fields["project"].queryset=projects
+        folders=LabFolder.objects.filter(project__in=projects,deleted_at__isnull=True).select_related("parent").order_by("project__name","name")
+        if self.instance.pk: folders=folders.exclude(pk=self.instance.pk)
+        self.fields["parent"].queryset=folders
+    def clean(self):
+        cleaned=super().clean();project=cleaned.get("project");parent=cleaned.get("parent")
+        if not self.instance._state.adding and project and project.id!=LabFolder.objects.only("project_id").get(pk=self.instance.pk).project_id:
+            self.add_error("project","A lab folder cannot be moved between projects.")
+        if project and parent and parent.project_id!=project.id: self.add_error("parent","Choose a folder in the selected project.")
+        return cleaned
 
 class ProfileForm(forms.ModelForm):
     timezone=forms.ChoiceField(choices=[(value,value) for value in sorted(available_timezones())])
@@ -68,7 +87,7 @@ class ProjectForm(forms.ModelForm):
 class LabForm(forms.ModelForm):
     class Meta:
         model = Lab
-        fields = ("project", "name", "description", "tags")
+        fields = ("project", "folder", "name", "description", "tags")
         widgets = {
             "name": forms.TextInput(attrs={"placeholder": "e.g. BGP Edge Validation"}),
             "description": forms.Textarea(attrs={"rows": 4, "placeholder": "Describe the lab objective and expected outcome"}),
@@ -76,14 +95,22 @@ class LabForm(forms.ModelForm):
         }
     def __init__(self, user, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["project"].queryset = Project.objects.filter(Q(owner=user) | Q(memberships__user=user, memberships__role__in=("administrator", "editor")),deleted_at__isnull=True).distinct()
+        projects=editable_projects(user);self.fields["project"].queryset=projects
+        self.fields["folder"].queryset=LabFolder.objects.filter(project__in=projects,deleted_at__isnull=True).select_related("project","parent").order_by("project__name","name")
+    def clean(self):
+        cleaned=super().clean();project=cleaned.get("project");folder=cleaned.get("folder")
+        if project and folder and folder.project_id!=project.id: self.add_error("folder","Choose a folder in the selected project.")
+        return cleaned
 
 class LabEditForm(forms.ModelForm):
     class Meta:
         model=Lab
-        fields=("name","description","tags")
+        fields=("folder","name","description","tags")
         widgets={"name":forms.TextInput(),"description":forms.Textarea(attrs={"rows":4}),
             "tags":forms.TextInput(attrs={"placeholder":'["bgp", "edge"]'})}
+    def __init__(self,*args,**kwargs):
+        super().__init__(*args,**kwargs)
+        self.fields["folder"].queryset=LabFolder.objects.filter(project=self.instance.project,deleted_at__isnull=True).select_related("parent").order_by("name")
 
 class RegistryImageForm(forms.Form):
     project = forms.ModelChoiceField(queryset=Project.objects.none())

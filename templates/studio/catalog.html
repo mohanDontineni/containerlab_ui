@@ -4,8 +4,11 @@
 {% block content %}
 <section class="page-heading">
   <div><p class="eyebrow">{{ eyebrow }}</p><h1>{{ title }}</h1><p>{{ description }}</p></div>
-  {% if create_url %}<div class="heading-actions">{% if upload_url %}<a class="secondary-button" href="{{ upload_url }}">⇧ Upload archive</a>{% endif %}<a class="primary-button" href="{{ create_url }}"><span>＋</span> {{ create_label }}</a></div>{% endif %}
+  {% if create_url %}<div class="heading-actions">{% if section == "labs" %}<a class="secondary-button" href="/labs/folders/new/">＋ New folder</a>{% endif %}{% if upload_url %}<a class="secondary-button" href="{{ upload_url }}">⇧ Upload archive</a>{% endif %}<a class="primary-button" href="{{ create_url }}"><span>＋</span> {{ create_label }}</a></div>{% endif %}
 </section>
+{% if section == "labs" and folders %}<section class="folder-grid" aria-label="Lab folders">
+  {% for folder in folders %}<article class="folder-card" data-search="{{ folder.path|lower }} {{ folder.project.name|lower }}"><div class="folder-icon">▰</div><div><p class="eyebrow">{{ folder.project.name }}</p><strong>{{ folder.path }}</strong><small>{{ folder.lab_count }} lab{{ folder.lab_count|pluralize }} · {{ folder.child_count }} subfolder{{ folder.child_count|pluralize }}</small></div>{% if folder.can_manage %}<div class="folder-actions"><a href="/labs/folders/{{ folder.id }}/edit/" aria-label="Edit {{ folder.name }}">Edit</a><form method="post" action="/labs/folders/{{ folder.id }}/delete/" onsubmit="return confirm('Delete this empty folder?')">{% csrf_token %}<button type="submit">Delete</button></form></div>{% endif %}</article>{% endfor %}
+</section>{% endif %}
 <section class="catalog-toolbar">
   <div class="search-box"><span>⌕</span><input type="search" id="catalog-search" placeholder="Search {{ title|lower }}…" aria-label="Search {{ title|lower }}"></div>
   <button class="filter-button" type="button">All statuses <span>⌄</span></button>
@@ -16,7 +19,7 @@
   <div class="catalog-table catalog-{{ section }}">
     <div class="catalog-head">
       {% if section == "projects" %}<span>Project</span><span>Labs</span><span>Members</span><span>Updated</span><span></span>
-      {% elif section == "labs" %}<span>Lab</span><span>Project</span><span>Revisions</span><span>Updated</span><span></span>
+      {% elif section == "labs" %}<span>Lab</span><span>Project / folder</span><span>Revisions</span><span>Updated</span><span></span>
       {% elif section == "deployments" %}<span>Deployment</span><span>State</span><span>Runtime</span><span>Last reconciled</span><span></span>
       {% elif section == "images" %}<span>Image artifact</span><span>Project</span><span>Format</span><span>Validation</span><span>Publication</span>
       {% elif section == "templates" %}<span>Template</span><span>Active version</span><span>Privilege</span><span>Updated</span><span></span>
@@ -27,7 +30,7 @@
       {% if section == "projects" %}
         <div class="entity-main"><span class="entity-icon cyan">▦</span><p><strong>{{ item.name }}</strong><small>{{ item.description|default:"No description yet"|truncatechars:72 }}</small></p></div><span class="mono-value">{{ item.lab_count }}</span><span class="mono-value">{{ item.member_count|add:"1" }}</span><span class="subtle">{{ item.updated_at|timesince }} ago</span><a class="row-action" href="/projects/{{ item.id }}/">›</a>
       {% elif section == "labs" %}
-        <div class="entity-main"><span class="entity-icon blue">◇</span><p><strong>{{ item.name }}</strong><small>{{ item.description|default:"Topology draft"|truncatechars:72 }}</small></p></div><span class="project-chip">{{ item.project.name }}</span><span class="mono-value">{{ item.revision_count }}</span><span class="subtle">{{ item.updated_at|timesince }} ago</span><span class="lab-actions">{% if item.can_manage %}<a class="secondary-button compact" href="/labs/{{ item.id }}/edit/">Edit</a><button class="secondary-button compact danger" data-delete-lab="{{ item.id }}">Delete…</button>{% endif %}<a class="row-action" href="/labs/{{ item.id }}/workspace/" aria-label="Open topology">›</a></span>
+        <div class="entity-main"><span class="entity-icon blue">◇</span><p><strong>{{ item.name }}</strong><small>{{ item.description|default:"Topology draft"|truncatechars:72 }}</small></p></div><span><span class="project-chip">{{ item.project.name }}</span>{% if item.folder %}<small class="folder-path">▰ {{ item.folder.path }}</small>{% else %}<small class="folder-path">Root</small>{% endif %}</span><span class="mono-value">{{ item.revision_count }}</span><span class="subtle">{{ item.updated_at|timesince }} ago</span><span class="lab-actions">{% if item.can_manage %}<a class="secondary-button compact" href="/labs/{{ item.id }}/edit/">Edit</a><button class="secondary-button compact danger" data-delete-lab="{{ item.id }}">Delete…</button>{% endif %}<a class="row-action" href="/labs/{{ item.id }}/workspace/" aria-label="Open topology">›</a></span>
       {% elif section == "deployments" %}
         <div class="entity-main"><span class="entity-icon violet">▶</span><p><strong>{{ item.revision.lab.name }}</strong><small>Revision {{ item.revision.revision_number }} · {{ item.namespace }}</small></p></div><span><em class="catalog-state state-{{ item.observed_state }}"><i></i>{{ item.observed_state|title }}</em></span><span class="mono-text">{{ item.runtime_version }}</span><span class="subtle">{{ item.last_reconciliation|timesince|default:"Not yet" }}</span><a class="row-action" href="/deployments/{{ item.id }}/">›</a>
       {% elif section == "images" %}

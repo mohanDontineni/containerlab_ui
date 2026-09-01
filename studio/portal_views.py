@@ -12,8 +12,8 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_http_methods
-from .forms import LabEditForm, LabForm, PlatformPasswordResetForm, PlatformUserCreateForm, ProfileForm, ProjectForm, RegistryImageForm, StudioPasswordChangeForm
-from .models import (AuditEvent, ConfigurationVersion, DeviceTemplate, DeviceTemplateVersion, ImageArtifact, Lab, LabDeployment,
+from .forms import LabEditForm, LabFolderForm, LabForm, PlatformPasswordResetForm, PlatformUserCreateForm, ProfileForm, ProjectForm, RegistryImageForm, StudioPasswordChangeForm
+from .models import (AuditEvent, ConfigurationVersion, DeviceTemplate, DeviceTemplateVersion, ImageArtifact, Lab, LabDeployment, LabFolder,
                      LabInterface, LabLink, LabNode, LabRevision, OperationJob, Project,
                      ProjectMembership, PublishedImage, User)
 from .permissions import project_role
@@ -149,10 +149,49 @@ def project_edit(request,project_id):
 
 @login_required
 def labs(request):
-    queryset = Lab.objects.filter(project__in=visible_projects(request.user),deleted_at__isnull=True).select_related("project").annotate(revision_count=Count("revisions")).order_by("name")
+    queryset = Lab.objects.filter(project__in=visible_projects(request.user),deleted_at__isnull=True).select_related("project","folder","folder__parent").annotate(revision_count=Count("revisions")).order_by("project__name","folder__name","name")
     for lab in queryset: lab.can_manage=project_role(request.user,lab.project) in (ProjectMembership.Role.ADMIN,ProjectMembership.Role.EDITOR)
+    folders=LabFolder.objects.filter(project__in=visible_projects(request.user),deleted_at__isnull=True).select_related("project","parent").annotate(lab_count=Count("labs",filter=Q(labs__deleted_at__isnull=True)),child_count=Count("children",filter=Q(children__deleted_at__isnull=True))).order_by("project__name","name")
+    for folder in folders: folder.can_manage=project_role(request.user,folder.project) in (ProjectMembership.Role.ADMIN,ProjectMembership.Role.EDITOR)
     return render(request, "studio/catalog.html", {"section": "labs", "title": "Lab library", "eyebrow": "TOPOLOGY DESIGNS", "items": queryset,
-        "description": "Create, organize, and publish reusable network topology designs.", "create_url": "/labs/new/", "create_label": "New lab"})
+        "folders":folders,"description": "Create, organize, and publish reusable network topology designs.", "create_url": "/labs/new/", "create_label": "New lab"})
+
+@login_required
+def lab_folder_create(request):
+    form=LabFolderForm(request.user,request.POST or None)
+    if request.method=="POST" and form.is_valid():
+        folder=form.save(commit=False);folder.full_clean();folder.save()
+        AuditEvent.objects.create(actor=request.user,project=folder.project,action="lab_folder.created",target_type="LabFolder",target_id=folder.id,
+            correlation_id=getattr(request,"correlation_id",""),metadata={"parent_id":str(folder.parent_id) if folder.parent_id else None,"depth":len(folder.path.split(" / "))})
+        messages.success(request,f'Folder “{folder.path}” created.');return redirect("portal-labs")
+    return render(request,"studio/form.html",{"form":form,"title":"Create lab folder","eyebrow":"ORGANIZE LABS","cancel_url":"/labs/","submit_label":"Create folder"})
+
+@login_required
+def lab_folder_edit(request,folder_id):
+    folder=get_object_or_404(LabFolder.objects.filter(project__in=visible_projects(request.user),deleted_at__isnull=True),id=folder_id)
+    if project_role(request.user,folder.project) not in (ProjectMembership.Role.ADMIN,ProjectMembership.Role.EDITOR): return JsonResponse({"error":"Editor access is required"},status=403)
+    form=LabFolderForm(request.user,request.POST or None,instance=folder)
+    if request.method=="POST" and form.is_valid():
+        before={"name":folder.name,"parent_id":str(folder.parent_id) if folder.parent_id else None};updated=form.save(commit=False);updated.full_clean();updated.save()
+        AuditEvent.objects.create(actor=request.user,project=updated.project,action="lab_folder.updated",target_type="LabFolder",target_id=updated.id,
+            correlation_id=getattr(request,"correlation_id",""),metadata={"changed_fields":[key for key,value in before.items() if value!=(str(updated.parent_id) if key=="parent_id" and updated.parent_id else getattr(updated,key,None))]})
+        messages.success(request,f'Folder “{updated.path}” updated.');return redirect("portal-labs")
+    return render(request,"studio/form.html",{"form":form,"title":f"Edit {folder.name}","eyebrow":"LAB FOLDER","cancel_url":"/labs/","submit_label":"Save folder"})
+
+@login_required
+@require_http_methods(["POST"])
+def lab_folder_delete(request,folder_id):
+    folder=get_object_or_404(LabFolder.objects.filter(project__in=visible_projects(request.user),deleted_at__isnull=True),id=folder_id)
+    if project_role(request.user,folder.project) not in (ProjectMembership.Role.ADMIN,ProjectMembership.Role.EDITOR): return JsonResponse({"error":"Editor access is required"},status=403)
+    active_labs=folder.labs.filter(deleted_at__isnull=True).count();children=folder.children.filter(deleted_at__isnull=True).count()
+    if active_labs or children:
+        messages.error(request,f'Folder “{folder.path}” cannot be deleted while it contains {active_labs} lab(s) and {children} subfolder(s).')
+    else:
+        folder.deleted_at=timezone.now();folder.save(update_fields=["deleted_at","updated_at"])
+        AuditEvent.objects.create(actor=request.user,project=folder.project,action="lab_folder.deleted",target_type="LabFolder",target_id=folder.id,
+            correlation_id=getattr(request,"correlation_id",""),metadata={"path":folder.path})
+        messages.success(request,f'Folder “{folder.path}” deleted.')
+    return redirect("portal-labs")
 
 @login_required
 def lab_create(request):
@@ -175,9 +214,9 @@ def lab_edit(request,lab_id):
     form=LabEditForm(request.POST or None,instance=lab)
     if request.method=="POST" and form.is_valid():
         with transaction.atomic():
-            locked=Lab.objects.select_for_update().get(pk=lab.pk);before={key:getattr(locked,key) for key in ("name","description","tags")}
-            locked.name=form.cleaned_data["name"];locked.description=form.cleaned_data["description"];locked.tags=form.cleaned_data["tags"]
-            locked.save(update_fields=["name","description","tags","updated_at"])
+            locked=Lab.objects.select_for_update().get(pk=lab.pk);before={key:getattr(locked,key) for key in ("folder_id","name","description","tags")}
+            locked.folder=form.cleaned_data["folder"];locked.name=form.cleaned_data["name"];locked.description=form.cleaned_data["description"];locked.tags=form.cleaned_data["tags"]
+            locked.save(update_fields=["folder","name","description","tags","updated_at"])
             changed=[key for key,value in before.items() if value!=getattr(locked,key)]
             AuditEvent.objects.create(actor=request.user,project=locked.project,action="lab.metadata_updated",target_type="Lab",target_id=locked.id,
                 correlation_id=getattr(request,"correlation_id",""),metadata={"changed_fields":changed})

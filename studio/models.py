@@ -34,6 +34,36 @@ class ProjectMembership(UUIDModel):
     class Meta:
         constraints = [models.UniqueConstraint(fields=["project", "user"], name="unique_project_membership")]
 
+class LabFolder(UUIDModel):
+    project = models.ForeignKey(Project, on_delete=models.PROTECT, related_name="lab_folders")
+    parent = models.ForeignKey("self", on_delete=models.PROTECT, null=True, blank=True, related_name="children")
+    name = models.CharField(max_length=120)
+    deleted_at = models.DateTimeField(null=True, blank=True)
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["project", "name"], condition=Q(parent__isnull=True, deleted_at__isnull=True), name="unique_active_root_lab_folder"),
+            models.UniqueConstraint(fields=["project", "parent", "name"], condition=Q(parent__isnull=False, deleted_at__isnull=True), name="unique_active_nested_lab_folder"),
+        ]
+
+    def clean(self):
+        from django.core.exceptions import ValidationError
+        if self.parent_id:
+            if self.parent_id == self.id: raise ValidationError({"parent": "A folder cannot contain itself."})
+            if self.parent.project_id != self.project_id or self.parent.deleted_at:
+                raise ValidationError({"parent": "Choose an active folder in the same project."})
+            ancestor=self.parent;depth=1
+            while ancestor:
+                if ancestor.id == self.id: raise ValidationError({"parent": "A folder cannot be moved inside one of its descendants."})
+                depth += 1
+                if depth > 8: raise ValidationError({"parent": "Lab folders support a maximum depth of 8 levels."})
+                ancestor=ancestor.parent
+
+    @property
+    def path(self):
+        parts=[self.name];ancestor=self.parent
+        while ancestor: parts.append(ancestor.name);ancestor=ancestor.parent
+        return " / ".join(reversed(parts))
+
 class UploadSession(UUIDModel):
     class Status(models.TextChoices): ACTIVE="active"; COMPLETE="complete"; CANCELLED="cancelled"; EXPIRED="expired"; FAILED="failed"
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
@@ -120,6 +150,7 @@ class DeviceTemplateVersion(UUIDModel):
 
 class Lab(UUIDModel):
     project = models.ForeignKey(Project, on_delete=models.PROTECT, related_name="labs")
+    folder = models.ForeignKey(LabFolder, on_delete=models.PROTECT, related_name="labs", null=True, blank=True)
     name = models.CharField(max_length=120)
     description = models.TextField(blank=True)
     tags = models.JSONField(default=list, blank=True)

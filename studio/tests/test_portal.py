@@ -5,7 +5,7 @@ import pytest
 from django.db.models import F
 from django.test import Client
 from django.utils import timezone
-from studio.models import AuditEvent, DeviceTemplateVersion, ImageArtifact, Lab, LabDeployment, LabLink, LabNode, LabRevision, Project, ProjectMembership, PublishedImage, User
+from studio.models import AuditEvent, DeviceTemplateVersion, ImageArtifact, Lab, LabDeployment, LabFolder, LabLink, LabNode, LabRevision, Project, ProjectMembership, PublishedImage, User
 
 @pytest.mark.django_db
 def test_topology_edit_lease_blocks_second_editor_and_expires(client):
@@ -112,6 +112,55 @@ def test_project_create_is_native_and_scoped(client):
     response = client.post("/projects/new/", {"name": "Network Engineering", "description": "Labs", "tags": "[]"})
     assert response.status_code == 302
     assert Project.objects.filter(owner=user, name="Network Engineering").exists()
+
+@pytest.mark.django_db
+def test_lab_folders_are_hierarchical_project_scoped_and_guarded(client):
+    owner=User.objects.create_user("folder-owner",password="long-enough-password")
+    outsider=User.objects.create_user("folder-outsider",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="Training")
+    other=Project.objects.create(owner=outsider,name="Private")
+    client.force_login(owner)
+    root_response=client.post("/labs/folders/new/",{"project":project.id,"name":"Routing","parent":""})
+    root=LabFolder.objects.get(project=project,name="Routing")
+    nested_response=client.post("/labs/folders/new/",{"project":project.id,"name":"BGP","parent":root.id})
+    nested=LabFolder.objects.get(project=project,name="BGP")
+    assert root_response.status_code==302 and nested_response.status_code==302 and nested.path=="Routing / BGP"
+    assert not client.post("/labs/folders/new/",{"project":other.id,"name":"Leaked","parent":""}).wsgi_request.user.is_anonymous
+    assert not LabFolder.objects.filter(project=other,name="Leaked").exists()
+    lab=Lab.objects.create(project=project,folder=nested,name="Peering")
+    blocked=client.post(f"/labs/folders/{nested.id}/delete/",follow=True)
+    nested.refresh_from_db();assert blocked.status_code==200 and nested.deleted_at is None and b"cannot be deleted" in blocked.content
+    lab.folder=None;lab.save(update_fields=["folder"])
+    removed=client.post(f"/labs/folders/{nested.id}/delete/",follow=True)
+    nested.refresh_from_db();assert removed.status_code==200 and nested.deleted_at is not None
+    assert AuditEvent.objects.filter(action="lab_folder.created",target_id=root.id).exists()
+    assert AuditEvent.objects.filter(action="lab_folder.deleted",target_id=nested.id).exists()
+
+@pytest.mark.django_db
+def test_lab_folder_rejects_cross_project_parent_and_descendant_cycle(client):
+    owner=User.objects.create_user("folder-rules",password="long-enough-password")
+    first=Project.objects.create(owner=owner,name="First");second=Project.objects.create(owner=owner,name="Second")
+    root=LabFolder.objects.create(project=first,name="Root");child=LabFolder.objects.create(project=first,parent=root,name="Child")
+    foreign=LabFolder.objects.create(project=second,name="Foreign")
+    client.force_login(owner)
+    cross=client.post(f"/labs/folders/{child.id}/edit/",{"project":first.id,"name":"Child","parent":foreign.id})
+    cycle=client.post(f"/labs/folders/{root.id}/edit/",{"project":first.id,"name":"Root","parent":child.id})
+    project_move=client.post(f"/labs/folders/{root.id}/edit/",{"project":second.id,"name":"Root","parent":""})
+    root.refresh_from_db();child.refresh_from_db()
+    assert cross.status_code==200 and b"selected project" in cross.content and child.parent_id==root.id
+    assert cycle.status_code==200 and b"descendants" in cycle.content and root.parent_id is None
+    assert project_move.status_code==200 and b"cannot be moved between projects" in project_move.content and root.project_id==first.id
+
+@pytest.mark.django_db
+def test_lab_create_and_edit_assign_active_folder_only(client):
+    owner=User.objects.create_user("folder-labs",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="Organized")
+    folder=LabFolder.objects.create(project=project,name="Security")
+    client.force_login(owner)
+    created=client.post("/labs/new/",{"project":project.id,"folder":folder.id,"name":"Firewall","description":"Policy","tags":"[]"})
+    lab=Lab.objects.get(name="Firewall");assert created.status_code==302 and lab.folder==folder
+    edited=client.post(f"/labs/{lab.id}/edit/",{"folder":"","name":"Firewall","description":"Policy","tags":"[]"})
+    lab.refresh_from_db();assert edited.status_code==302 and lab.folder_id is None
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("path", ["/projects/", "/labs/", "/deployments/", "/images/", "/images/upload/", "/device-templates/", "/operations/", "/settings/"])

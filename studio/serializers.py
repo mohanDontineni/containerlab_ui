@@ -24,8 +24,13 @@ class LabSerializer(serializers.ModelSerializer):
         if self.instance and value.id!=self.instance.project_id:
             raise serializers.ValidationError("A lab cannot be moved between projects.")
         return value
+    def validate_folder(self,value):
+        if value and value.deleted_at: raise serializers.ValidationError("Choose an active lab folder.")
+        return value
     def validate(self,attrs):
         project=attrs.get("project",self.instance.project if self.instance else None);name=attrs.get("name",self.instance.name if self.instance else None)
+        folder=attrs.get("folder",self.instance.folder if self.instance else None)
+        if folder and project and folder.project_id!=project.id: raise serializers.ValidationError({"folder":"Choose a folder in the lab project."})
         if project and name:
             matches=models.Lab.objects.filter(project=project,name=name,deleted_at__isnull=True)
             if self.instance: matches=matches.exclude(pk=self.instance.pk)
