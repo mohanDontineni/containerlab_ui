@@ -35,8 +35,8 @@ try{
   await page.locator(`[data-image-evidence="${artifactId}"]`).click();
   const dialog=page.locator("#image-evidence-dialog");await dialog.waitFor();
   await dialog.getByText("node-containerd+internal-registry",{exact:false}).waitFor({timeout:30000});
-  const text=await dialog.innerText();
-  for(const phrase of ["node-containerd+internal-registry","Registry reference","Manifest digest","Registry manifest verified"]){if(!text.includes(phrase))throw new Error(`Image evidence is missing ${phrase}`)}
+  const text=(await dialog.innerText()).toLowerCase();
+  for(const phrase of ["node-containerd+internal-registry","registry reference","manifest digest","registry manifest verified"]){if(!text.includes(phrase))throw new Error(`Image evidence is missing ${phrase}`)}
   await page.screenshot({path:output,fullPage:true});
   console.log(JSON.stringify({browser:"Firefox",artifactId,image:evidence.name,publicationMode:publication.compatibility.publication_mode,
     registryMirror:publication.compatibility.registry_mirror,screenshot:output}));
