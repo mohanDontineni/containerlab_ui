@@ -248,6 +248,17 @@ try {
       return dialog;
     });
   } else console.warn("40-guarded-device-reset.png retained: a ready multi-device runtime is unavailable");
+  if (tracerouteHref) {
+    await capture("41-selected-device-lifecycle.png", tracerouteHref, async (p) => {
+      const selectors = p.locator("input[data-device-select]");
+      await selectors.nth(1).waitFor({ timeout: 20_000 });
+      await selectors.nth(0).check();await selectors.nth(1).check();
+      await p.locator('button[data-bulk-device-operation="suspend_device"]').click();
+      const dialog = p.locator("#bulk-device-dialog");
+      await dialog.waitFor();
+      return dialog;
+    });
+  } else console.warn("41-selected-device-lifecycle.png retained: a ready multi-device runtime is unavailable");
   if (deploymentHref) {
     await capture("14-runtime-overview.png", deploymentHref, async (p) => {
       await p.locator("#device-list article").first().waitFor({ timeout: 20_000 });

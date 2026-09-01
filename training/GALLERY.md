@@ -241,3 +241,9 @@ The designer automatically arranges connected device groups into a deterministic
 ![Guarded device reset](40-guarded-device-reset.png)
 
 The operator previews a single-device reset before discarding ephemeral appliance changes. Studio reports the immutable revision, pinned configuration source, active consoles, capture blockers, and exact preservation boundary. Confirmation replaces only the selected launcher, revokes its console sessions, restores its saved baseline, preserves every peer and topology link, and reconciles the device back to ready without YAML or cluster access.
+
+## 41 — Selected-device lifecycle
+
+![Selected-device lifecycle](41-selected-device-lifecycle.png)
+
+The operator selects multiple runtime devices and previews one coordinated start, stop, restart, suspend, or resume action. The server rechecks every device together and schedules nothing unless the complete selection is eligible. Confirmation creates an independent idempotent job and audit record per device plus an aggregate audit event, making partial progress visible without hiding failures or exposing cluster commands.
