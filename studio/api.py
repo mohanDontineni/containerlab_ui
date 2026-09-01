@@ -1149,6 +1149,33 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
         if not data["blockers"] and not data["changed_count"]:data["blockers"]=[{"device":"Lab","reason":"Latest collected configurations already match the deployed startup configurations."}]
         response=Response(data);response["Cache-Control"]="no-store";response["X-Content-Type-Options"]="nosniff";return response
 
+    @action(detail=True,methods=["get"],url_path="configurations/drift")
+    def configuration_drift(self,request,pk=None):
+        deployment=self.get_object();self._require_operator(deployment);snapshot=self._configuration_snapshot_data(deployment)
+        configurations={str(row.id):row for row in models.ConfigurationVersion.objects.filter(
+            id__in=[row["configuration_id"] for row in snapshot["configurations"]],project=deployment.revision.lab.project)}
+        nodes={node.name:node for node in deployment.revision.nodes.select_related("startup_configuration")}
+        rows=[];total_diff_bytes=0
+        for item in snapshot["configurations"]:
+            node=nodes[item["device"]];configuration=configurations[item["configuration_id"]]
+            saved=decrypt_configuration(node.startup_configuration.encrypted_content) if node.startup_configuration_id else ""
+            running=decrypt_configuration(configuration.encrypted_content)
+            diff="".join(difflib.unified_diff(saved.splitlines(keepends=True),running.splitlines(keepends=True),
+                fromfile=f"{item['device']} deployed startup",tofile=f"{item['device']} running v{item['version']}",n=3))
+            encoded=diff.encode("utf-8");remaining=max(0,256*1024-total_diff_bytes);truncated=len(encoded)>min(128*1024,remaining)
+            if truncated:
+                encoded=encoded[:min(128*1024,remaining)];diff=encoded.decode("utf-8","ignore")+"\n… diff truncated …\n"
+            total_diff_bytes+=len(encoded)
+            rows.append({"device":item["device"],"version":item["version"],"saved_checksum":item["current_checksum"],
+                "running_checksum":item["checksum"],"changed":item["changed"],"diff":diff or "No differences.","truncated":truncated})
+        models.AuditEvent.objects.create(actor=request.user,project=deployment.revision.lab.project,action="configuration.drift_reviewed",
+            target_type="LabDeployment",target_id=deployment.id,correlation_id=getattr(request,"correlation_id",""),
+            metadata={"source_revision":deployment.revision.revision_number,"device_count":len(rows),"changed_count":sum(row["changed"] for row in rows),
+                "configuration_checksums":[row["running_checksum"] for row in rows],"truncated":any(row["truncated"] for row in rows)})
+        response=Response({"source_revision":deployment.revision.revision_number,"device_count":len(rows),
+            "changed_count":sum(row["changed"] for row in rows),"devices":rows,"blockers":snapshot["blockers"]})
+        response["Cache-Control"]="no-store";response["Pragma"]="no-cache";response["X-Content-Type-Options"]="nosniff";return response
+
     @action(detail=True,methods=["post"],url_path="configurations/save")
     def save_configurations(self,request,pk=None):
         deployment=self.get_object();self._require_operator(deployment)

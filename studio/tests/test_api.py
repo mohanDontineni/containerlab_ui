@@ -1409,6 +1409,28 @@ def test_whole_lab_configuration_snapshot_creates_concurrency_safe_draft_without
     assert audit.metadata["device_count"]==2 and "hostname" not in json.dumps(audit.metadata) and "content" not in audit.metadata
 
 @pytest.mark.django_db
+def test_whole_lab_configuration_drift_is_operator_only_bounded_and_content_audited():
+    owner=User.objects.create_user("drift-owner",password="long-enough-password");viewer=User.objects.create_user("drift-viewer",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="drift-project");ProjectMembership.objects.create(project=project,user=viewer,role="viewer")
+    lab=Lab.objects.create(project=project,name="drift-lab");revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="c"*64,immutable=True)
+    template=DeviceTemplateVersion.objects.get(template__name="FRR Router")
+    startup_text="hostname r1\nrouter bgp 65000\n";running_text="hostname r1\nrouter bgp 65100\n network 10.1.1.1/32\n"
+    startup=ConfigurationVersion.objects.create(project=project,name="drift/r1/startup",version=1,encrypted_content=encrypt_configuration(startup_text),checksum=hashlib.sha256(startup_text.encode()).hexdigest(),created_by=owner)
+    node=LabNode.objects.create(revision=revision,name="r1",template_version=template,startup_configuration=startup)
+    deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-drift",runtime_version="0.8.0",observed_state="running")
+    collected=ConfigurationVersion.objects.create(project=project,name="drift/r1/collected",version=2,encrypted_content=encrypt_configuration(running_text),checksum=hashlib.sha256(running_text.encode()).hexdigest(),created_by=owner)
+    AuditEvent.objects.create(actor=owner,project=project,action="configuration.collected",target_type="ConfigurationVersion",target_id=collected.id,
+        correlation_id="drift-test",metadata={"deployment":str(deployment.id),"device":"r1","version":2,"checksum":collected.checksum,"byte_size":len(running_text)})
+    endpoint=f"/api/v1/deployments/{deployment.id}/configurations/drift/";client=APIClient();client.force_authenticate(viewer)
+    assert client.get(endpoint).status_code==403
+    client.force_authenticate(owner);response=client.get(endpoint)
+    assert response.status_code==200 and response.data["changed_count"]==1 and response.data["device_count"]==1
+    row=response.data["devices"][0];assert row["device"]=="r1" and row["changed"] is True and "65000" in row["diff"] and "65100" in row["diff"]
+    assert len(row["diff"].encode())<256*1024 and response["Cache-Control"]=="no-store" and response["X-Content-Type-Options"]=="nosniff"
+    audit=AuditEvent.objects.get(action="configuration.drift_reviewed",target_id=deployment.id)
+    assert audit.metadata["changed_count"]==1 and "65000" not in json.dumps(audit.metadata) and "diff" not in audit.metadata
+
+@pytest.mark.django_db
 def test_configuration_compare_and_restore_creates_concurrency_safe_draft_without_touching_runtime():
     owner=User.objects.create_user("restore-config-owner",password="long-enough-password")
     viewer=User.objects.create_user("restore-config-viewer",password="long-enough-password")
