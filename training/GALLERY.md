@@ -217,3 +217,9 @@ A platform administrator manages the catalog identity, Containerlab kind, genera
 ![Topology canvas objects](36-topology-canvas-objects.png)
 
 The designer adds, moves, resizes, colors, and layers notes and regions directly on the topology canvas. The inspector edits the selected object without YAML; the objects participate in undo/redo, autosave, checksums, native backup/restore, export, revision history, and deep lab cloning.
+
+## 37 — Enforced device compute resources
+
+![Enforced device resources](37-enforced-device-resources.png)
+
+The operator sees the CPU and memory profile pinned to each live device beside its Clabernetes pod and worker placement. Values configured through versioned device-template forms become matching Kubernetes requests and limits, so scheduling and isolation reflect the reviewed GUI policy without YAML or cluster access.

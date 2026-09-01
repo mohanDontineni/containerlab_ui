@@ -159,6 +159,13 @@ try {
 
   await page.goto(`${baseUrl}/deployments/`, { waitUntil: "networkidle" });
   const deploymentHrefs = await matchingHrefs('a[href^="/deployments/"]', /^\/deployments\/[0-9a-f-]+\/$/i);
+  const resourceRow = page.locator(".catalog-row").filter({ hasText: /Runtime Resource Acceptance/i }).first();
+  if (await resourceRow.count()) {
+    const resourceHref = await resourceRow.locator('a[href^="/deployments/"]').getAttribute("href");
+    if (resourceHref) await capture("37-enforced-device-resources.png", resourceHref, async (p) => {
+      await p.getByText(/CPU \/ .* RAM/).waitFor({ timeout: 20_000 });
+    });
+  } else console.warn("37-enforced-device-resources.png retained: Runtime Resource Acceptance fixture is unavailable");
   const removalRow = page.locator(".catalog-row").filter({ hasText: /Runtime Removal Acceptance/i }).first();
   if (await removalRow.count()) {
     const removalHref = await removalRow.locator('a[href^="/deployments/"]').getAttribute("href");
