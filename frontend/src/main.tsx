@@ -52,7 +52,6 @@ type Template = {
   startupConfigSupported: boolean;
   startupConfigRequired: boolean;
   requiredInterfaces: number;
-  startupOrder: number | null;
 };
 type DeviceData = {
   label: string;
@@ -68,6 +67,7 @@ type DeviceData = {
   startupConfigSupported: boolean;
   startupConfigRequired: boolean;
   requiredInterfaces: number;
+  startupOrder: number | null;
   [key: string]: unknown;
 };
 type SavedNode = {
