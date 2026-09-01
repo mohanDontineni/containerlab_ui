@@ -1005,32 +1005,42 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
         by_id={device.id:device for device in devices}
         return [by_id[device_id] for device_id in ids],None
     @staticmethod
-    def _bulk_device_blocker(device,operation):
+    def _bulk_device_blocker(device,operation,active_captures=0):
         desired=device.runtime_resources.get("manual_desired_state")
         if operation=="start_device": return "Device is not stopped." if desired!="stopped" else ""
         if operation=="resume_device": return "Device is not suspended." if desired!="suspended" or not device.runtime_resources.get("pod") else ""
         if desired=="stopped": return "Device is stopped."
         if device.observed_readiness!="ready" or not device.runtime_resources.get("pod"): return "Device is not ready."
+        if operation=="reset_device" and active_captures: return f"{active_captures} packet capture(s) must finish first."
         return ""
     def _bulk_device_preview_data(self,deployment,devices,operation):
         active={row.target_id:row.operation_type for row in models.OperationJob.objects.filter(target_id__in=[device.id for device in devices],
             state__in=("accepted","scheduled","started"))}
+        node_ids=[device.lab_node_id for device in devices]
+        captures=dict(models.CaptureSession.objects.filter(deployment=deployment,interface__node_id__in=node_ids,
+            status__in=("scheduled","capturing")).values("interface__node_id").annotate(count=Count("id")).values_list("interface__node_id","count")) if operation=="reset_device" else {}
+        consoles=dict(models.ConsoleSession.objects.filter(device_id__in=[device.id for device in devices],revoked_at__isnull=True,
+            expires_at__gt=timezone.now()).values("device_id").annotate(count=Count("id")).values_list("device_id","count")) if operation=="reset_device" else {}
         rows=[]
         for device in devices:
             blocker=(f"{active[device.id].replace('_',' ')} is already in progress." if device.id in active else
-                self._bulk_device_blocker(device,operation))
+                self._bulk_device_blocker(device,operation,captures.get(device.lab_node_id,0)))
             rows.append({"id":str(device.id),"name":device.lab_node.name,"readiness":device.observed_readiness,
-                "pod":device.runtime_resources.get("pod"),"eligible":not blocker,"blocker":blocker})
+                "pod":device.runtime_resources.get("pod"),"updated_at":device.updated_at.isoformat(),"eligible":not blocker,"blocker":blocker,
+                **({"active_captures":captures.get(device.lab_node_id,0),"active_consoles":consoles.get(device.id,0),
+                    "saved_configuration":bool(device.lab_node.startup_configuration_id)} if operation=="reset_device" else {})})
         verb={"start_device":"start","stop_device":"stop and release compute for","restart_device":"restart",
-            "suspend_device":"suspend","resume_device":"resume"}[operation]
+            "suspend_device":"suspend","resume_device":"resume","reset_device":"reset to the immutable saved revision for"}[operation]
+        impact=[f"Studio will {verb} {len(rows)} selected devices.",
+            "The immutable lab revision, topology wiring, images, and saved configurations remain unchanged.",
+            "Each device is tracked by an independent idempotent job, so progress and failures remain visible in the audit trail."]
+        if operation=="reset_device": impact.insert(1,"Ephemeral appliance changes will be discarded and open console sessions for the selected devices will be revoked.")
         return {"operation":operation,"operation_label":operation.removesuffix("_device").replace("_"," ").title(),"devices":rows,
-            "can_schedule":all(row["eligible"] for row in rows),"impact":[f"Studio will {verb} {len(rows)} selected devices.",
-                "The immutable lab revision, topology wiring, images, and saved configurations remain unchanged.",
-                "Each device is tracked by an independent idempotent job, so progress and failures remain visible in the audit trail."]}
+            "can_schedule":all(row["eligible"] for row in rows),"impact":impact}
     @action(detail=True,methods=["post"],url_path="device-bulk-preview")
     def device_bulk_preview(self,request,pk=None):
         deployment=self.get_object();self._require_operator(deployment);operation=str(request.data.get("operation",""))
-        if operation not in ("restart_device","stop_device","start_device","suspend_device","resume_device"):
+        if operation not in ("restart_device","reset_device","stop_device","start_device","suspend_device","resume_device"):
             return Response({"error":{"code":"unsupported_operation"}},status=422)
         devices,error=self._bulk_device_candidates(deployment,request.data)
         if error:return error
@@ -1038,17 +1048,21 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=True,methods=["post"],url_path="device-bulk-operations")
     def device_bulk_operations(self,request,pk=None):
         deployment=self.get_object();self._require_operator(deployment);operation=str(request.data.get("operation",""))
-        if operation not in ("restart_device","stop_device","start_device","suspend_device","resume_device"):
+        if operation not in ("restart_device","reset_device","stop_device","start_device","suspend_device","resume_device"):
             return Response({"error":{"code":"unsupported_operation"}},status=422)
         devices,error=self._bulk_device_candidates(deployment,request.data)
         if error:return error
+        expected_devices=request.data.get("expected_devices",{})
+        if operation=="reset_device" and (not isinstance(expected_devices,dict) or set(expected_devices)!={str(device.id) for device in devices} or
+            any(not isinstance(value,str) or not value for value in expected_devices.values())):
+            return Response({"error":{"code":"expected_devices_required","details":"Reset confirmation must include the previewed version of every selected device."}},status=400)
         key=request.headers.get("Idempotency-Key")
         if not key:return Response({"error":{"code":"idempotency_key_required"}},status=400)
         prefix=f"bulk-{hashlib.sha256(key.encode()).hexdigest()[:20]}-"
         derived={device.id:f"{prefix}{device.id.hex[:16]}" for device in devices}
         existing=list(models.OperationJob.objects.filter(owner=request.user,idempotency_key__in=derived.values()))
         if existing:
-            expected={device.id:{"device_id":str(device.id)} for device in devices}
+            expected={device.id:{"device_id":str(device.id),**({"expected_updated_at":expected_devices[str(device.id)]} if operation=="reset_device" else {})} for device in devices}
             if len(existing)!=len(devices) or any(job.operation_type!=operation or job.target_id not in expected or
                 job.request_payload!=expected[job.target_id] or job.idempotency_key!=derived[job.target_id] for job in existing):
                 return Response({"error":{"code":"idempotency_conflict"}},status=409)
@@ -1060,9 +1074,12 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
             if not preview["can_schedule"]:
                 return Response({"error":{"code":"bulk_device_operation_blocked","details":"Every selected device must be eligible.",
                     "devices":preview["devices"]}},status=409)
+            if operation=="reset_device":
+                changed=[device.lab_node.name for device in locked if device.updated_at.isoformat()!=expected_devices[str(device.id)]]
+                if changed:return Response({"error":{"code":"device_changed","details":"Selected device state changed after preview.","devices":changed}},status=409)
             jobs=[]
             for device in locked:
-                payload={"device_id":str(device.id)}
+                payload={"device_id":str(device.id),**({"expected_updated_at":expected_devices[str(device.id)]} if operation=="reset_device" else {})}
                 job=models.OperationJob.objects.create(deployment=deployment,owner=request.user,operation_type=operation,target_id=device.id,
                     idempotency_key=derived[device.id],state="scheduled",request_payload=payload);jobs.append(job)
                 models.AuditEvent.objects.create(actor=request.user,project=deployment.revision.lab.project,

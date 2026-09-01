@@ -334,6 +334,7 @@ def test_deployment_detail_is_native_and_scoped(client):
     assert "Remove…" in response.content.decode() and "runtime-removal-dialog" in response.content.decode()
     assert "GUARDED DEVICE RESET" in response.content.decode() and "device-reset-preview" in response.content.decode()
     assert "SELECTED DEVICE OPERATION" in response.content.decode() and "device-bulk-preview" in response.content.decode()
+    assert "⌫ Reset" in response.content.decode() and "expected_devices" in response.content.decode()
     assert "LIVE NETWORK STATE" in response.content.decode() and "inspect_device" in response.content.decode()
     client.force_login(stranger)
     assert client.get(f"/deployments/{deployment.id}/").status_code == 404

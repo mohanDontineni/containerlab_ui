@@ -826,6 +826,44 @@ def test_bulk_device_lifecycle_is_authorized_preflighted_atomic_idempotent_and_a
     duplicate={"operation":"restart_device","device_ids":[str(devices[0].id),str(devices[0].id)]}
     assert client.post(preview_url,duplicate,format="json").status_code==422
 
+@pytest.mark.django_db(transaction=True)
+def test_bulk_device_reset_is_guarded_concurrent_idempotent_and_revokes_consoles(monkeypatch):
+    scheduled=[];monkeypatch.setattr("studio.api.execute_operation.delay",lambda job_id:scheduled.append(job_id))
+    owner=User.objects.create_user("bulk-reset-owner",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="bulk-reset-project");lab=Lab.objects.create(project=project,name="bulk-reset-lab")
+    revision=LabRevision.objects.create(lab=lab,revision_number=7,topology_checksum="7"*64,immutable=True)
+    catalog=DeviceTemplate.objects.create(name="Bulk reset Linux")
+    template=DeviceTemplateVersion.objects.create(template=catalog,version=1,containerlab_kind="linux",interface_rules={"prefix":"eth","start":1,"count":2})
+    nodes=[LabNode.objects.create(revision=revision,name=f"r{index}",template_version=template) for index in (1,2)]
+    interfaces=[LabInterface.objects.create(node=node,name="eth1") for node in nodes]
+    deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-bulk-reset",runtime_version="0.8.0",observed_state="running")
+    devices=[DeviceInstance.objects.create(deployment=deployment,lab_node=node,observed_readiness="ready",runtime_resources={"pod":f"{node.name}-pod"}) for node in nodes]
+    capture=CaptureSession.objects.create(deployment=deployment,interface=interfaces[0],owner=owner,status="capturing",expires_at=timezone.now()+timezone.timedelta(hours=1))
+    ConsoleSession.objects.create(device=devices[1],user=owner,token_hash="9"*64,expires_at=timezone.now()+timezone.timedelta(minutes=5))
+    preview_url=f"/api/v1/deployments/{deployment.id}/device-bulk-preview/";operation_url=f"/api/v1/deployments/{deployment.id}/device-bulk-operations/"
+    base={"operation":"reset_device","device_ids":[str(device.id) for device in devices]};client=APIClient();client.force_authenticate(owner)
+    blocked=client.post(preview_url,base,format="json")
+    assert blocked.status_code==200 and blocked.data["can_schedule"] is False
+    assert blocked.data["devices"][0]["active_captures"]==1 and blocked.data["devices"][1]["active_consoles"]==1
+    capture.status="complete";capture.save(update_fields=["status","updated_at"])
+    preview=client.post(preview_url,base,format="json");assert preview.data["can_schedule"] is True
+    expected={row["id"]:row["updated_at"] for row in preview.data["devices"]}
+    assert client.post(operation_url,base,format="json",HTTP_IDEMPOTENCY_KEY="missing-versions").status_code==400
+    stale=client.post(operation_url,{**base,"expected_devices":{**expected,str(devices[0].id):"1970-01-01T00:00:00+00:00"}},format="json",HTTP_IDEMPOTENCY_KEY="stale-reset")
+    assert stale.status_code==409 and stale.data["error"]["code"]=="device_changed" and OperationJob.objects.count()==0
+    payload={**base,"expected_devices":expected}
+    first=client.post(operation_url,payload,format="json",HTTP_IDEMPOTENCY_KEY="reset-selected")
+    replay=client.post(operation_url,payload,format="json",HTTP_IDEMPOTENCY_KEY="reset-selected")
+    assert first.status_code==replay.status_code==202 and first.data["count"]==2 and len(scheduled)==2
+    assert AuditEvent.objects.filter(action="device.reset",metadata__bulk=True).count()==2
+    class Adapter:
+        def reset_device(self,received_deployment,device): return {"device":device.lab_node.name,"operation":"reset",
+            "replaced_pod":device.runtime_resources["pod"],"readiness":"resetting","baseline_revision":7,"saved_configuration_restored":False}
+    monkeypatch.setattr("studio.tasks.ClabernetesAdapter",Adapter);monkeypatch.setattr("studio.tasks.reconcile_deployment.apply_async",lambda **_:None)
+    for row in first.data["jobs"]:execute_operation.run(row["id"])
+    assert ConsoleSession.objects.filter(device__in=devices,revoked_at__isnull=False).count()==1
+    assert set(DeviceInstance.objects.filter(id__in=[device.id for device in devices]).values_list("observed_readiness",flat=True))=={"resetting"}
+
 @pytest.mark.django_db
 def test_device_worker_updates_node_without_failing_running_lab(monkeypatch):
     owner=User.objects.create_user("device-worker",password="long-enough-password")
