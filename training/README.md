@@ -86,6 +86,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 | `74-whole-lab-running-configuration-checkpoint.png` | Running configuration checkpoint | Reviews a checksum-bound preview and saves every latest collected device configuration into a new editable draft without changing the running revision or launcher identities. |
 | `75-whole-lab-configuration-drift.png` | Whole-lab configuration drift | Compares each latest running configuration with the immutable deployed startup state using bounded per-device diffs and checksum evidence. |
 | `76-live-interface-traffic-counters.png` | Live interface traffic counters | Shows bounded appliance RX/TX packets and bytes plus error/drop counters alongside interface addresses, routes, and neighbors. |
+| `77-live-interface-traffic-rates.png` | Live interface traffic rates | Uses two bounded GUI samples around a five-packet diagnostic to show per-second RX/TX packet and byte rates alongside cumulative counters, with no YAML or shell access. |
 
 ## No-YAML operating model
 
@@ -136,6 +137,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 44. Save the latest whole-lab running state into a guarded editable draft; Studio revalidates both configuration history and the current draft while the deployed immutable revision remains untouched.
 45. Review running-versus-deployed startup drift across the lab, switch between devices, and inspect bounded diffs without opening a shell or exposing configuration text in audit records.
 46. Inspect per-interface RX/TX volume and packet, error, and drop counters from the native network-state dialog without using appliance or Kubernetes CLI access.
+47. Refresh the native network-state dialog to calculate live per-interface RX/TX packet and byte rates from bounded counter samples; no polling agent, YAML, or shell workflow is required.
 
 Containerlab/Kubernetes YAML is an internal adapter concern. It may be inspected by platform administrators for troubleshooting, but it is not part of the normal user workflow.
 
