@@ -40,6 +40,7 @@ def test_dashboard_exposes_complete_state_quota_and_actionable_failure_evidence(
     assert "1 running" in html and "1 stopped or removed" in html and "1 degraded" in html
     assert "Labs <b>1/7</b>" in html and "Active runtimes <b>2/3</b>" in html and "Largest draft <b>0/12 nodes</b>" in html
     assert "CapabilityError" in html and "The device launcher pod is not ready" in html
+    assert "Ping" in html and "Capturepackets" not in html
     assert f'href="/deployments/{running.id}/"' in html and "Live CPU and memory usage: <b>Unavailable</b>" in html
     assert str(job.id) not in html
 

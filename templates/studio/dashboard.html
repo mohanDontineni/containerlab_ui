@@ -55,7 +55,7 @@
   <section class="panel failures-panel">
     <div class="panel-header"><div><p class="eyebrow">RECOVERY</p><h2>Actionable failures</h2></div><a href="/operations/">All operations <span>→</span></a></div>
     {% if failures %}<div class="failure-list">
-      {% for failure in failures %}<article><header><span class="job-state job-failed">Failed</span><strong>{{ failure.job.operation_type|cut:"_"|title }}</strong><time>{{ failure.job.created_at|timesince }} ago</time></header><p><b>{{ failure.error_type }}</b> · {{ failure.message }}</p><footer><small>{{ failure.guidance }}</small><a class="secondary-button compact" href="{{ failure.url }}">{{ failure.label }} →</a></footer></article>{% endfor %}
+      {% for failure in failures %}<article><header><span class="job-state job-failed">Failed</span><strong>{{ failure.job.operation_label }}</strong><time>{{ failure.job.created_at|timesince }} ago</time></header><p><b>{{ failure.error_type }}</b> · {{ failure.message }}</p><footer><small>{{ failure.guidance }}</small><a class="secondary-button compact" href="{{ failure.url }}">{{ failure.label }} →</a></footer></article>{% endfor %}
     </div>{% else %}<div class="empty-inline"><span>✓</span><div><strong>No failed jobs require triage</strong><p>Bounded failure evidence and a resource-specific recovery path will appear here.</p></div></div>{% endif %}
   </section>
 
@@ -69,7 +69,7 @@
     <div class="panel-header"><div><p class="eyebrow">ACTIVITY</p><h2>Recent operations</h2></div><a href="/operations/">Open job center <span>→</span></a></div>
     {% if operations %}
     <div class="operation-table"><div class="table-head"><span>Operation</span><span>State</span><span>Progress</span><span>Started</span></div>
-      {% for operation in operations %}<div class="table-row"><span><i class="operation-symbol">↻</i><b>{{ operation.operation_type|cut:"_"|title }}</b></span><span><em class="job-state job-{{ operation.state }}">{{ operation.state|title }}</em></span><span><span class="progress"><i style="width:{{ operation.progress }}%"></i></span><small>{{ operation.progress }}%</small></span><span>{{ operation.created_at|timesince }} ago</span></div>{% endfor %}
+      {% for operation in operations %}<div class="table-row"><span><i class="operation-symbol">↻</i><b>{{ operation.operation_label }}</b></span><span><em class="job-state job-{{ operation.state }}">{{ operation.state|title }}</em></span><span><span class="progress"><i style="width:{{ operation.progress }}%"></i></span><small>{{ operation.progress }}%</small></span><span>{{ operation.created_at|timesince }} ago</span></div>{% endfor %}
     </div>
     {% else %}
     <div class="empty-inline"><span>↻</span><div><strong>No recent operations</strong><p>Deploy, stop, or inspect a lab and its job history will appear here.</p></div></div>
