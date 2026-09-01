@@ -151,6 +151,9 @@ class ManagedTemplateSerializer(serializers.Serializer):
     memory=serializers.RegexField(r"^[1-9][0-9]{1,4}(Mi|Gi)$",default="512Mi")
     console_method=serializers.ChoiceField(choices=("shell","ssh","telnet"),default="shell")
     configuration_profile=serializers.ChoiceField(choices=("none","frr","nftables"),default="none")
+    image_architecture=serializers.ChoiceField(choices=("any","amd64","arm64"),default="any")
+    image_category=serializers.ChoiceField(choices=("any","router","switch","firewall","host","network-os","traffic-generator","other"),default="any")
+    require_verified_image=serializers.BooleanField(default=False)
     verified=serializers.BooleanField(default=False)
     def validate(self,attrs):
         start=attrs["interface_start"];count=attrs["interface_count"]

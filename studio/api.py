@@ -59,10 +59,13 @@ def managed_template_version_values(data):
             "startup_config_required":True,"required_interfaces":2,
             "configuration_collect_command":["nft","list","ruleset"]})
         configuration=["startup","collect"]
+    image_requirements={"digest_required_for_deploy":True,"verified_publication_required":data["require_verified_image"]}
+    if data["image_architecture"]!="any": image_requirements["architectures"]=[data["image_architecture"]]
+    if data["image_category"]!="any": image_requirements["categories"]=[data["image_category"]]
     return {"containerlab_kind":data["containerlab_kind"],"launch_profile":profile,
         "interface_rules":{"prefix":data["interface_prefix"],"start":data["interface_start"],
             "count":data["interface_count"],"management":data["management_interface"]},
-        "image_requirements":{"digest_required_for_deploy":True},
+        "image_requirements":image_requirements,
         "resource_requirements":{"cpu":data["cpu"],"memory":data["memory"]},
         "console_method":data["console_method"],"readiness_checks":["container_running","device_ready"],
         "configuration_operations":configuration,

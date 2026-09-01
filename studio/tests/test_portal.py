@@ -6,7 +6,7 @@ from django.db.models import F
 from django.test import Client
 from django.utils import timezone
 from studio.configurations import decrypt_secret
-from studio.models import AuditEvent, DeviceTemplateVersion, ImageArtifact, ImageCredentialReference, Lab, LabDeployment, LabFolder, LabLink, LabNode, LabRevision, OperationJob, Project, ProjectMembership, PublishedImage, User
+from studio.models import AuditEvent, DeviceTemplate, DeviceTemplateVersion, ImageArtifact, ImageCredentialReference, Lab, LabDeployment, LabFolder, LabLink, LabNode, LabRevision, OperationJob, Project, ProjectMembership, PublishedImage, User
 
 @pytest.mark.django_db
 def test_dashboard_reports_expiring_worker_verified_platform_capabilities(client,monkeypatch):
@@ -406,6 +406,36 @@ def test_topology_workspace_persists_device_interfaces_and_links(client):
     payload["editVersion"]=response.json()["editVersion"];payload["nodes"][0]["properties"]["startupOrder"]=251
     rejected=client.put(f"/api/v1/labs/{lab.id}/topology/",json.dumps(payload),content_type="application/json")
     assert rejected.status_code==422 and "startup order" in rejected.json()["error"]
+
+@pytest.mark.django_db
+def test_template_image_compatibility_is_visible_and_enforced_in_topology_save(client):
+    owner=User.objects.create_user("compatibility-owner",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="Compatibility project");lab=Lab.objects.create(project=project,name="Compatibility lab")
+    template=DeviceTemplate.objects.create(name="Compatibility router")
+    version=DeviceTemplateVersion.objects.create(template=template,version=1,containerlab_kind="linux",
+        interface_rules={"prefix":"eth","start":1,"count":2,"management":"eth0"},
+        image_requirements={"digest_required_for_deploy":True,"architectures":["amd64"],"categories":["router"]})
+    template.active_version=version;template.save(update_fields=["active_version"])
+    def publication(name,architecture,category,checksum):
+        artifact=ImageArtifact.objects.create(project=project,owner=owner,source_type="registry",original_filename=name,
+            detected_format="oci-registry",byte_size=0,checksum=checksum*64,category=category,architecture=architecture,
+            storage_reference=f"registry/{name}",validation_status="validated")
+        return PublishedImage.objects.create(artifact=artifact,registry_digest=f"registry/{name}@sha256:{checksum*64}",
+            repository=f"registry/{name}",architecture=architecture,lifecycle_status="ready")
+    compatible=publication("router-amd64","amd64","router","a");incompatible=publication("host-arm64","arm64","host","b")
+    client.force_login(owner)
+    image_data=client.get(f"/api/v1/labs/{lab.id}/topology/images/").json()["images"]
+    decisions={row["id"]:row["templateCompatibility"][str(version.id)] for row in image_data}
+    assert decisions[str(compatible.id)]["status"]=="compatible" and decisions[str(compatible.id)]["selectable"] is True
+    assert decisions[str(incompatible.id)]["status"]=="incompatible" and "Architecture arm64" in decisions[str(incompatible.id)]["reasons"][0]
+    page=client.get(f"/device-templates/{template.id}/");html=page.content.decode()
+    assert page.status_code==200 and "Accessible image compatibility" in html and "router-amd64" in html and "host-arm64" in html
+    node={"id":str(uuid.uuid4()),"name":"r1","templateVersionId":str(version.id),"publishedImageId":str(incompatible.id),"position":{"x":10,"y":20}}
+    rejected=client.put(f"/api/v1/labs/{lab.id}/topology/",json.dumps({"editVersion":0,"nodes":[node],"links":[]}),content_type="application/json")
+    assert rejected.status_code==422 and "selected image is incompatible" in rejected.json()["error"] and lab.current_draft_id is None
+    node["publishedImageId"]=str(compatible.id)
+    saved=client.put(f"/api/v1/labs/{lab.id}/topology/",json.dumps({"editVersion":0,"nodes":[node],"links":[]}),content_type="application/json")
+    assert saved.status_code==200 and LabNode.objects.get(revision=Lab.objects.get(pk=lab.id).current_draft).published_image==compatible
 
 @pytest.mark.django_db
 def test_topology_annotations_are_bounded_persisted_and_checksum_protected(client):

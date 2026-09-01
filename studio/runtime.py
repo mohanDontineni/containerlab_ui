@@ -15,6 +15,7 @@ from kubernetes import client, config
 from kubernetes.client.exceptions import ApiException
 from kubernetes.stream import stream
 from .configurations import decrypt_configuration
+from .image_compatibility import evaluate as evaluate_image_compatibility
 
 API_GROUP="c9s.run"; API_VERSION="v1alpha1"; RUNTIME_VERSION="0.8.0"
 DISABLE_DEPLOYMENTS_LABEL="c9s.run/disableDeployments"
@@ -71,14 +72,12 @@ class ClabernetesAdapter:
     @staticmethod
     def validate_topology(revision):
         errors=[]
-        for node in revision.nodes.select_related("template_version","published_image").prefetch_related("interfaces"):
+        for node in revision.nodes.select_related("template_version","published_image__artifact").prefetch_related("interfaces"):
             profile=node.template_version.launch_profile or {}
             if not node.published_image: errors.append(f"{node.name}: no immutable published image")
-            elif "@sha256:" not in node.published_image.registry_digest:
-                publication=node.published_image.compatibility_result
-                expected=f":sha256-{node.published_image.artifact.checksum}"
-                if publication.get("publication_mode")!="node-containerd" or not node.published_image.registry_digest.endswith(expected):
-                    errors.append(f"{node.name}: image is not content-addressed")
+            if node.published_image:
+                compatibility=evaluate_image_compatibility(node.template_version,node.published_image)
+                errors.extend(f"{node.name}: {reason}" for reason in compatibility["reasons"])
             if getattr(node,"startup_configuration_id",None) and not profile.get("startup_config_target"):
                 errors.append(f"{node.name}: template does not support startup configuration")
             if profile.get("startup_config_required") and not getattr(node,"startup_configuration_id",None):

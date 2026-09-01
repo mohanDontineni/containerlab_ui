@@ -92,7 +92,9 @@ type SavedLink = {
 type TopologyAnnotation = { id:string;type:"note"|"region";x:number;y:number;width:number;height:number;
   text:string;color:"cyan"|"blue"|"violet"|"amber"|"rose"|"green"|"slate";fontSize:number;zIndex:number };
 type Snapshot = { nodes: Node<DeviceData>[]; edges: Edge[]; annotations:TopologyAnnotation[] };
-type PublishedImage = { id: string; name: string; digest: string; architecture: string; status: string };
+type ImageCompatibility = {status:"compatible"|"warning"|"incompatible";selectable:boolean;reasons:string[];warnings:string[]};
+type PublishedImage = { id: string; name: string; digest: string; architecture: string; status: string;
+  templateCompatibility:Record<string,ImageCompatibility> };
 type RevisionSummary = { id:string; revision_number:number; edit_version:number; immutable:boolean; topology_checksum:string;
   node_count:number; link_count:number; deployment_count:number; created_at:string; is_current_draft:boolean };
 type RevisionComparison = {left:{id:string;revision_number:number;checksum:string};right:{id:string;revision_number:number;checksum:string};
@@ -301,6 +303,8 @@ function Workspace() {
     [edges],
   );
   const selectedNode = nodes.find((n) => n.id === selected);
+  const selectedImage=selectedNode?images.find(image=>image.id===selectedNode.data.imageId):undefined;
+  const selectedImageCompatibility=selectedNode&&selectedImage?selectedImage.templateCompatibility[selectedNode.data.templateId]:undefined;
   const selectedEdge = edges.find((e) => e.id === selected);
   const selectedAnnotation=annotations.find((annotation)=>`annotation:${annotation.id}`===selected);
   const selectedDeviceNodes=nodes.filter(node=>node.selected);
@@ -899,8 +903,9 @@ function Workspace() {
                 Published image
                 <select value={String(selectedNode.data.imageId)} onChange={(e) => updateImage(e.target.value)}>
                   <option value="">Select a digest-pinned image…</option>
-                  {images.map((image) => <option key={image.id} value={image.id}>{image.name} · {image.architecture} · {image.status}</option>)}
+                  {images.map((image) => {const decision=image.templateCompatibility[selectedNode.data.templateId];return <option key={image.id} value={image.id} disabled={!decision?.selectable&&image.id!==selectedNode.data.imageId}>{image.name} · {image.architecture} · {decision?.status||"incompatible"}</option>})}
                 </select>
+                <small className="field-help">{selectedImageCompatibility?(selectedImageCompatibility.reasons[0]||selectedImageCompatibility.warnings[0]||"Validated, immutable, and compatible with this template."):"Only images permitted by this template can be selected."}</small>
               </label>
               <label>
                 Startup configuration {selectedNode.data.startupConfigRequired ? "· Required" : "· Optional"}

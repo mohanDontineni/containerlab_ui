@@ -23,6 +23,7 @@ from .models import (AuditEvent, ConfigurationVersion, DeviceTemplate, DeviceTem
                      ProjectMembership, PublishedImage, UploadSession, User)
 from .permissions import project_role
 from .operation_presenters import present
+from .image_compatibility import evaluate as evaluate_image_compatibility
 from .configurations import decrypt_configuration, encrypt_configuration
 from .quotas import normalized_quotas,project_usage,quota_exceeded
 from .topology_annotations import normalize_legacy_topology_annotations,validate_topology_annotations
@@ -287,8 +288,10 @@ def topology_catalog(request):
 def topology_images(request, lab_id):
     lab=get_object_or_404(Lab.objects.filter(project__in=visible_projects(request.user),deleted_at__isnull=True),id=lab_id)
     rows=PublishedImage.objects.filter(artifact__project=lab.project,artifact__deleted_at__isnull=True,lifecycle_status__in=("ready","verified","unverified")).select_related("artifact").order_by("artifact__vendor","artifact__version")
+    templates=list(DeviceTemplateVersion.objects.filter(template__active_version_id=F("id")))
     return JsonResponse({"images":[{"id":str(row.id),"name":f"{row.artifact.vendor or row.artifact.category or 'Image'} {row.artifact.version}".strip(),
-        "digest":row.registry_digest,"architecture":row.architecture,"status":row.lifecycle_status,"compatibility":row.compatibility_result} for row in rows]})
+        "digest":row.registry_digest,"architecture":row.architecture,"status":row.lifecycle_status,"compatibility":row.compatibility_result,
+        "templateCompatibility":{str(template.id):evaluate_image_compatibility(template,row) for template in templates}} for row in rows]})
 
 @login_required
 @require_http_methods(["GET", "POST", "DELETE"])
@@ -376,13 +379,18 @@ def topology_document(request, lab_id):
             revision.links.all().delete(); revision.nodes.all().delete()
             revision.edit_version += 1; revision.topology_checksum = hashlib.sha256(canonical.encode()).hexdigest(); revision.annotations = annotations; revision.save()
         node_map, interface_map = {}, {}
-        templates = {str(t.id): t for t in DeviceTemplateVersion.objects.filter(id__in=[n.get("templateVersionId") for n in payload.get("nodes", [])])}
+        templates = {str(t.id): t for t in DeviceTemplateVersion.objects.filter(id__in=[n.get("templateVersionId") for n in payload.get("nodes", [])]).select_related("template")}
         image_ids=[n.get("publishedImageId") for n in payload.get("nodes", []) if n.get("publishedImageId")]
         images={str(image.id):image for image in PublishedImage.objects.filter(id__in=image_ids,artifact__project=lab.project,artifact__deleted_at__isnull=True)}
         if len(images)!=len(set(image_ids)): transaction.set_rollback(True); return JsonResponse({"error":"A selected image is unavailable to this project"},status=422)
         for data in payload.get("nodes", []):
             template = templates.get(str(data.get("templateVersionId")))
             if not template: transaction.set_rollback(True); return JsonResponse({"error": f"Unknown template for {data.get('name', 'node')}"}, status=422)
+            image=images.get(str(data.get("publishedImageId")))
+            if image:
+                compatibility=evaluate_image_compatibility(template,image)
+                if not compatibility["selectable"]:
+                    transaction.set_rollback(True);return JsonResponse({"error":f"{data.get('name','node')}: selected image is incompatible with {template.template.name}: {' '.join(compatibility['reasons'])}"},status=422)
             startup=None; startup_content=data.get("startupConfiguration", "")
             if not isinstance(startup_content,str): transaction.set_rollback(True); return JsonResponse({"error":"Startup configuration must be text"},status=422)
             if startup_content:
@@ -397,7 +405,7 @@ def topology_document(request, lab_id):
             properties=dict(data.get("properties",{}));properties.pop("startupOrder",None)
             if data.get("properties",{}).get("startupOrder") is not None:properties["startupOrder"]=data["properties"]["startupOrder"]
             node = LabNode.objects.create(id=uuid.UUID(data["id"]), revision=revision, name=data["name"][:63], template_version=template,
-                published_image=images.get(str(data.get("publishedImageId"))),
+                published_image=image,
                 position=data.get("position", {}), properties=properties,startup_configuration=startup)
             node_map[data["id"]] = node
             for name in _interfaces(template.interface_rules):
@@ -530,16 +538,26 @@ def template_manage(request,template_id=None):
     resources=active.resource_requirements if active else {}
     target=profile.get("startup_config_target","")
     configuration_profile="frr" if target=="/etc/frr/frr.conf" else "nftables" if target=="/etc/studio/firewall.sh" else "none"
+    image_requirements=active.image_requirements if active and isinstance(active.image_requirements,dict) else {}
     initial={"name":template.name if template else "","description":template.description if template else "",
         "privileged":template.privileged if template else False,"containerlab_kind":active.containerlab_kind if active else "linux",
         "category":profile.get("category","Other"),"icon":profile.get("icon","host"),"interface_prefix":rules.get("prefix","eth"),
         "interface_start":rules.get("start",1),"interface_count":rules.get("count",4),
         "management_interface":rules.get("management","eth0"),"cpu":resources.get("cpu","500m"),
         "memory":resources.get("memory","512Mi"),"console_method":active.console_method if active else "shell",
+        "image_architecture":(image_requirements.get("architectures") or ["any"])[0],
+        "image_category":(image_requirements.get("categories") or ["any"])[0],
+        "require_verified_image":bool(image_requirements.get("verified_publication_required")),
         "configuration_profile":configuration_profile,"verified":bool(profile.get("verified",False))}
     versions=list(template.versions.order_by("-version")) if template else []
+    compatible_images=[]
+    if active:
+        publications=PublishedImage.objects.filter(artifact__project__in=visible_projects(request.user),artifact__deleted_at__isnull=True).select_related("artifact__project","artifact").order_by("artifact__project__name","artifact__vendor","artifact__version")[:100]
+        for publication in publications:
+            compatible_images.append({"publication":publication,"compatibility":evaluate_image_compatibility(active,publication)})
+        compatible_images.sort(key=lambda row:({"compatible":0,"warning":1,"incompatible":2}[row["compatibility"]["status"]],row["publication"].artifact.project.name,row["publication"].artifact.original_filename))
     return render(request,"studio/template_manage.html",{"template_obj":template,"active":active,"initial":initial,
-        "versions":versions,"can_manage":request.user.is_staff})
+        "versions":versions,"can_manage":request.user.is_staff,"compatible_images":compatible_images})
 
 @login_required
 def operations(request):
