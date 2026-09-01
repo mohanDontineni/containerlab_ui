@@ -206,3 +206,19 @@ def test_link_condition_applies_bounded_netem_to_both_endpoints(monkeypatch):
     assert [call[0] for call in calls]==["r1-pod","r2-pod"]
     assert calls[0][2]["command"]==["tc","qdisc","replace","dev","r1-eth1","root","netem","delay","120ms","10ms","loss","2.5%","corrupt","0.5%","rate","1000kbit"]
     assert result["condition"]==condition and len(result["endpoints"])==2
+
+def test_device_logs_are_bounded_and_select_the_verified_runtime_source(monkeypatch):
+    exec_calls=[]
+    monkeypatch.setattr("studio.runtime.stream",lambda method,pod,namespace,**kwargs:exec_calls.append((pod,namespace,kwargs)) or "device boot complete\n")
+    core=SimpleNamespace(connect_get_namespaced_pod_exec=object(),read_namespaced_pod_log=lambda *args,**kwargs:"launcher ready\n")
+    adapter=ClabernetesAdapter(custom_api=SimpleNamespace(),core_api=core)
+    deployment=SimpleNamespace(id="deployment",namespace="lab-one")
+    device=SimpleNamespace(id="device",deployment_id="deployment",lab_node=SimpleNamespace(name="r1"),runtime_resources={"pod":"r1-pod"})
+    appliance=adapter.get_device_logs(deployment,device,"appliance",200)
+    assert appliance["output"]=="device boot complete\n" and appliance["truncated"] is False
+    assert exec_calls[0][2]["command"]==["docker","logs","--timestamps","--tail","200","r1"]
+    launcher=adapter.get_device_logs(deployment,device,"launcher",100)
+    assert launcher["output"]=="launcher ready\n" and launcher["source"]=="launcher"
+    try: adapter.get_device_logs(deployment,device,"appliance",10)
+    except CapabilityError as exc: assert "20 and 1000" in str(exc)
+    else: raise AssertionError("unbounded device logs must be rejected")

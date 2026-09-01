@@ -381,6 +381,25 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
             "impact":["Recreate runtime resources from the pinned immutable revision",
                 "Preserve the project, lab, revision, startup configurations, and collected history",
                 "End active consoles and packet captures while device compute is replaced"]})
+    @action(detail=True,methods=["get"],url_path=r"devices/(?P<device_id>[^/.]+)/logs")
+    def device_logs(self,request,pk=None,device_id=None):
+        deployment=self.get_object();self._require_operator(deployment)
+        try: device_uuid=uuid.UUID(str(device_id))
+        except (ValueError,TypeError,AttributeError): return Response({"error":{"code":"invalid_device"}},status=422)
+        device=deployment.devices.select_related("lab_node").filter(id=device_uuid).first()
+        if not device: return Response({"error":{"code":"invalid_device"}},status=422)
+        source=str(request.query_params.get("source","appliance"));raw_tail=request.query_params.get("tail","200")
+        try: tail=int(raw_tail)
+        except (TypeError,ValueError): return Response({"error":{"code":"invalid_log_bounds","details":"Tail must be an integer between 20 and 1000."}},status=422)
+        if source not in ("appliance","launcher") or not 20<=tail<=1000:
+            return Response({"error":{"code":"invalid_log_request","details":"Choose appliance or launcher and request 20-1000 lines."}},status=422)
+        if not device.runtime_resources.get("pod"): return Response({"error":{"code":"device_runtime_unavailable"}},status=409)
+        try: result=ClabernetesAdapter().get_device_logs(deployment,device,source,tail)
+        except Exception as exc: return Response({"error":{"code":"runtime_logs_unavailable","details":str(exc)[:500]}},status=502)
+        models.AuditEvent.objects.create(actor=request.user,project=deployment.revision.lab.project,action="device.logs_viewed",
+            target_type="DeviceInstance",target_id=device.id,correlation_id=getattr(request,"correlation_id",""),
+            metadata={"deployment":str(deployment.id),"source":source,"tail":tail,"truncated":result["truncated"]})
+        response=Response({**result,"collected_at":timezone.now()});response["Cache-Control"]="no-store";response["X-Content-Type-Options"]="nosniff";return response
     @action(detail=True,methods=["post"])
     def refresh(self,request,pk=None):
         deployment=self.get_object()

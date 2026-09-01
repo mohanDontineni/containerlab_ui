@@ -42,7 +42,7 @@ class Plan: namespace:str; topology_name:str; manifest:dict; config_maps:tuple=(
 class ClabernetesAdapter:
     capabilities={"deploy_lab":"supported","get_observed_state":"supported","delete_runtime":"supported","restart_device":"supported",
         "stop_device":"supported","start_device":"supported","resolve_console_target":"supported","start_capture":"experimental",
-        "stop_lab":"delete_and_redeploy","set_link_condition":"supported","collect_configuration":"template_dependent"}
+        "stop_lab":"delete_and_redeploy","set_link_condition":"supported","collect_configuration":"template_dependent","get_device_logs":"supported"}
     def __init__(self, custom_api=None, core_api=None, batch_api=None, apps_api=None):
         if custom_api is None:
             try: config.load_incluster_config()
@@ -241,6 +241,22 @@ class ClabernetesAdapter:
     def resolve_console_target(self,device):
         if not device.runtime_resources.get("pod"): raise CapabilityError("Device pod is not ready")
         return {"namespace":device.deployment.namespace,"pod":device.runtime_resources["pod"],"method":device.lab_node.template_version.console_method}
+    def get_device_logs(self,deployment,device,source="appliance",tail=200):
+        if device.deployment_id!=deployment.id: raise CapabilityError("Device does not belong to this deployment")
+        if source not in ("appliance","launcher"): raise CapabilityError("Log source is not supported")
+        if not isinstance(tail,int) or isinstance(tail,bool) or not 20<=tail<=1000: raise CapabilityError("Log tail must be between 20 and 1000 lines")
+        pod=device.runtime_resources.get("pod")
+        if not pod: raise CapabilityError("Device launcher pod is not available")
+        if source=="launcher":
+            output=self.core.read_namespaced_pod_log(pod,deployment.namespace,container=device.lab_node.name,tail_lines=tail,
+                timestamps=True,_request_timeout=15)
+        else:
+            output=stream(self.core.connect_get_namespaced_pod_exec,pod,deployment.namespace,
+                command=["docker","logs","--timestamps","--tail",str(tail),device.lab_node.name],stderr=True,stdin=False,stdout=True,tty=False,
+                _request_timeout=15)
+        encoded=output.encode("utf-8",errors="replace")
+        if len(encoded)>100_000: output=encoded[-100_000:].decode("utf-8",errors="replace")
+        return {"device_id":str(device.id),"device":device.lab_node.name,"source":source,"tail":tail,"output":output,"truncated":len(encoded)>100_000}
     def restart_device(self,deployment,device):
         if device.deployment_id != deployment.id: raise CapabilityError("Device does not belong to this deployment")
         pod=device.runtime_resources.get("pod")
