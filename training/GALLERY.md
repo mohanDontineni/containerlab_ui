@@ -187,3 +187,9 @@ The operator selects a ready appliance, literal IPv4/IPv6 destination, probes pe
 ![Guarded image deletion](31-guarded-image-deletion.png)
 
 Before deletion, the server counts publications, build records, lab revisions, and active jobs. Only an unreferenced artifact may be confirmed; Studio then removes its owned quarantine file, releases project quota, hides the artifact from image/topology libraries, and retains upload, operation, and audit provenance.
+
+## 32 — Guarded lab deletion
+
+![Guarded lab deletion](32-guarded-lab-deletion.png)
+
+The operator reviews revision and deployment history plus active runtime and job blockers before confirming. A safe deletion removes only the lab-library entry, releases one project lab quota unit, preserves immutable operational history, and allows the lab name to be reused without exposing YAML or cluster commands.

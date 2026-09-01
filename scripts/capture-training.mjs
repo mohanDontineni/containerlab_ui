@@ -64,6 +64,14 @@ try {
   if (projectHref) await capture("04-project-access.png", projectHref);
 
   await capture("05-lab-library.png", "/labs/");
+  await capture("32-guarded-lab-deletion.png", "/labs/", async (p) => {
+    const row = p.locator(".catalog-row").filter({ hasText: /Lab Deletion Acceptance/i }).first();
+    await row.waitFor();
+    await row.locator("button[data-delete-lab]").click();
+    const dialog = p.locator("#lab-delete-dialog");
+    await dialog.waitFor();
+    return dialog;
+  });
   await capture("06-create-lab.png", "/labs/new/");
   await page.goto(`${baseUrl}/labs/`, { waitUntil: "networkidle" });
   const workspaceHrefs = await matchingHrefs('a[href*="/workspace/"]', /^\/labs\/[0-9a-f-]+\/workspace\/$/i);
