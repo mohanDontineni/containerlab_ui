@@ -32,7 +32,8 @@ import "./style.css";
 import "./clone.css";
 import "./configuration.css";
 import "./annotations.css";
-import { interfaceFromHandle } from "./topology-utils";
+import "./bulk-selection.css";
+import { duplicateSubgraph, interfaceFromHandle } from "./topology-utils";
 
 type Template = {
   id: string;
@@ -278,6 +279,7 @@ function Workspace() {
   const selectedNode = nodes.find((n) => n.id === selected);
   const selectedEdge = edges.find((e) => e.id === selected);
   const selectedAnnotation=annotations.find((annotation)=>`annotation:${annotation.id}`===selected);
+  const selectedDeviceNodes=nodes.filter(node=>node.selected);
   const onNodesChange = useCallback(
     (changes: NodeChange<Node<DeviceData>>[]) => {
       setNodes((n) => applyNodeChanges(changes, n));
@@ -580,19 +582,42 @@ function Workspace() {
   };
   const removeSelected = () => {
     snapshot();
-    if (selectedNode) {
+    const selectedIds=new Set(selectedDeviceNodes.length>1?selectedDeviceNodes.map(node=>node.id):selectedNode?[selectedNode.id]:[]);
+    if (selectedIds.size) {
       setEdges((es) =>
         es.filter(
-          (e) => e.source !== selectedNode.id && e.target !== selectedNode.id,
+          (e) => !selectedIds.has(e.source) && !selectedIds.has(e.target),
         ),
       );
-      setNodes((ns) => ns.filter((n) => n.id !== selectedNode.id));
+      setNodes((ns) => ns.filter((n) => !selectedIds.has(n.id)));
     } else if (selectedEdge)
       setEdges((es) => es.filter((e) => e.id !== selectedEdge.id));
     else if(selectedAnnotation)setAnnotations(items=>items.filter(item=>item.id!==selectedAnnotation.id));
     setSelected(null);
     setDirty(true);
   };
+  const duplicateSelected = () => {
+    const source=selectedDeviceNodes.length?selectedDeviceNodes:selectedNode?[selectedNode]:[];
+    if (!source.length || !workspaceReady) return;
+    snapshot();
+    const result=duplicateSubgraph(nodes,edges,new Set(source.map(node=>node.id)),()=>crypto.randomUUID());
+    setNodes(current=>[...current.map(node=>({...node,selected:false})),...result.nodes]);
+    setEdges(current=>[...current.map(edge=>({...edge,selected:false})),...result.edges]);
+    setSelected(result.nodes.length===1?result.nodes[0].id:null);setDirty(true);
+    setNotice(`Duplicated ${result.nodes.length} device${result.nodes.length===1?"":"s"} and ${result.edges.length} internal link${result.edges.length===1?"":"s"}`);
+  };
+  useEffect(()=>{
+    const keyboard=(event:KeyboardEvent)=>{
+      const target=event.target as HTMLElement|null;
+      if(target?.matches("input, textarea, select, [contenteditable=true]"))return;
+      if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==="d"&&(selectedDeviceNodes.length||selectedNode)){
+        event.preventDefault();duplicateSelected();
+      }else if(event.key==="Delete"&&(selectedDeviceNodes.length||selectedNode||selectedEdge||selectedAnnotation)){
+        event.preventDefault();removeSelected();
+      }
+    };
+    addEventListener("keydown",keyboard);return()=>removeEventListener("keydown",keyboard);
+  },[nodes,edges,annotations,selected,selectedDeviceNodes.length,workspaceReady]);
   const errors = useMemo(() => {
     const issues: string[] = [];
     const names = new Set<string>();
@@ -634,6 +659,7 @@ function Workspace() {
           </button>
           <i></i>
           <button onClick={() => rf?.fitView({ padding: 0.2 })}>Fit</button>
+          <button onClick={duplicateSelected} disabled={!workspaceReady||(!selectedDeviceNodes.length&&!selectedNode)} title="Duplicate selected devices and their internal links (Ctrl/Cmd+D)">⧉ Duplicate{selectedDeviceNodes.length>1?` ${selectedDeviceNodes.length}`:""}</button>
           <button onClick={()=>addAnnotation("note")} disabled={!workspaceReady} title="Add a movable text note">＋ Note</button>
           <button onClick={()=>addAnnotation("region")} disabled={!workspaceReady} title="Add a colored topology region">▧ Region</button>
           <button onClick={exportBundle} disabled={dirty} title="Download a product-native lab backup. No YAML editing is required.">Backup</button>
@@ -745,6 +771,13 @@ function Workspace() {
             onNodeClick={(_, n) => setSelected(n.id)}
             onEdgeClick={(_, e) => setSelected(e.id)}
             onPaneClick={() => setSelected(null)}
+            onSelectionChange={({nodes:selectedNodes,edges:selectedEdges})=>{
+              if(selectedNodes.length===1&&!selectedEdges.length)setSelected(selectedNodes[0].id);
+              else if(selectedEdges.length===1&&!selectedNodes.length)setSelected(selectedEdges[0].id);
+              else if(selectedNodes.length>1)setSelected(null);
+            }}
+            selectionOnDrag
+            panOnDrag={[1,2]}
             deleteKeyCode={null}
             minZoom={0.25}
             maxZoom={2}
@@ -787,7 +820,15 @@ function Workspace() {
               </small>
             </p>
           </div>
-          {selectedNode ? (
+          {selectedDeviceNodes.length>1 ? (
+            <div className="properties bulk-properties">
+              <div className="bulk-selection-summary"><strong>{selectedDeviceNodes.length} devices selected</strong><span>{edges.filter(edge=>selectedDeviceNodes.some(node=>node.id===edge.source)&&selectedDeviceNodes.some(node=>node.id===edge.target)).length} internal links</span></div>
+              <p>Drag the selection together, duplicate the complete subgraph, or remove it. Pinned templates, images, startup configurations, and internal interface links are preserved in each copy.</p>
+              <button className="bulk-primary" onClick={duplicateSelected}>⧉ Duplicate selected subgraph</button>
+              <button className="danger" onClick={removeSelected}>Remove selected devices</button>
+              <small className="keyboard-help">Shift-click to adjust selection · Ctrl/Cmd+D to duplicate · Delete to remove</small>
+            </div>
+          ) : selectedNode ? (
             <div className="properties">
               <label>
                 Node name

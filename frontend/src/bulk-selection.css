@@ -1,0 +1,8 @@
+.bulk-properties { display: grid; gap: 12px; }
+.bulk-selection-summary { padding: 14px; border: 1px solid #245267; border-radius: 8px; background: linear-gradient(145deg, rgba(38,198,218,.08), rgba(57,135,255,.04)); display: flex; flex-direction: column; gap: 5px; }
+.bulk-selection-summary strong { font-size: 12px; color: #d8edf5; }
+.bulk-selection-summary span { font: 500 8px monospace; color: #5fc9d7; }
+.bulk-properties > p { margin: 0; color: #6f879b; font-size: 9px; line-height: 1.6; }
+.bulk-primary { height: 36px; border: 1px solid #27758a; border-radius: 6px; background: rgba(38,198,218,.1); color: #8be4ee; font-size: 9px; cursor: pointer; }
+.bulk-primary:hover { background: rgba(38,198,218,.16); }
+.keyboard-help { color: #4f687e; font-size: 8px; line-height: 1.55; text-align: center; }
