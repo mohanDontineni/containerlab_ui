@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { alignSelectedNodes, arrangeTopology, duplicateSubgraph, interfaceFromHandle, interfaceIsAvailable } from "./topology-utils";
-import { requestedConsoleDevice } from "./console-utils";
+import { requestedConsoleDevice, visibleConsoleIds } from "./console-utils";
 
 describe("topology interface helpers", () => {
   it("accepts only same-origin live-map console requests", () => {
@@ -9,6 +9,11 @@ describe("topology interface helpers", () => {
     expect(requestedConsoleDevice("https://studio.example","https://studio.example",message)).toBe("device-1");
     expect(requestedConsoleDevice("https://attacker.example","https://studio.example",message)).toBe("");
     expect(requestedConsoleDevice("https://studio.example","https://studio.example",{...message,deviceId:42})).toBe("");
+  });
+  it("selects one active console or a stable two-pane split",()=>{
+    expect(visibleConsoleIds(["r1","r2"],"r2",false)).toEqual(["r2"]);
+    expect(visibleConsoleIds(["r1","r2"],"r2",true)).toEqual(["r1","r2"]);
+    expect(visibleConsoleIds(["r1"],"r1",true)).toEqual(["r1"]);
   });
   it("maps React Flow endpoint handles to device interface names", () => {
     expect(interfaceFromHandle("router-1:eth1")).toBe("eth1");

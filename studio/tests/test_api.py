@@ -1089,6 +1089,18 @@ def test_console_authorization_is_session_bound_and_viewer_read_only():
     session=ConsoleSession.objects.get(id=response.data["id"])
     assert session.token_hash and session.user==viewer
     assert AuditEvent.objects.filter(action="console.authorized",target_id=device.id).exists()
+    revoked=c.delete(f"/api/v1/deployments/{deployment.id}/consoles/{session.id}/")
+    session.refresh_from_db()
+    assert revoked.status_code==204 and session.revoked_at and revoked["Cache-Control"]=="no-store"
+    assert AuditEvent.objects.filter(action="console.revoked",target_id=session.id).count()==1
+    assert c.delete(f"/api/v1/deployments/{deployment.id}/consoles/{session.id}/").status_code==204
+    assert AuditEvent.objects.filter(action="console.revoked",target_id=session.id).count()==1
+    ConsoleSession.objects.bulk_create([ConsoleSession(device=device,user=viewer,token_hash=str(index)*64,
+        expires_at=timezone.now()+timezone.timedelta(minutes=10)) for index in range(1,9)])
+    limited=c.post(f"/api/v1/deployments/{deployment.id}/consoles/",{"device_id":str(device.id)},format="json")
+    assert limited.status_code==429 and limited.data["error"]["code"]=="console_session_limit"
+    other=User.objects.create_user("console-other",password="long-enough-password");c.force_authenticate(other)
+    assert c.delete(f"/api/v1/deployments/{deployment.id}/consoles/{session.id}/").status_code==404
 
 @pytest.mark.django_db
 def test_device_lifecycle_is_idempotent_audited_and_operator_only(monkeypatch):

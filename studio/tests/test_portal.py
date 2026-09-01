@@ -601,5 +601,6 @@ def test_deployment_detail_is_native_and_scoped(client):
     assert "recovered after reload" in response.content.decode() and "samples more than 5 minutes apart" in response.content.decode()
     assert "Export network health" in response.content.decode() and "observations/export" in response.content.decode()
     assert "open-device-console" in response.content.decode() and "data-runtime-map-action" in response.content.decode()
+    assert "Device consoles" in response.content.decode() and "console.html?deployment=" in response.content.decode()
     client.force_login(stranger)
     assert client.get(f"/deployments/{deployment.id}/").status_code == 404

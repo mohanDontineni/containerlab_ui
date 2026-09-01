@@ -2003,6 +2003,8 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=True,methods=["post"])
     def consoles(self,request,pk=None):
         deployment=self.get_object()
+        active_sessions=models.ConsoleSession.objects.filter(device__deployment=deployment,user=request.user,revoked_at__isnull=True,expires_at__gt=timezone.now()).count()
+        if active_sessions>=8:return Response({"error":{"code":"console_session_limit","details":"Close an existing console before opening another; each operator may keep at most eight active sessions per runtime."}},status=429)
         try: device_id=uuid.UUID(str(request.data.get("device_id")))
         except (ValueError,TypeError,AttributeError): return Response({"error":{"code":"invalid_device"}},status=422)
         device=deployment.devices.select_related("lab_node__template_version","deployment__revision__lab__project").filter(id=device_id).first()
@@ -2021,3 +2023,15 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
         models.AuditEvent.objects.create(actor=request.user,project=deployment.revision.lab.project,action="console.authorized",
             target_type="DeviceInstance",target_id=device.id,correlation_id=getattr(request,"correlation_id",""),metadata={"console_session":str(console.id),"read_only":read_only})
         return Response({"id":str(console.id),"websocket":f"/ws/consoles/{console.id}/","expires_at":console.expires_at,"read_only":read_only,"device":{"id":str(device.id),"name":device.lab_node.name}},status=201)
+    @action(detail=True,methods=["delete"],url_path=r"consoles/(?P<console_id>[^/.]+)")
+    def revoke_console(self,request,pk=None,console_id=None):
+        deployment=self.get_object()
+        try: console_uuid=uuid.UUID(str(console_id))
+        except (ValueError,TypeError,AttributeError): return Response({"error":{"code":"invalid_console"}},status=404)
+        console=models.ConsoleSession.objects.select_related("device").filter(id=console_uuid,device__deployment=deployment,user=request.user).first()
+        if not console: return Response({"error":{"code":"invalid_console"}},status=404)
+        if not console.revoked_at:
+            console.revoked_at=timezone.now();console.save(update_fields=["revoked_at"])
+            models.AuditEvent.objects.create(actor=request.user,project=deployment.revision.lab.project,action="console.revoked",
+                target_type="ConsoleSession",target_id=console.id,correlation_id=getattr(request,"correlation_id",""),metadata={})
+        response=Response(status=204);response["Cache-Control"]="no-store";return response
