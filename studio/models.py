@@ -25,6 +25,7 @@ class Project(UUIDModel):
     deleted_at = models.DateTimeField(null=True, blank=True)
     class Meta:
         constraints = [models.UniqueConstraint(fields=["owner", "name"], condition=Q(deleted_at__isnull=True), name="unique_active_project_name_per_owner")]
+    def __str__(self): return self.name
 
 class ProjectMembership(UUIDModel):
     class Role(models.TextChoices): ADMIN="administrator"; EDITOR="editor"; VIEWER="viewer"
@@ -63,6 +64,7 @@ class LabFolder(UUIDModel):
         parts=[self.name];ancestor=self.parent
         while ancestor: parts.append(ancestor.name);ancestor=ancestor.parent
         return " / ".join(reversed(parts))
+    def __str__(self): return f"{self.project.name} · {self.path}"
 
 class UploadSession(UUIDModel):
     class Status(models.TextChoices): ACTIVE="active"; COMPLETE="complete"; CANCELLED="cancelled"; EXPIRED="expired"; FAILED="failed"
@@ -160,6 +162,7 @@ class Lab(UUIDModel):
     edit_lock_expires_at = models.DateTimeField(null=True, blank=True)
     deleted_at = models.DateTimeField(null=True, blank=True)
     class Meta: constraints=[models.UniqueConstraint(fields=["project", "name"], condition=Q(deleted_at__isnull=True), name="unique_active_lab_name_per_project")]
+    def __str__(self): return self.name
 
 class LabRevision(UUIDModel):
     lab = models.ForeignKey(Lab, on_delete=models.PROTECT, related_name="revisions")

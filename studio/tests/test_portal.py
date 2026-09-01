@@ -125,6 +125,7 @@ def test_lab_folders_are_hierarchical_project_scoped_and_guarded(client):
     nested_response=client.post("/labs/folders/new/",{"project":project.id,"name":"BGP","parent":root.id})
     nested=LabFolder.objects.get(project=project,name="BGP")
     assert root_response.status_code==302 and nested_response.status_code==302 and nested.path=="Routing / BGP"
+    assert str(project)=="Training" and str(nested)=="Training · Routing / BGP"
     assert not client.post("/labs/folders/new/",{"project":other.id,"name":"Leaked","parent":""}).wsgi_request.user.is_anonymous
     assert not LabFolder.objects.filter(project=other,name="Leaked").exists()
     lab=Lab.objects.create(project=project,folder=nested,name="Peering")
