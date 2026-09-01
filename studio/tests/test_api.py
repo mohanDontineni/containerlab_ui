@@ -6,7 +6,7 @@ from django.conf import settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 from studio.configurations import decrypt_configuration, encrypt_configuration
-from studio.models import (AuditEvent, CaptureSession, ConsoleSession, DeviceInstance, DeviceTemplateVersion, ImageArtifact, Lab, LabDeployment,
+from studio.models import (AuditEvent, CaptureSession, ConsoleSession, DeviceInstance, DeviceTemplate, DeviceTemplateVersion, ImageArtifact, Lab, LabDeployment,
     ConfigurationVersion, LabArtifact, LabInterface, LabLink, LabNode, LabRevision, OperationJob, Project, ProjectMembership, PublishedImage, UploadSession, User)
 from studio.tasks import execute_operation, reconcile_active_deployments, reconcile_deployment
 from studio.quotas import project_usage
@@ -14,6 +14,56 @@ from studio.quotas import project_usage
 def test_web_process_uses_configured_celery_broker():
     assert execute_operation.app.conf.broker_url == settings.CELERY_BROKER_URL
     assert settings.CELERY_BEAT_SCHEDULE["reconcile-active-deployments"]["schedule"]==30.0
+
+def managed_template_payload(**changes):
+    payload={"name":"Managed Router","description":"Safe platform-managed launch profile","privileged":False,
+        "containerlab_kind":"linux","category":"Routing","icon":"router","interface_prefix":"eth",
+        "interface_start":1,"interface_count":4,"management_interface":"eth0","cpu":"500m","memory":"512Mi",
+        "console_method":"shell","configuration_profile":"frr","verified":False}
+    payload.update(changes);return payload
+
+@pytest.mark.django_db
+def test_device_template_creation_is_platform_admin_only_idempotent_and_audited():
+    user=User.objects.create_user("template-user",password="long-enough-password")
+    admin=User.objects.create_user("template-admin",password="long-enough-password",is_staff=True)
+    client=APIClient();client.force_authenticate(user)
+    assert client.get("/api/v1/device-templates/").status_code==200
+    assert client.post("/api/v1/device-templates/",managed_template_payload(),format="json",HTTP_IDEMPOTENCY_KEY="denied").status_code==403
+    client.force_authenticate(admin)
+    assert client.post("/api/v1/device-templates/",managed_template_payload(),format="json").status_code==400
+    created=client.post("/api/v1/device-templates/",managed_template_payload(),format="json",HTTP_IDEMPOTENCY_KEY="create-template")
+    replay=client.post("/api/v1/device-templates/",managed_template_payload(),format="json",HTTP_IDEMPOTENCY_KEY="create-template")
+    assert created.status_code==201 and replay.status_code==200 and replay.data==created.data
+    template=DeviceTemplate.objects.get(pk=created.data["template_id"]);version=template.active_version
+    assert version.version==1 and version.launch_profile["startup_config_target"]=="/etc/frr/frr.conf"
+    assert version.interface_rules=={"prefix":"eth","start":1,"count":4,"management":"eth0"}
+    assert AuditEvent.objects.filter(action="device_template.created",target_id=template.id).count()==1
+
+@pytest.mark.django_db
+def test_device_template_versioning_preserves_pins_and_rejects_stale_or_unsafe_changes():
+    admin=User.objects.create_user("template-version-admin",password="long-enough-password",is_staff=True)
+    client=APIClient();client.force_authenticate(admin)
+    created=client.post("/api/v1/device-templates/",managed_template_payload(name="Versioned Router"),format="json",HTTP_IDEMPOTENCY_KEY="create-versioned")
+    template=DeviceTemplate.objects.get(pk=created.data["template_id"]);original=template.active_version
+    owner=User.objects.create_user("template-lab-owner",password="long-enough-password");project=Project.objects.create(owner=owner,name="template-project")
+    lab=Lab.objects.create(project=project,name="template-lab");revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="a"*64)
+    node=LabNode.objects.create(revision=revision,name="r1",template_version=original)
+    endpoint=f"/api/v1/device-templates/{template.id}/versions/"
+    invalid=client.post(endpoint,managed_template_payload(name="Versioned Router",management_interface="eth1"),format="json",
+        HTTP_IDEMPOTENCY_KEY="invalid-template-version",HTTP_X_EXPECTED_ACTIVE_VERSION=str(original.id))
+    assert invalid.status_code==400 and template.versions.count()==1
+    stale=client.post(endpoint,managed_template_payload(name="Versioned Router",interface_count=8),format="json",
+        HTTP_IDEMPOTENCY_KEY="stale-template-version",HTTP_X_EXPECTED_ACTIVE_VERSION=str(uuid.uuid4()))
+    assert stale.status_code==409
+    changed=client.post(endpoint,managed_template_payload(name="Versioned Router",interface_count=8,verified=True),format="json",
+        HTTP_IDEMPOTENCY_KEY="next-template-version",HTTP_X_EXPECTED_ACTIVE_VERSION=str(original.id))
+    replay=client.post(endpoint,managed_template_payload(name="Versioned Router",interface_count=8,verified=True),format="json",
+        HTTP_IDEMPOTENCY_KEY="next-template-version",HTTP_X_EXPECTED_ACTIVE_VERSION=str(original.id))
+    assert changed.status_code==201 and replay.status_code==200 and replay.data==changed.data
+    template.refresh_from_db();node.refresh_from_db()
+    assert template.active_version.version==2 and template.active_version.interface_rules["count"]==8
+    assert node.template_version_id==original.id and template.versions.count()==2
+    assert AuditEvent.objects.filter(action="device_template.version_activated",target_id=template.id).count()==1
 
 @pytest.mark.django_db
 def test_periodic_reconciler_queues_only_active_deployments(monkeypatch):

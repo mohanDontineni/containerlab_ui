@@ -30,6 +30,8 @@ urlpatterns = [
     path("images/upload/", portal_views.image_upload, name="portal-image-upload"),
     path("images/register/", portal_views.image_register, name="portal-image-register"),
     path("device-templates/", portal_views.templates, name="portal-templates"),
+    path("device-templates/new/", portal_views.template_manage, name="portal-template-create"),
+    path("device-templates/<uuid:template_id>/", portal_views.template_manage, name="portal-template-detail"),
     path("operations/", portal_views.operations, name="portal-operations"),
     path("settings/", portal_views.settings_view, name="portal-settings"),
 ]

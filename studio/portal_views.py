@@ -1,6 +1,7 @@
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth import update_session_auth_hash
+from django.core.exceptions import PermissionDenied
 import hashlib
 import json
 import uuid
@@ -278,7 +279,29 @@ def image_register(request):
 def templates(request):
     queryset = DeviceTemplate.objects.select_related("active_version").order_by("name")
     return render(request, "studio/catalog.html", {"section": "templates", "title": "Device templates", "eyebrow": "LAUNCH PROFILES", "items": queryset,
-        "description": "Browse verified kinds, interface rules, resource requirements, and capabilities."})
+        "description": "Browse verified kinds, interface rules, resource requirements, and capabilities.",
+        "create_url":"/device-templates/new/" if request.user.is_staff else None,"create_label":"Create template"})
+
+@login_required
+def template_manage(request,template_id=None):
+    template=get_object_or_404(DeviceTemplate.objects.select_related("active_version"),pk=template_id) if template_id else None
+    if not template and not request.user.is_staff: raise PermissionDenied
+    active=template.active_version if template else None
+    profile=active.launch_profile if active else {}
+    rules=active.interface_rules if active else {}
+    resources=active.resource_requirements if active else {}
+    target=profile.get("startup_config_target","")
+    configuration_profile="frr" if target=="/etc/frr/frr.conf" else "nftables" if target=="/etc/studio/firewall.sh" else "none"
+    initial={"name":template.name if template else "","description":template.description if template else "",
+        "privileged":template.privileged if template else False,"containerlab_kind":active.containerlab_kind if active else "linux",
+        "category":profile.get("category","Other"),"icon":profile.get("icon","host"),"interface_prefix":rules.get("prefix","eth"),
+        "interface_start":rules.get("start",1),"interface_count":rules.get("count",4),
+        "management_interface":rules.get("management","eth0"),"cpu":resources.get("cpu","500m"),
+        "memory":resources.get("memory","512Mi"),"console_method":active.console_method if active else "shell",
+        "configuration_profile":configuration_profile,"verified":bool(profile.get("verified",False))}
+    versions=list(template.versions.order_by("-version")) if template else []
+    return render(request,"studio/template_manage.html",{"template_obj":template,"active":active,"initial":initial,
+        "versions":versions,"can_manage":request.user.is_staff})
 
 @login_required
 def operations(request):

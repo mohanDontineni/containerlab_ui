@@ -1,3 +1,4 @@
+import re
 from rest_framework import serializers
 from . import models
 
@@ -60,7 +61,51 @@ class ImageArtifactSerializer(serializers.ModelSerializer):
 class PublishedImageSerializer(serializers.ModelSerializer):
     class Meta: model=models.PublishedImage; fields="__all__"
 class DeviceTemplateSerializer(serializers.ModelSerializer):
-    class Meta: model=models.DeviceTemplate; fields="__all__"
+    active_version_number=serializers.IntegerField(source="active_version.version",read_only=True)
+    active_profile=serializers.SerializerMethodField()
+    version_count=serializers.IntegerField(read_only=True)
+    def get_active_profile(self,obj) -> dict | None:
+        version=obj.active_version
+        if not version: return None
+        return {"id":str(version.id),"version":version.version,"containerlab_kind":version.containerlab_kind,
+            "launch_profile":version.launch_profile,"interface_rules":version.interface_rules,
+            "image_requirements":version.image_requirements,"resource_requirements":version.resource_requirements,
+            "console_method":version.console_method,"readiness_checks":version.readiness_checks,
+            "configuration_operations":version.configuration_operations,"capabilities":version.capabilities}
+    class Meta:
+        model=models.DeviceTemplate
+        fields=("id","name","description","privileged","active_version","active_version_number","active_profile","version_count","created_at","updated_at")
+        read_only_fields=fields
+
+class ManagedTemplateSerializer(serializers.Serializer):
+    name=serializers.CharField(max_length=120)
+    description=serializers.CharField(required=False,allow_blank=True,max_length=2000)
+    privileged=serializers.BooleanField(default=False)
+    containerlab_kind=serializers.RegexField(r"^[a-z][a-z0-9_-]{0,79}$")
+    category=serializers.ChoiceField(choices=("Routing","Switching","Security","Endpoints","Other"),default="Other")
+    icon=serializers.ChoiceField(choices=("router","switch","firewall","host"),default="host")
+    interface_prefix=serializers.RegexField(r"^[A-Za-z][A-Za-z0-9_.-]{0,15}$",default="eth")
+    interface_start=serializers.IntegerField(min_value=0,max_value=63,default=1)
+    interface_count=serializers.IntegerField(min_value=1,max_value=64,default=4)
+    management_interface=serializers.RegexField(r"^[A-Za-z][A-Za-z0-9_.-]{0,31}$",default="eth0")
+    cpu=serializers.RegexField(r"^[1-9][0-9]{1,4}m$",default="500m")
+    memory=serializers.RegexField(r"^[1-9][0-9]{1,4}(Mi|Gi)$",default="512Mi")
+    console_method=serializers.ChoiceField(choices=("shell","ssh","telnet"),default="shell")
+    configuration_profile=serializers.ChoiceField(choices=("none","frr","nftables"),default="none")
+    verified=serializers.BooleanField(default=False)
+    def validate(self,attrs):
+        start=attrs["interface_start"];count=attrs["interface_count"]
+        if start+count>64: raise serializers.ValidationError({"interface_count":"The last generated interface index cannot exceed 63."})
+        generated={f'{attrs["interface_prefix"]}{index}' for index in range(start,start+count)}
+        if attrs["management_interface"] in generated:
+            raise serializers.ValidationError({"management_interface":"The management interface must not overlap a generated data interface."})
+        memory=int(re.match(r"^[0-9]+",attrs["memory"]).group())*(1024 if attrs["memory"].endswith("Gi") else 1)
+        if not 64<=memory<=32768: raise serializers.ValidationError({"memory":"Memory must be between 64Mi and 32Gi."})
+        cpu=int(attrs["cpu"][:-1])
+        if not 50<=cpu<=16000: raise serializers.ValidationError({"cpu":"CPU must be between 50m and 16000m."})
+        if attrs["configuration_profile"] in ("frr","nftables") and attrs["containerlab_kind"]!="linux":
+            raise serializers.ValidationError({"configuration_profile":"Verified configuration presets require the linux kind."})
+        return attrs
 class DeploymentSerializer(serializers.ModelSerializer):
     class Meta: model=models.LabDeployment; fields="__all__"; read_only_fields=("observed_state","resource_identities","error_details")
 class OperationSerializer(serializers.ModelSerializer):

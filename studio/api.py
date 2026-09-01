@@ -6,7 +6,7 @@ import difflib
 from pathlib import Path
 from django.conf import settings
 from django.db import IntegrityError, transaction
-from django.db.models import Count,Q
+from django.db.models import Count,Max,Q
 from django.http import FileResponse, HttpResponse
 from django.utils import timezone
 from django.utils.text import slugify
@@ -35,6 +35,104 @@ def exception_handler(exc,context):
 
 def visible_projects(user):
     return models.Project.objects.filter(Q(owner=user)|Q(memberships__user=user),deleted_at__isnull=True).distinct()
+
+def managed_template_version_values(data):
+    profile={"icon":data["icon"],"category":data["category"],"verified":data["verified"]}
+    configuration=[]
+    if data["configuration_profile"]=="frr":
+        profile.update({"configuration_language":"frr","startup_config_target":"/etc/frr/frr.conf",
+            "startup_config_required":True,"required_interfaces":1,
+            "configuration_collect_command":["vtysh","-c","show running-config"],
+            "auxiliary_config_files":[{"key":"daemons","launcher_path":"/clabernetes/studio/daemons",
+                "target":"/etc/frr/daemons","content":"zebra=yes\nbgpd=yes\nstaticd=yes\n"}]})
+        configuration=["startup","collect"]
+    elif data["configuration_profile"]=="nftables":
+        profile.update({"configuration_language":"shell","startup_config_target":"/etc/studio/firewall.sh",
+            "startup_config_required":True,"required_interfaces":2,
+            "configuration_collect_command":["nft","list","ruleset"]})
+        configuration=["startup","collect"]
+    return {"containerlab_kind":data["containerlab_kind"],"launch_profile":profile,
+        "interface_rules":{"prefix":data["interface_prefix"],"start":data["interface_start"],
+            "count":data["interface_count"],"management":data["management_interface"]},
+        "image_requirements":{"digest_required_for_deploy":True},
+        "resource_requirements":{"cpu":data["cpu"],"memory":data["memory"]},
+        "console_method":data["console_method"],"readiness_checks":["container_running","device_ready"],
+        "configuration_operations":configuration,
+        "capabilities":{"console":data["containerlab_kind"] in ("linux","bridge"),"capture":True,
+            "link_impairment":True,"verified":data["verified"]}}
+
+class DeviceTemplateViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class=serializers.DeviceTemplateSerializer
+    def get_queryset(self):
+        return models.DeviceTemplate.objects.select_related("active_version").annotate(version_count=Count("versions")).order_by("name")
+    def _require_platform_admin(self):
+        if not self.request.user.is_staff:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("Platform administrator access is required to manage device templates.")
+    def _idempotency_replay(self,operation,target=None):
+        key=self.request.headers.get("Idempotency-Key")
+        if not key: return None,None,Response({"error":{"code":"idempotency_key_required"}},status=400)
+        existing=models.OperationJob.objects.filter(owner=self.request.user,idempotency_key=key).first()
+        if existing:
+            if existing.operation_type!=operation or (target and existing.target_id!=target):
+                return key,None,Response({"error":{"code":"idempotency_conflict"}},status=409)
+            return key,existing,Response(existing.result_payload)
+        return key,None,None
+    def create(self,request):
+        self._require_platform_admin();key,_,replay=self._idempotency_replay("create_device_template")
+        if replay: return replay
+        serializer=serializers.ManagedTemplateSerializer(data=request.data);serializer.is_valid(raise_exception=True);data=serializer.validated_data
+        try:
+            with transaction.atomic():
+                template=models.DeviceTemplate.objects.create(name=data["name"],description=data.get("description",""),privileged=data["privileged"])
+                version=models.DeviceTemplateVersion.objects.create(template=template,version=1,**managed_template_version_values(data))
+                template.active_version=version;template.save(update_fields=["active_version","updated_at"])
+                result={"template_id":str(template.id),"version_id":str(version.id),"version":1,"name":template.name}
+                job=models.OperationJob.objects.create(owner=request.user,operation_type="create_device_template",target_id=template.id,
+                    idempotency_key=key,state="succeeded",progress=100,request_payload={"name":template.name},result_payload=result)
+                result["operation_id"]=str(job.id);job.result_payload=result;job.save(update_fields=["result_payload","updated_at"])
+                models.AuditEvent.objects.create(actor=request.user,action="device_template.created",target_type="DeviceTemplate",
+                    target_id=template.id,correlation_id=getattr(request,"correlation_id",""),
+                    metadata={"version":1,"kind":version.containerlab_kind,"verified":data["verified"]})
+        except IntegrityError: return Response({"error":{"code":"template_name_conflict","details":"A device template with this name already exists."}},status=409)
+        return Response(result,status=201)
+    @action(detail=True,methods=["get","post"])
+    def versions(self,request,pk=None):
+        template=self.get_object()
+        if request.method=="GET":
+            rows=template.versions.order_by("-version")
+            return Response({"template":self.get_serializer(template).data,"versions":[{"id":str(row.id),"version":row.version,
+                "containerlab_kind":row.containerlab_kind,"launch_profile":row.launch_profile,"interface_rules":row.interface_rules,
+                "resource_requirements":row.resource_requirements,"console_method":row.console_method,"capabilities":row.capabilities,
+                "created_at":row.created_at.isoformat(),"active":row.id==template.active_version_id} for row in rows]})
+        self._require_platform_admin();key,_,replay=self._idempotency_replay("version_device_template",template.id)
+        if replay: return replay
+        expected=request.headers.get("X-Expected-Active-Version")
+        if not expected: return Response({"error":{"code":"expected_active_version_required"}},status=400)
+        serializer=serializers.ManagedTemplateSerializer(data=request.data);serializer.is_valid(raise_exception=True);data=serializer.validated_data
+        try:
+            with transaction.atomic():
+                locked=models.DeviceTemplate.objects.select_for_update().select_related("active_version").get(pk=template.pk)
+                if str(locked.active_version_id)!=expected:
+                    return Response({"error":{"code":"template_version_changed","details":"The active template version changed after this form was opened.",
+                        "active_version":str(locked.active_version_id)}},status=409)
+                conflict=models.DeviceTemplate.objects.filter(name=data["name"]).exclude(pk=locked.pk).exists()
+                if conflict: return Response({"error":{"code":"template_name_conflict"}},status=409)
+                number=(locked.versions.aggregate(value=Max("version"))["value"] or 0)+1
+                version=models.DeviceTemplateVersion.objects.create(template=locked,version=number,**managed_template_version_values(data))
+                changed=[field for field in ("name","description","privileged") if getattr(locked,field)!=data.get(field)]
+                locked.name=data["name"];locked.description=data.get("description","");locked.privileged=data["privileged"];locked.active_version=version
+                locked.save(update_fields=["name","description","privileged","active_version","updated_at"])
+                result={"template_id":str(locked.id),"version_id":str(version.id),"version":number,"name":locked.name,
+                    "previous_version_id":expected}
+                job=models.OperationJob.objects.create(owner=request.user,operation_type="version_device_template",target_id=locked.id,
+                    idempotency_key=key,state="succeeded",progress=100,request_payload={"expected_active_version":expected},result_payload=result)
+                result["operation_id"]=str(job.id);job.result_payload=result;job.save(update_fields=["result_payload","updated_at"])
+                models.AuditEvent.objects.create(actor=request.user,action="device_template.version_activated",target_type="DeviceTemplate",
+                    target_id=locked.id,correlation_id=getattr(request,"correlation_id",""),metadata={"version":number,
+                        "previous_version_id":expected,"kind":version.containerlab_kind,"verified":data["verified"],"metadata_fields":changed})
+        except IntegrityError: return Response({"error":{"code":"template_version_conflict"}},status=409)
+        return Response(result,status=201)
 
 class ProjectViewSet(viewsets.ModelViewSet):
     serializer_class=serializers.ProjectSerializer; permission_classes=[ProjectAccess]
