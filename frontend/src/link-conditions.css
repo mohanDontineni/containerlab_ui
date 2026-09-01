@@ -1,0 +1,17 @@
+.link-condition-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 8px;
+}
+
+.link-condition-grid label:last-child {
+  grid-column: 1 / -1;
+}
+
+.field-help {
+  display: block;
+  color: #526d82;
+  font-size: 8px;
+  line-height: 1.45;
+  margin: -7px 0 13px;
+}

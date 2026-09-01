@@ -35,6 +35,7 @@ import "./configuration.css";
 import "./annotations.css";
 import "./bulk-selection.css";
 import "./edit-lease.css";
+import "./link-conditions.css";
 import "./preflight.css";
 import "./interop.css";
 import { alignSelectedNodes, arrangeTopology, duplicateSubgraph, interfaceFromHandle } from "./topology-utils";
@@ -92,6 +93,8 @@ type SavedLink = {
   label: string;
   properties: Record<string, unknown>;
 };
+const linkProperties=(value:unknown)=>value&&typeof value==="object"?value as Record<string,unknown>:{};
+const linkStyle=(value:unknown)=>{const properties=linkProperties(value);if(properties.adminState==="disabled")return {stroke:"#e16878",strokeDasharray:"6 6"};if(["latencyMs","jitterMs","lossPercent","corruptionPercent","rateKbps"].some(key=>Number(properties[key]||0)>0))return {stroke:"#f1b85b",strokeDasharray:"3 5"};return undefined};
 type TopologyAnnotation = { id:string;type:"note"|"region";x:number;y:number;width:number;height:number;
   text:string;color:"cyan"|"blue"|"violet"|"amber"|"rose"|"green"|"slate";fontSize:number;zIndex:number };
 type Snapshot = { nodes: Node<DeviceData>[]; edges: Edge[]; annotations:TopologyAnnotation[] };
@@ -305,7 +308,7 @@ function Workspace() {
             type: "smoothstep",
             markerEnd: { type: MarkerType.ArrowClosed },
             data: { properties: l.properties },
-            style: l.properties?.adminState==="disabled"?{stroke:"#e16878",strokeDasharray:"6 6"}:undefined,
+            style: linkStyle(l.properties),
           })),
         );
         setAnnotations(Array.isArray(doc.annotations)?doc.annotations:[]);
@@ -1118,13 +1121,25 @@ function Workspace() {
               <label>
                 Link state
                 <select value={String((selectedEdge.data?.properties as Record<string,unknown>|undefined)?.adminState||"enabled")} onChange={(event)=>{
-                  snapshot();const adminState=event.target.value;setEdges(current=>current.map(edge=>edge.id===selectedEdge.id?{...edge,data:{...edge.data,properties:adminState==="disabled"?{adminState:"disabled"}:{}},style:adminState==="disabled"?{stroke:"#e16878",strokeDasharray:"6 6"}:undefined}:edge));setDirty(true)
+                  snapshot();const adminState=event.target.value;setEdges(current=>current.map(edge=>{if(edge.id!==selectedEdge.id)return edge;const properties={...linkProperties(edge.data?.properties)};if(adminState==="disabled")properties.adminState="disabled";else delete properties.adminState;return {...edge,data:{...edge.data,properties},style:linkStyle(properties)}}));setDirty(true)
                 }}>
                   <option value="enabled">Enabled</option>
                   <option value="disabled">Shut down on deployment</option>
                 </select>
-                <small className="field-help">The saved shutdown is applied after both endpoints become ready and restored after launcher replacement.</small>
+                <small className="field-help">Saved state is applied after both endpoints become ready and replayed after launcher replacement.</small>
               </label>
+              <div className="link-condition-grid">
+                {[
+                  ["latencyMs","Latency ms",0,2000,1],
+                  ["jitterMs","Jitter ms",0,1000,1],
+                  ["lossPercent","Loss %",0,100,0.1],
+                  ["corruptionPercent","Corrupt %",0,100,0.1],
+                  ["rateKbps","Rate Kbit/s",0,10000000,1],
+                ].map(([key,label,min,max,step])=><label key={String(key)}>{label}<input type="number" min={Number(min)} max={Number(max)} step={Number(step)} value={Number(linkProperties(selectedEdge.data?.properties)[String(key)]||0)} onChange={event=>{
+                  snapshot();const number=Number(event.target.value);setEdges(current=>current.map(edge=>{if(edge.id!==selectedEdge.id)return edge;const properties={...linkProperties(edge.data?.properties)};if(number>0)properties[String(key)]=number;else delete properties[String(key)];return {...edge,data:{...edge.data,properties},style:linkStyle(properties)}}));setDirty(true)
+                }}/></label>)}
+              </div>
+              <small className="field-help">Jitter requires latency. Rate is zero or 64–10,000,000 Kbit/s. Percentages support 0–100.</small>
               <button className="danger" onClick={removeSelected}>
                 Remove link
               </button>

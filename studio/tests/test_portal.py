@@ -401,20 +401,27 @@ def test_topology_workspace_persists_device_interfaces_and_links(client):
     payload = {"editVersion": 0, "nodes": [
         {"id": a, "name": "router-1", "templateVersionId": str(template.id), "position": {"x": 10, "y": 20},"properties":{"startupOrder":20}},
         {"id": b, "name": "router-2", "templateVersionId": str(template.id), "position": {"x": 210, "y": 20},"properties":{"startupOrder":10}},
-    ], "links": [{"id": link, "sourceNode": a, "sourceInterface": "eth1", "targetNode": b, "targetInterface": "eth1","properties":{"adminState":"disabled"}}]}
+    ], "links": [{"id": link, "sourceNode": a, "sourceInterface": "eth1", "targetNode": b, "targetInterface": "eth1","properties":{"adminState":"disabled","latencyMs":120,"jitterMs":10,"lossPercent":1.5,"corruptionPercent":0.2,"rateKbps":10000}}]}
     response = client.put(f"/api/v1/labs/{lab.id}/topology/", json.dumps(payload), content_type="application/json")
     assert response.status_code == 200
     lab.refresh_from_db()
     assert LabNode.objects.filter(revision=lab.current_draft).count() == 2
     assert LabLink.objects.filter(revision=lab.current_draft).count() == 1
     document = client.get(f"/api/v1/labs/{lab.id}/topology/").json()
-    assert document["links"][0]["sourceInterface"] == "eth1" and document["links"][0]["properties"]=={"adminState":"disabled"}
+    assert document["links"][0]["sourceInterface"] == "eth1" and document["links"][0]["properties"]=={
+        "adminState":"disabled","latencyMs":120,"jitterMs":10,"lossPercent":1.5,"corruptionPercent":0.2,"rateKbps":10000}
     assert {node["name"]:node["properties"]["startupOrder"] for node in document["nodes"]}=={"router-1":20,"router-2":10}
     audit=AuditEvent.objects.get(action="lab.topology_saved",target_id=lab.current_draft_id)
     assert audit.metadata["node_count"]==2 and audit.metadata["link_count"]==1 and audit.metadata["startup_plan_nodes"]==2 and "startupConfiguration" not in audit.metadata
     payload["editVersion"]=response.json()["editVersion"];payload["links"][0]["properties"]={"adminState":"broken"}
     invalid_link=client.put(f"/api/v1/labs/{lab.id}/topology/",json.dumps(payload),content_type="application/json")
     assert invalid_link.status_code==422 and "Link state" in invalid_link.json()["error"]
+    payload["links"][0]["properties"]={"jitterMs":10}
+    invalid_jitter=client.put(f"/api/v1/labs/{lab.id}/topology/",json.dumps(payload),content_type="application/json")
+    assert invalid_jitter.status_code==422 and "jitterMs requires" in invalid_jitter.json()["error"]
+    payload["links"][0]["properties"]={"rateKbps":1}
+    invalid_rate=client.put(f"/api/v1/labs/{lab.id}/topology/",json.dumps(payload),content_type="application/json")
+    assert invalid_rate.status_code==422 and "rateKbps" in invalid_rate.json()["error"]
     payload["links"][0]["properties"]={"adminState":"disabled"};payload["nodes"][0]["properties"]["startupOrder"]=251
     rejected=client.put(f"/api/v1/labs/{lab.id}/topology/",json.dumps(payload),content_type="application/json")
     assert rejected.status_code==422 and "startup order" in rejected.json()["error"]

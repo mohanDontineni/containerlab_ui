@@ -8,6 +8,16 @@ DISABLED_CONDITION = {
     "rate_kbps": 0,
 }
 
+INTEGER_FIELDS = {
+    "latencyMs": ("latency_ms", 2000),
+    "jitterMs": ("jitter_ms", 1000),
+    "rateKbps": ("rate_kbps", 10_000_000),
+}
+PERCENT_FIELDS = {
+    "lossPercent": "loss_percent",
+    "corruptionPercent": "corruption_percent",
+}
+
 
 def normalize_link_properties(value):
     if not isinstance(value, dict):
@@ -15,15 +25,47 @@ def normalize_link_properties(value):
     state = value.get("adminState", "enabled")
     if state not in ("enabled", "disabled"):
         raise ValueError("Link state must be enabled or disabled")
-    return {"adminState": "disabled"} if state == "disabled" else {}
+    result = {"adminState": "disabled"} if state == "disabled" else {}
+    for source, (_, maximum) in INTEGER_FIELDS.items():
+        number = value.get(source, 0)
+        if isinstance(number, bool) or not isinstance(number, int) or number < 0 or number > maximum:
+            raise ValueError(f"{source} is outside its supported range")
+        if number:
+            result[source] = number
+    for source in PERCENT_FIELDS:
+        number = value.get(source, 0)
+        if isinstance(number, bool) or not isinstance(number, (int, float)) or number < 0 or number > 100:
+            raise ValueError(f"{source} must be between 0 and 100")
+        if number:
+            result[source] = float(number)
+    if result.get("jitterMs") and not result.get("latencyMs"):
+        raise ValueError("jitterMs requires non-zero latencyMs")
+    if result.get("rateKbps", 0) and result["rateKbps"] < 64:
+        raise ValueError("rateKbps must be zero or at least 64")
+    return result
+
+
+def runtime_condition(properties):
+    properties = normalize_link_properties(properties)
+    condition = dict(DISABLED_CONDITION)
+    condition["disabled"] = properties.get("adminState") == "disabled"
+    for source, (target, _) in INTEGER_FIELDS.items():
+        condition[target] = properties.get(source, 0)
+    for source, target in PERCENT_FIELDS.items():
+        condition[target] = properties.get(source, 0.0)
+    condition["active"] = condition["disabled"] or any(
+        condition[field] for field in ("latency_ms", "jitter_ms", "loss_percent", "corruption_percent", "rate_kbps")
+    )
+    return condition
 
 
 def initial_link_conditions(revision):
-    return {
-        str(link.id): dict(DISABLED_CONDITION)
-        for link in revision.links.all()
-        if link.properties.get("adminState") == "disabled"
-    }
+    conditions = {}
+    for link in revision.links.all():
+        condition = runtime_condition(link.properties)
+        if condition["active"]:
+            conditions[str(link.id)] = condition
+    return conditions
 
 
 def runtime_endpoint_signature(deployment, link):

@@ -13,6 +13,7 @@ from studio.models import (AuditEvent, CaptureSession, ConsoleSession, Deploymen
     ConfigurationVersion, LabArtifact, LabInterface, LabLink, LabNode, LabRevision, OperationJob, Project, ProjectMembership, PublishedImage, UploadSession, User)
 from studio.tasks import dispatch_due_schedules, execute_operation, execute_staged_start, reconcile_active_deployments, reconcile_deployment
 from studio.quotas import project_usage
+from studio.link_conditions import initial_link_conditions
 
 def test_web_process_uses_configured_celery_broker():
     assert execute_operation.app.conf.broker_url == settings.CELERY_BROKER_URL
@@ -1680,14 +1681,15 @@ def test_reconciliation_drops_manual_lifecycle_after_launcher_replacement(monkey
     assert device.observed_readiness=="ready" and "manual_lifecycle" not in device.runtime_resources
 
 @pytest.mark.django_db
-def test_reconciliation_applies_saved_link_shutdown_once_and_reapplies_after_launcher_replacement(monkeypatch):
+def test_reconciliation_applies_saved_link_profile_once_and_reapplies_after_launcher_replacement(monkeypatch):
     owner=User.objects.create_user("reconcile-link",password="long-enough-password");project=Project.objects.create(owner=owner,name="reconcile-link-project")
     lab=Lab.objects.create(project=project,name="reconcile-link-lab");revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="7"*64,immutable=True)
     template=DeviceTemplateVersion.objects.filter(containerlab_kind="linux").first()
     a=LabNode.objects.create(revision=revision,name="a",template_version=template);b=LabNode.objects.create(revision=revision,name="b",template_version=template)
     ia=LabInterface.objects.create(node=a,name="eth1");ib=LabInterface.objects.create(node=b,name="eth1")
-    link=LabLink.objects.create(revision=revision,endpoint_a=ia,endpoint_b=ib,properties={"adminState":"disabled"})
-    condition={"active":True,"disabled":True,"latency_ms":0,"jitter_ms":0,"loss_percent":0.0,"corruption_percent":0.0,"rate_kbps":0}
+    link=LabLink.objects.create(revision=revision,endpoint_a=ia,endpoint_b=ib,properties={"latencyMs":120,"jitterMs":15,"lossPercent":1.5,"corruptionPercent":0.2,"rateKbps":10000})
+    condition={"active":True,"disabled":False,"latency_ms":120,"jitter_ms":15,"loss_percent":1.5,"corruption_percent":0.2,"rate_kbps":10000}
+    assert initial_link_conditions(revision)=={str(link.id):condition}
     deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-reconcile-link",runtime_version="0.8.0",observed_state="running",
         resource_identities={"link_conditions":{str(link.id):condition},"link_condition_applied_to":{str(link.id):["old-a","old-b"]}})
     applied=[]
