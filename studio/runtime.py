@@ -282,7 +282,7 @@ class ClabernetesAdapter:
             f"tcpdump -n -s 256 -i {shlex.quote(host_interface)} -c {packet_limit} -U -w \"$capture_file\" 2>/dev/null & "
             "capture_pid=$!; "
             f"sleep {duration}; "
-            f"ping6 -f -c {packet_limit} -w 3 -p {stop_pattern} {shlex.quote(scoped_stop_target)} >/dev/null 2>&1 & "
+            f"ping6 -l {packet_limit} -c {packet_limit} -w 3 -p {stop_pattern} {shlex.quote(scoped_stop_target)} >/dev/null 2>&1 & "
             "filler_pid=$!; wait \"$capture_pid\"; wait \"$filler_pid\" 2>/dev/null || true; "
             "printf '__STUDIO_PCAP_BEGIN__'; base64 -w 0 \"$capture_file\"; printf '__STUDIO_PCAP_END__'"
         )
