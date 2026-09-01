@@ -31,7 +31,8 @@
 - Explicit GUI-only operator contract: topology Backup/Restore is labeled as a product-native bundle workflow, while Containerlab/Kubernetes YAML remains internal to the validated runtime adapter.
 - Bounded per-device appliance and Clabernetes launcher log inspection through audited worker jobs, with operator authorization, selectable 20-1000 line limits, 100 KB output caps, no-store polling, refresh, and copy controls.
 - Server-validated lab backup restore preview with bundle checksum, topology/configuration/template/image inventory, deployability issues, explicit impact confirmation, stale-draft protection, idempotent replay, immutable/running revision preservation, and audit events.
-- A 27-screen, read-only Firefox training capture catalog covering projects, labs, visual topology design, verified backup/restore, images, deployment/device lifecycle, safe redeploy preview, runtime logs, link controls, diagnostics, packet capture, console, configuration history, templates, jobs, security, and API discovery.
+- Audited configuration-version comparison and safe restore with same-device validation, bounded no-store unified diffs, explicit impact preview, stale-draft protection, idempotent replay, newly encrypted draft configuration versions, and immutable/running revision preservation.
+- A 29-screen, read-only Firefox training capture catalog covering projects, labs, visual topology design, verified backup/restore, images, deployment/device lifecycle, safe redeploy preview, runtime logs, link controls, diagnostics, packet capture, console, configuration history/compare/restore, templates, jobs, security, and API discovery.
 
 ## Acceptance results
 
@@ -74,8 +75,9 @@
 | 35 | Safe whole-lab redeploy | PASS | Firefox verified the read-only impact preview; an authenticated audited redeploy recreated a stopped two-device/one-link Alpine runtime from pinned revision 1, reached 2/2 ready and `running`, and a final stop restored its original stopped state. |
 | 36 | Device and launcher logs | PASS | Authenticated worker jobs collected 2,682 bytes of live FRR appliance startup output and 11,799 bytes of Clabernetes launcher output for the same router; both completed successfully through bounded, audited, no-store GUI contracts. |
 | 37 | Restored topology runtime | PASS | The independently restored two-router BGP backup reached 2/2 ready after audited node-local image repair; product diagnostics passed 3/3 with 0% loss in both directions, the test runtime was stopped, and the displaced capacity runtime was returned to running. |
+| 38 | Configuration compare and safe restore | PASS | Firewall collected versions 1 and 2 were compared through the authenticated no-store API; version 2 then produced editable revision 2 under idempotency and draft-concurrency protection while the original immutable deployment remained running with 3/3 devices ready and an unchanged revision. |
 
-Automated tests: **100 passed**. Django checks and migration drift checks: **pass**. React TypeScript/Vite production build: **pass**. Firefox training capture: **27 live screens passed**. Helm lint/render: **pass**. Native runtime ping: **3 transmitted, 3 received, 0% loss, 0.445 ms average RTT**. Bidirectional 120 ms link condition: **240.563 ms average RTT**. Disabled link: **100% loss**. Restored qdiscs: **native `noqueue` on both endpoints**.
+Automated tests: **101 passed**. Django checks and migration drift checks: **pass**. React TypeScript/Vite production build: **pass**. Firefox training capture: **29 live screens passed**. Helm lint/render: **pass**. Native runtime ping: **3 transmitted, 3 received, 0% loss, 0.445 ms average RTT**. Bidirectional 120 ms link condition: **240.563 ms average RTT**. Disabled link: **100% loss**. Restored qdiscs: **native `noqueue` on both endpoints**.
 
 ## Known limitations
 

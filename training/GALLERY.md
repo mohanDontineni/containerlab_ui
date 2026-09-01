@@ -163,3 +163,15 @@ The operator opens the device inspector from a live device, switches between app
 ![Backup restore preview](27-backup-restore-preview.png)
 
 After selecting a product-native backup, the server validates its format, checksum, templates, images, interfaces, and deployability without changing the lab. The operator reviews device, link, configuration, image, draft, published-revision, and active-deployment impact before explicitly confirming restore.
+
+## 28 — Configuration version comparison
+
+![Configuration comparison](28-configuration-compare.png)
+
+The operator selects two encrypted, immutable versions collected from the same device and opens an audited, no-store unified comparison. Identical versions are reported explicitly; changed versions show a bounded 256 KiB diff without placing configuration content in job or audit metadata.
+
+## 29 — Safe configuration restore preview
+
+![Configuration restore preview](29-configuration-restore-preview.png)
+
+Before restoring a collected configuration, the operator reviews the device, version, checksum, source revision, and impact. Confirmation creates a new editable draft pinned to the selected content while the running deployment, immutable revision, and collected history remain unchanged until the operator explicitly deploys the draft.

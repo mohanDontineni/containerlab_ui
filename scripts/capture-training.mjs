@@ -178,6 +178,22 @@ try {
       await panel.scrollIntoViewIfNeeded();
       return panel;
     });
+    await capture("28-configuration-compare.png", configurationHref, async (p) => {
+      const versions = p.locator("#configuration-list article").filter({ hasText: /firewall/i });
+      if ((await versions.count()) < 2) throw new Error("Two collected versions for one device are required");
+      await versions.nth(0).locator('input[type="checkbox"]').check();
+      await versions.nth(1).locator('input[type="checkbox"]').check();
+      await p.locator("#compare-configurations").click();
+      const dialog = p.locator("#configuration-compare-dialog");
+      await dialog.waitFor();
+      return dialog;
+    });
+    await capture("29-configuration-restore-preview.png", configurationHref, async (p) => {
+      await p.locator("button[data-restore-configuration]:not([disabled])").first().click();
+      const dialog = p.locator("#configuration-restore-dialog");
+      await dialog.waitFor();
+      return dialog;
+    });
     await capture("25-redeploy-preview.png", deploymentHref, async (p) => {
       await p.locator("#redeploy-runtime").click();
       const dialog = p.locator("#redeploy-dialog");
