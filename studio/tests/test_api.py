@@ -310,6 +310,35 @@ def test_diagnostic_rejects_non_ip_targets_before_scheduling():
     assert response.data["error"]["code"]=="invalid_target"
 
 @pytest.mark.django_db
+def test_traceroute_diagnostic_is_bounded_idempotent_audited_and_executed(monkeypatch):
+    monkeypatch.setattr("studio.api.execute_operation.delay",lambda *_:None)
+    owner=User.objects.create_user("trace-owner",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="trace-project");lab=Lab.objects.create(project=project,name="trace-lab")
+    revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="e"*64,immutable=True)
+    node=LabNode.objects.create(revision=revision,name="r1",template_version=DeviceTemplateVersion.objects.get(template__name="FRR Router"))
+    deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-trace",runtime_version="0.8.0",observed_state="running")
+    DeviceInstance.objects.create(deployment=deployment,lab_node=node,observed_readiness="ready",runtime_resources={"pod":"r1-pod"})
+    client=APIClient();client.force_authenticate(owner);endpoint=f"/api/v1/deployments/{deployment.id}/diagnostics/"
+    payload={"operation":"traceroute","node_id":str(node.id),"target":"10.2.2.2","max_hops":20,"timeout":2,"probes":1}
+    invalid=client.post(endpoint,{**payload,"max_hops":31},format="json",HTTP_IDEMPOTENCY_KEY="bad-trace")
+    assert invalid.status_code==422 and invalid.data["error"]["code"]=="invalid_bounds"
+    first=client.post(endpoint,payload,format="json",HTTP_IDEMPOTENCY_KEY="trace-once")
+    second=client.post(endpoint,payload,format="json",HTTP_IDEMPOTENCY_KEY="trace-once")
+    assert first.status_code==second.status_code==202 and first.data["id"]==second.data["id"]
+    conflict=client.post(endpoint,{**payload,"target":"10.3.3.3"},format="json",HTTP_IDEMPOTENCY_KEY="trace-once")
+    assert conflict.status_code==409 and conflict.data["error"]["code"]=="idempotency_conflict"
+    assert AuditEvent.objects.filter(action="diagnostic.scheduled",target_id=deployment.id,metadata__operation="traceroute").count()==1
+    class Adapter:
+        def traceroute(self,received_deployment,received_node,target,max_hops,timeout,probes):
+            assert (received_deployment.id,received_node.id,target,max_hops,timeout,probes)==(deployment.id,node.id,"10.2.2.2",20,2,1)
+            return {"node":"r1","target":target,"command":"traceroute","max_hops":max_hops,"timeout":timeout,"probes":probes,
+                "output":"1 10.0.0.2 0.4 ms\n2 10.2.2.2 0.6 ms\n"}
+    monkeypatch.setattr("studio.tasks.ClabernetesAdapter",Adapter);execute_operation.run(str(first.data["id"]))
+    job=OperationJob.objects.get(id=first.data["id"]);deployment.refresh_from_db()
+    assert job.state=="succeeded" and job.result_payload["command"]=="traceroute" and "10.2.2.2" in job.result_payload["output"]
+    assert deployment.observed_state=="running"
+
+@pytest.mark.django_db
 def test_runtime_device_contract_exposes_logical_node_identity():
     owner=User.objects.create_user("device-owner",password="long-enough-password")
     project=Project.objects.create(owner=owner,name="devices")

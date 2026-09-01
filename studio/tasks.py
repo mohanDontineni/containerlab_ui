@@ -29,9 +29,13 @@ def execute_operation(self,job_id):
             published,_=PublishedImage.objects.update_or_create(artifact=artifact,registry_digest=result["reference"],defaults={"build":build,"repository":result["repository"],"architecture":artifact.architecture,"compatibility_result":{k:v for k,v in result.items() if k!="logs"},"lifecycle_status":"ready"})
             build.status="succeeded"; build.finished_at=timezone.now(); build.log_reference=f"kubernetes-job/{build.job_identity}"; build.failure_details={}; build.save()
             result={**{k:v for k,v in result.items() if k!="logs"},"published_image_id":str(published.id)}
-        elif job.operation_type=="ping":
+        elif job.operation_type in ("ping","traceroute"):
             node=LabNode.objects.get(pk=job.request_payload["node_id"],revision=job.deployment.revision)
-            result=adapter.ping(job.deployment,node,job.request_payload["target"],job.request_payload["count"],job.request_payload["timeout"])
+            if job.operation_type=="ping":
+                result=adapter.ping(job.deployment,node,job.request_payload["target"],job.request_payload["count"],job.request_payload["timeout"])
+            else:
+                result=adapter.traceroute(job.deployment,node,job.request_payload["target"],job.request_payload["max_hops"],
+                    job.request_payload["timeout"],job.request_payload["probes"])
         elif job.operation_type=="capture_packets":
             capture=CaptureSession.objects.select_related("interface__node").get(pk=job.target_id,deployment=job.deployment)
             capture.status="capturing"; capture.save(update_fields=["status","updated_at"])
@@ -96,13 +100,13 @@ def execute_operation(self,job_id):
             deployment.error_details={}
             deployment.save(update_fields=["observed_state","resource_identities","last_reconciliation","error_details","updated_at"])
         job.state="succeeded"; job.progress=100; job.error_details={}
-        if job.operation_type in ("publish_image","ping","capture_packets","set_link_condition") or job.operation_type in device_operations: job.result_payload=result
+        if job.operation_type in ("publish_image","ping","traceroute","capture_packets","set_link_condition") or job.operation_type in device_operations: job.result_payload=result
     except Exception as exc:
         if job.operation_type=="publish_image":
             ImageBuild.objects.filter(pk=job.request_payload.get("build_id")).update(status="failed",finished_at=timezone.now(),failure_details={"type":type(exc).__name__,"message":str(exc)[:2000]})
             if job.request_payload.get("force"): PublishedImage.objects.filter(artifact_id=job.target_id,lifecycle_status="reconciling").update(lifecycle_status="failed")
         if job.operation_type=="capture_packets": CaptureSession.objects.filter(pk=job.target_id).update(status="failed")
-        if job.deployment_id and job.operation_type not in ("ping","capture_packets","set_link_condition",*device_operations):
+        if job.deployment_id and job.operation_type not in ("ping","traceroute","capture_packets","set_link_condition",*device_operations):
             LabDeployment.objects.filter(pk=job.deployment_id).update(observed_state=LabDeployment.State.FAILED,
                 error_details={"type":type(exc).__name__,"message":str(exc)[:2000]},last_reconciliation=timezone.now())
         job.state="failed"; job.error_details={"type":type(exc).__name__,"message":str(exc)[:2000]}; raise

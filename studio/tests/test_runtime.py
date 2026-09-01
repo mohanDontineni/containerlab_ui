@@ -26,6 +26,22 @@ def test_verified_collector_executes_inside_selected_appliance(monkeypatch):
     assert calls[0][2]["command"]==["docker","exec","r1","vtysh","-c","show running-config"]
     assert calls[0][2]["_request_timeout"]==15
 
+def test_traceroute_is_bounded_and_executes_inside_selected_appliance(monkeypatch):
+    calls=[]
+    monkeypatch.setattr("studio.runtime.stream",lambda method,pod,namespace,**kwargs:calls.append((pod,namespace,kwargs)) or
+        "traceroute to 10.2.2.2, 20 hops max\n 1  10.0.0.2  0.4 ms\n 2  10.2.2.2  0.6 ms\n")
+    core=SimpleNamespace(connect_get_namespaced_pod_exec=object())
+    adapter=ClabernetesAdapter(custom_api=SimpleNamespace(),core_api=core)
+    node=SimpleNamespace(name="r1")
+    device=SimpleNamespace(runtime_resources={"pod":"r1-pod"})
+    deployment=SimpleNamespace(namespace="lab-one",devices=SimpleNamespace(select_related=lambda *_:SimpleNamespace(get=lambda **_:device)))
+    result=adapter.traceroute(deployment,node,"10.2.2.2",20,2,1)
+    assert result["command"]=="traceroute" and result["max_hops"]==20 and "10.2.2.2" in result["output"]
+    assert calls[0][2]["command"]==["docker","exec","r1","traceroute","-n","-m","20","-w","2","-q","1","10.2.2.2"]
+    try: adapter.traceroute(deployment,node,"10.2.2.2",31,2,1)
+    except CapabilityError as exc: assert "bounds" in str(exc)
+    else: raise AssertionError("must enforce traceroute bounds")
+
 def test_plan_uses_clabernetes_080_string_definition():
     node=SimpleNamespace(name="r1",template_version=SimpleNamespace(containerlab_kind="linux"),published_image=SimpleNamespace(registry_digest="registry/alpine@sha256:abc"))
     nodes=SimpleNamespace(select_related=lambda *_:[node])

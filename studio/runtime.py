@@ -42,7 +42,8 @@ class Plan: namespace:str; topology_name:str; manifest:dict; config_maps:tuple=(
 class ClabernetesAdapter:
     capabilities={"deploy_lab":"supported","get_observed_state":"supported","delete_runtime":"supported","restart_device":"supported",
         "stop_device":"supported","start_device":"supported","resolve_console_target":"supported","start_capture":"experimental",
-        "stop_lab":"delete_and_redeploy","set_link_condition":"supported","collect_configuration":"template_dependent","get_device_logs":"supported"}
+        "stop_lab":"delete_and_redeploy","set_link_condition":"supported","collect_configuration":"template_dependent","get_device_logs":"supported",
+        "ping":"supported","traceroute":"supported"}
     def __init__(self, custom_api=None, core_api=None, batch_api=None, apps_api=None):
         if custom_api is None:
             try: config.load_incluster_config()
@@ -178,6 +179,17 @@ class ClabernetesAdapter:
         command=["docker","exec",node.name,"ping","-c",str(count),"-W",str(timeout),target]
         output=stream(self.core.connect_get_namespaced_pod_exec,pod,deployment.namespace,command=command,stderr=True,stdin=False,stdout=True,tty=False)
         return {"node":node.name,"target":target,"command":"ping","output":output[-12000:]}
+    def traceroute(self,deployment,node,target,max_hops=20,timeout=2,probes=1):
+        if not 3<=max_hops<=30 or not 1<=timeout<=5 or not 1<=probes<=3:
+            raise CapabilityError("Traceroute bounds are invalid")
+        device=deployment.devices.select_related("lab_node").get(lab_node=node)
+        pod=device.runtime_resources.get("pod")
+        if not pod: raise CapabilityError("The device launcher pod is not ready")
+        command=["docker","exec",node.name,"traceroute","-n","-m",str(max_hops),"-w",str(timeout),"-q",str(probes),target]
+        output=stream(self.core.connect_get_namespaced_pod_exec,pod,deployment.namespace,command=command,
+            stderr=True,stdin=False,stdout=True,tty=False,_request_timeout=min(45,max_hops*timeout+5))
+        return {"node":node.name,"target":target,"command":"traceroute","max_hops":max_hops,"timeout":timeout,
+            "probes":probes,"output":output[-24000:]}
     def capture_packets(self,deployment,node,interface,duration=10,packet_limit=500):
         if not 1<=duration<=30 or not 1<=packet_limit<=5000: raise CapabilityError("Capture bounds are invalid")
         device=deployment.devices.get(lab_node=node)

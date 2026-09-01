@@ -591,22 +591,48 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=True,methods=["post"])
     def diagnostics(self,request,pk=None):
         deployment=self.get_object(); self._require_operator(deployment)
+        operation=str(request.data.get("operation","ping"))
+        if operation not in ("ping","traceroute"):
+            return Response({"error":{"code":"unsupported_diagnostic","details":"Choose ping or traceroute."}},status=422)
         try: target=str(ipaddress.ip_address(request.data.get("target","")))
         except ValueError: return Response({"error":{"code":"invalid_target","details":"Enter a valid IPv4 or IPv6 address."}},status=422)
         try: node_id=uuid.UUID(str(request.data.get("node_id")))
         except (ValueError,TypeError,AttributeError): return Response({"error":{"code":"invalid_node"}},status=422)
-        if not deployment.revision.nodes.filter(id=node_id).exists(): return Response({"error":{"code":"invalid_node"}},status=422)
-        count=request.data.get("count",3); timeout=request.data.get("timeout",2)
-        if not isinstance(count,int) or not 1<=count<=5 or not isinstance(timeout,int) or not 1<=timeout<=5:
-            return Response({"error":{"code":"invalid_bounds","details":"Count and timeout must be between 1 and 5."}},status=422)
+        node=deployment.revision.nodes.filter(id=node_id).first()
+        if not node: return Response({"error":{"code":"invalid_node"}},status=422)
+        device=deployment.devices.filter(lab_node=node).first()
+        if not device or device.observed_readiness!="ready" or not device.runtime_resources.get("pod"):
+            return Response({"error":{"code":"device_not_ready","details":"Choose a ready device with active compute."}},status=409)
+        timeout=request.data.get("timeout",2)
+        if not isinstance(timeout,int) or isinstance(timeout,bool) or not 1<=timeout<=5:
+            return Response({"error":{"code":"invalid_bounds","details":"Timeout must be between 1 and 5 seconds."}},status=422)
+        if operation=="ping":
+            count=request.data.get("count",3)
+            if not isinstance(count,int) or isinstance(count,bool) or not 1<=count<=5:
+                return Response({"error":{"code":"invalid_bounds","details":"Ping count must be between 1 and 5."}},status=422)
+            payload={"node_id":str(node_id),"target":target,"count":count,"timeout":timeout}
+        else:
+            max_hops=request.data.get("max_hops",20);probes=request.data.get("probes",1)
+            if (not isinstance(max_hops,int) or isinstance(max_hops,bool) or not 3<=max_hops<=30 or
+                not isinstance(probes,int) or isinstance(probes,bool) or not 1<=probes<=3):
+                return Response({"error":{"code":"invalid_bounds","details":"Traceroute allows 3-30 hops and 1-3 probes per hop."}},status=422)
+            payload={"node_id":str(node_id),"target":target,"max_hops":max_hops,"timeout":timeout,"probes":probes}
         key=request.headers.get("Idempotency-Key")
         if not key: return Response({"error":{"code":"idempotency_key_required"}},status=400)
         job=models.OperationJob.objects.filter(owner=request.user,idempotency_key=key).first()
-        if not job:
-            try: job=models.OperationJob.objects.create(deployment=deployment,owner=request.user,operation_type="ping",target_id=deployment.id,
-                idempotency_key=key,state="scheduled",request_payload={"node_id":str(node_id),"target":target,"count":count,"timeout":timeout})
+        if job:
+            if job.deployment_id!=deployment.id or job.operation_type!=operation or job.request_payload!=payload:
+                return Response({"error":{"code":"idempotency_conflict"}},status=409)
+        else:
+            try:
+                job=models.OperationJob.objects.create(deployment=deployment,owner=request.user,operation_type=operation,target_id=deployment.id,
+                    idempotency_key=key,state="scheduled",request_payload=payload)
             except IntegrityError:
                 return Response({"error":{"code":"diagnostic_in_progress","details":"Wait for the active diagnostic to finish."}},status=409)
+            models.AuditEvent.objects.create(actor=request.user,project=deployment.revision.lab.project,action="diagnostic.scheduled",
+                target_type="LabDeployment",target_id=deployment.id,correlation_id=getattr(request,"correlation_id",""),
+                metadata={"operation":operation,"node":node.name,"target":target,**({"count":payload["count"]} if operation=="ping" else
+                    {"max_hops":payload["max_hops"],"probes":payload["probes"]}),"timeout":timeout,"operation_job":str(job.id)})
         if job.state in ("accepted","scheduled"): execute_operation.delay(str(job.id))
         return Response(serializers.OperationSerializer(job).data,status=202)
     @action(detail=True,methods=["get","post"],url_path="link-conditions")

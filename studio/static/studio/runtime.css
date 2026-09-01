@@ -5,6 +5,9 @@
 .device-actions button:disabled { opacity: .35; cursor: not-allowed; }
 @media(max-width: 850px) { .device-runtime-list article { grid-template-columns: 38px minmax(130px,1fr) 90px auto; } .worker-chip { display:none; } }
 .capture-bounds { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+.diagnostic-bounds { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
+.diagnostic-bounds label[hidden] { display:none; }
+@media(max-width:620px) { .diagnostic-bounds { grid-template-columns:1fr 1fr; } }
 .capture-list { padding: 4px 16px 14px; max-height: 260px; overflow:auto; }
 .capture-list article { min-height:58px; display:grid; grid-template-columns:minmax(130px,1fr) 90px auto; align-items:center; gap:10px; border-top:1px solid #172b3d; }
 .capture-list p { display:flex; flex-direction:column; margin:0; }
