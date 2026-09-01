@@ -1254,13 +1254,36 @@ def test_capture_download_is_scoped_and_streams_pcap(settings,tmp_path):
     revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="6"*64,immutable=True)
     node=LabNode.objects.create(revision=revision,name="r1",template_version=DeviceTemplateVersion.objects.filter(containerlab_kind="linux").first())
     interface=LabInterface.objects.create(node=node,name="eth1");deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-download-test",runtime_version="0.8.0")
-    path=tmp_path/"captures"/"sample.pcap";path.parent.mkdir();pcap=b"\xd4\xc3\xb2\xa1"+b"\x00"*20;path.write_bytes(pcap)
+    path=tmp_path/"captures"/str(deployment.id)/"sample.pcap";path.parent.mkdir(parents=True);pcap=b"\xd4\xc3\xb2\xa1"+b"\x00"*20;path.write_bytes(pcap)
     capture=CaptureSession.objects.create(deployment=deployment,interface=interface,owner=owner,status="complete",expires_at=timezone.now()+timezone.timedelta(hours=1),artifact_reference=str(path))
     client=APIClient();client.force_authenticate(owner)
     response=client.get(f"/api/v1/deployments/{deployment.id}/captures/{capture.id}/download/")
     assert response.status_code==200 and b"".join(response.streaming_content)==pcap
     client.force_authenticate(stranger)
     assert client.get(f"/api/v1/deployments/{deployment.id}/captures/{capture.id}/download/").status_code==404
+
+@pytest.mark.django_db
+def test_capture_analysis_is_bounded_scoped_and_no_store(settings,tmp_path):
+    import struct
+    settings.MEDIA_ROOT=tmp_path
+    owner=User.objects.create_user("capture-analysis",password="long-enough-password")
+    stranger=User.objects.create_user("capture-analysis-stranger",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="capture-analysis-project");lab=Lab.objects.create(project=project,name="capture-analysis-lab")
+    revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="a"*64,immutable=True)
+    node=LabNode.objects.create(revision=revision,name="r1",template_version=DeviceTemplateVersion.objects.filter(containerlab_kind="linux").first())
+    interface=LabInterface.objects.create(node=node,name="eth1");deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-analysis-test",runtime_version="0.8.0")
+    frame=bytes.fromhex("00112233445566778899aabb08004500001c00000000400100000a0000010a0000020800000000000000")
+    pcap=b"\xd4\xc3\xb2\xa1"+struct.pack("<HHiiii",2,4,0,0,65535,1)+struct.pack("<IIII",1,0,len(frame),len(frame))+frame
+    path=tmp_path/"captures"/str(deployment.id)/"analysis.pcap";path.parent.mkdir(parents=True);path.write_bytes(pcap)
+    capture=CaptureSession.objects.create(deployment=deployment,interface=interface,owner=owner,status="complete",expires_at=timezone.now()+timezone.timedelta(hours=1),artifact_reference=str(path))
+    client=APIClient();client.force_authenticate(owner)
+    response=client.get(f"/api/v1/deployments/{deployment.id}/captures/{capture.id}/analysis/")
+    assert response.status_code==200 and response.data["protocols"][0]["protocol"]=="ICMP"
+    assert response["Cache-Control"]=="no-store" and response["X-Content-Type-Options"]=="nosniff"
+    capture.status="capturing";capture.save(update_fields=["status"])
+    assert client.get(f"/api/v1/deployments/{deployment.id}/captures/{capture.id}/analysis/").status_code==409
+    client.force_authenticate(stranger)
+    assert client.get(f"/api/v1/deployments/{deployment.id}/captures/{capture.id}/analysis/").status_code==404
 
 @pytest.mark.django_db
 def test_capture_worker_persists_auditable_artifact_without_changing_lab_state(monkeypatch,settings,tmp_path):

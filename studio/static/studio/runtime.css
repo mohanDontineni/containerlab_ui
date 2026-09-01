@@ -13,6 +13,34 @@
 .capture-list p { display:flex; flex-direction:column; margin:0; }
 .capture-list strong { font-size:10px; }
 .capture-list small { color:#587187; font-size:8px; margin-top:4px; }
+.capture-actions { display:flex; gap:6px; justify-content:flex-end; }
+.packet-analysis-dialog { width:min(1180px,calc(100vw - 32px)); }
+.packet-analysis-summary { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin:18px 0; }
+.packet-analysis-summary article { padding:13px; border:1px solid #1d384d; border-radius:9px; background:#081725; }
+.packet-analysis-summary span,.packet-analysis-summary strong { display:block; }
+.packet-analysis-summary span { color:#668195; font-size:8px; text-transform:uppercase; letter-spacing:.08em; }
+.packet-analysis-summary strong { margin-top:5px; color:#d7e8f2; font:600 18px "JetBrains Mono",monospace; }
+.packet-analysis-grid { display:grid; grid-template-columns:minmax(260px,.8fr) minmax(400px,1.4fr); gap:12px; }
+.packet-analysis-grid>section,.packet-table-shell { border:1px solid #193247; border-radius:10px; background:#071420; overflow:hidden; }
+.packet-analysis-grid h3,.packet-table-shell h3 { margin:0; padding:11px 13px; border-bottom:1px solid #193247; color:#8ba5b7; font-size:10px; }
+#packet-protocols,#packet-conversations { max-height:190px; overflow:auto; padding:8px 12px; }
+#packet-protocols article { display:grid; grid-template-columns:70px 1fr; gap:4px 10px; padding:7px 0; }
+#packet-protocols span,#packet-protocols small,#packet-conversations small { color:#668195; font-size:8px; }
+#packet-protocols i { height:4px; border-radius:3px; background:#142a3a; overflow:hidden; }
+#packet-protocols i em { display:block; height:100%; background:#27b5c6; }
+#packet-conversations article { display:grid; grid-template-columns:50px 1fr auto; align-items:center; gap:8px; padding:8px 0; border-bottom:1px solid #14293a; }
+#packet-conversations p { margin:0; color:#aac0cf; font:9px "JetBrains Mono",monospace; }
+#packet-conversations p span { color:#27b5c6; }
+.packet-table-shell { margin-top:12px; max-height:330px; overflow:auto; }
+.packet-table-shell h3 { position:sticky; top:0; z-index:2; background:#071420; }
+.packet-table-shell h3 span { float:right; color:#567187; font-weight:400; }
+.packet-table-shell table { width:100%; border-collapse:collapse; font:9px/1.45 "JetBrains Mono",monospace; }
+.packet-table-shell th { position:sticky; top:34px; background:#0a1926; color:#567187; text-align:left; }
+.packet-table-shell th,.packet-table-shell td { padding:8px 10px; border-bottom:1px solid #14293a; }
+.packet-table-shell td { color:#a8bfce; }
+.packet-table-shell td small { display:block; color:#587187; margin-top:2px; }
+.packet-table-shell td em { color:#56c6d3; font-style:normal; }
+@media(max-width:760px){.packet-analysis-summary{grid-template-columns:1fr 1fr}.packet-analysis-grid{grid-template-columns:1fr}}
 .link-control-panel { grid-column: 1 / -1; }
 .link-control-list { padding: 4px 16px 16px; display:grid; gap:10px; }
 .link-control-list article { display:grid; grid-template-columns:minmax(220px,1.25fr) minmax(420px,2fr) auto; align-items:end; gap:14px; padding:14px; border:1px solid #193247; border-radius:9px; background:#091725; transition:opacity .2s,border-color .2s; }

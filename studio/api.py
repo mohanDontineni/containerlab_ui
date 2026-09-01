@@ -25,6 +25,7 @@ from .bundles import BundleError, LabBundleParser, export_lab_bundle, import_lab
 from .configurations import decrypt_configuration
 from .quotas import ProjectQuotaExceeded,normalized_quotas,project_usage,quota_exceeded,validate_quotas
 from .edit_leases import conflict_payload as edit_lease_conflict, is_active as edit_lease_active, valid_token as valid_edit_lease
+from .pcap import PcapError, analyze_pcap
 
 def require_edit_lease(request,lab):
     if edit_lease_active(lab) and not valid_edit_lease(lab,request.user,request.headers.get("X-Edit-Lease")):
@@ -1407,11 +1408,27 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
         except (ValueError,TypeError,AttributeError): return Response({"error":{"code":"invalid_capture"}},status=404)
         capture=models.CaptureSession.objects.select_related("interface__node").filter(id=capture_uuid,deployment=deployment,status="complete").first()
         if not capture: return Response({"error":{"code":"capture_not_ready"}},status=404)
-        root=Path(settings.MEDIA_ROOT).resolve(); path=Path(capture.artifact_reference).resolve()
+        root=(Path(settings.MEDIA_ROOT)/"captures"/str(deployment.id)).resolve(); path=Path(capture.artifact_reference).resolve()
         if root not in path.parents or not path.is_file(): return Response({"error":{"code":"artifact_unavailable"}},status=410)
         response=FileResponse(path.open("rb"),content_type="application/vnd.tcpdump.pcap",as_attachment=True,
             filename=f"{capture.interface.node.name}-{capture.interface.name}-{capture.id}.pcap")
         response["X-Content-Type-Options"]="nosniff"
+        return response
+    @action(detail=True,methods=["get"],url_path=r"captures/(?P<capture_id>[^/.]+)/analysis")
+    def capture_analysis(self,request,pk=None,capture_id=None):
+        deployment=self.get_object()
+        try: capture_uuid=uuid.UUID(str(capture_id))
+        except (ValueError,TypeError,AttributeError): return Response({"error":{"code":"invalid_capture"}},status=404)
+        capture=models.CaptureSession.objects.select_related("interface__node").filter(id=capture_uuid,deployment=deployment).first()
+        if not capture: return Response({"error":{"code":"invalid_capture"}},status=404)
+        if capture.status!="complete": return Response({"error":{"code":"capture_not_ready","details":"Packet analysis is available after the capture completes."}},status=409)
+        root=(Path(settings.MEDIA_ROOT)/"captures"/str(deployment.id)).resolve(); path=Path(capture.artifact_reference).resolve()
+        if root not in path.parents or not path.is_file(): return Response({"error":{"code":"artifact_unavailable"}},status=410)
+        if path.stat().st_size>4*1024*1024: return Response({"error":{"code":"capture_too_large"}},status=413)
+        try: analysis=analyze_pcap(path.read_bytes())
+        except PcapError as error: return Response({"error":{"code":"invalid_pcap","details":str(error)}},status=422)
+        analysis.update({"id":str(capture.id),"device":capture.interface.node.name,"interface":capture.interface.name})
+        response=Response(analysis);response["Cache-Control"]="no-store";response["X-Content-Type-Options"]="nosniff"
         return response
     @action(detail=True,methods=["post"])
     def consoles(self,request,pk=None):
