@@ -156,6 +156,18 @@ def test_device_restart_replaces_only_selected_clabernetes_pod():
     assert calls[0][0:2]==("r1-launcher","lab-one")
     assert calls[0][2].grace_period_seconds==0
 
+def test_device_reset_replaces_only_selected_launcher_and_reports_saved_baseline():
+    calls=[]
+    core=SimpleNamespace(delete_namespaced_pod=lambda pod,namespace,body:calls.append((pod,namespace,body)))
+    adapter=ClabernetesAdapter(custom_api=SimpleNamespace(),core_api=core)
+    deployment=SimpleNamespace(id="deployment-id",namespace="lab-one",revision=SimpleNamespace(revision_number=7))
+    device=SimpleNamespace(deployment_id="deployment-id",runtime_resources={"pod":"r1-launcher"},
+        lab_node=SimpleNamespace(name="r1",startup_configuration_id="configuration-id"))
+    result=adapter.reset_device(deployment,device)
+    assert result=={"device":"r1","operation":"reset","replaced_pod":"r1-launcher","readiness":"resetting",
+        "baseline_revision":7,"saved_configuration_restored":True}
+    assert calls[0][0:2]==("r1-launcher","lab-one") and calls[0][2].grace_period_seconds==0
+
 def test_device_stop_disables_clabernetes_reconcile_deletes_only_launcher_and_start_reenables_it():
     patches=[];deletes=[]
     custom=SimpleNamespace(patch_namespaced_custom_object=lambda *args:patches.append(args) or {})

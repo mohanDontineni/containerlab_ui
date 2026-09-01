@@ -40,7 +40,7 @@ def strip_capture_stop_packets(payload):
 class Plan: namespace:str; topology_name:str; manifest:dict; config_maps:tuple=()
 
 class ClabernetesAdapter:
-    capabilities={"deploy_lab":"supported","get_observed_state":"supported","delete_runtime":"supported","restart_device":"supported",
+    capabilities={"deploy_lab":"supported","get_observed_state":"supported","delete_runtime":"supported","restart_device":"supported","reset_device":"supported",
         "stop_device":"supported","start_device":"supported","resolve_console_target":"supported","start_capture":"experimental",
         "stop_lab":"delete_and_redeploy","set_link_condition":"supported","collect_configuration":"template_dependent","get_device_logs":"supported",
         "ping":"supported","traceroute":"supported"}
@@ -307,6 +307,15 @@ class ClabernetesAdapter:
         name=device.lab_node.name
         self.core.delete_namespaced_pod(pod,deployment.namespace,body=client.V1DeleteOptions(grace_period_seconds=0,propagation_policy="Background"))
         return {"device":name,"operation":"restart","replaced_pod":pod,"readiness":"restarting"}
+    def reset_device(self,deployment,device):
+        if device.deployment_id != deployment.id: raise CapabilityError("Device does not belong to this deployment")
+        pod=device.runtime_resources.get("pod")
+        if not pod: raise CapabilityError("The device launcher pod is not ready")
+        name=device.lab_node.name
+        self.core.delete_namespaced_pod(pod,deployment.namespace,
+            body=client.V1DeleteOptions(grace_period_seconds=0,propagation_policy="Background"))
+        return {"device":name,"operation":"reset","replaced_pod":pod,"readiness":"resetting",
+            "baseline_revision":deployment.revision.revision_number,"saved_configuration_restored":bool(device.lab_node.startup_configuration_id)}
     def ensure_device_stopped(self,deployment,device):
         if device.deployment_id!=deployment.id: raise CapabilityError("Device does not belong to this deployment")
         name=device.lab_node.name

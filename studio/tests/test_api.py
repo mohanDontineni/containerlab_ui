@@ -735,6 +735,44 @@ def test_device_lifecycle_is_idempotent_audited_and_operator_only(monkeypatch):
     assert AuditEvent.objects.filter(action="device.restart",target_id=device.id).count()==1
 
 @pytest.mark.django_db
+def test_guarded_device_reset_preview_concurrency_capture_block_and_console_revocation(monkeypatch):
+    monkeypatch.setattr("studio.api.execute_operation.delay",lambda *_:None)
+    monkeypatch.setattr("studio.tasks.reconcile_deployment.apply_async",lambda *args,**kwargs:None)
+    owner=User.objects.create_user("reset-owner",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="reset-project");lab=Lab.objects.create(project=project,name="reset-lab")
+    revision=LabRevision.objects.create(lab=lab,revision_number=3,topology_checksum="d"*64,immutable=True)
+    node=LabNode.objects.create(revision=revision,name="r1",template_version=DeviceTemplateVersion.objects.filter(containerlab_kind="linux").first())
+    interface=LabInterface.objects.create(node=node,name="eth1")
+    deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-reset-test",runtime_version="0.8.0",observed_state="running")
+    device=DeviceInstance.objects.create(deployment=deployment,lab_node=node,observed_readiness="ready",runtime_resources={"pod":"r1-old","pod_uid":"old-uid"})
+    client=APIClient();client.force_authenticate(owner);preview_url=f"/api/v1/deployments/{deployment.id}/device-reset-preview/?device_id={device.id}"
+    preview=client.get(preview_url)
+    assert preview.status_code==200 and preview.data["can_reset"] is True and preview.data["revision"]==3
+    payload={"device_id":str(device.id),"operation":"reset_device"};operation_url=f"/api/v1/deployments/{deployment.id}/device-operations/"
+    assert client.post(operation_url,payload,format="json",HTTP_IDEMPOTENCY_KEY="missing-reset-token").status_code==400
+    stale=client.post(operation_url,payload,format="json",HTTP_IDEMPOTENCY_KEY="stale-reset",
+        HTTP_X_EXPECTED_DEVICE_UPDATED_AT="2000-01-01T00:00:00+00:00")
+    assert stale.status_code==409 and stale.data["error"]["code"]=="device_changed"
+    capture=CaptureSession.objects.create(deployment=deployment,interface=interface,owner=owner,status="capturing",expires_at=timezone.now()+timezone.timedelta(minutes=5))
+    blocked=client.get(preview_url)
+    assert blocked.status_code==200 and blocked.data["can_reset"] is False and blocked.data["active_captures"]==1
+    capture.status="complete";capture.save(update_fields=["status","updated_at"])
+    preview=client.get(preview_url)
+    ConsoleSession.objects.create(device=device,user=owner,token_hash="f"*64,expires_at=timezone.now()+timezone.timedelta(minutes=5))
+    first=client.post(operation_url,payload,format="json",HTTP_IDEMPOTENCY_KEY="reset-r1",
+        HTTP_X_EXPECTED_DEVICE_UPDATED_AT=preview.data["updated_at"])
+    replay=client.post(operation_url,payload,format="json",HTTP_IDEMPOTENCY_KEY="reset-r1",
+        HTTP_X_EXPECTED_DEVICE_UPDATED_AT=preview.data["updated_at"])
+    assert first.status_code==replay.status_code==202 and first.data["id"]==replay.data["id"]
+    assert AuditEvent.objects.filter(action="device.reset",target_id=device.id).count()==1
+    class Adapter:
+        def reset_device(self,*_): return {"device":"r1","operation":"reset","replaced_pod":"r1-old","readiness":"resetting",
+            "baseline_revision":3,"saved_configuration_restored":False}
+    monkeypatch.setattr("studio.tasks.ClabernetesAdapter",Adapter)
+    execute_operation.run(str(first.data["id"]));device.refresh_from_db()
+    assert device.observed_readiness=="resetting" and ConsoleSession.objects.filter(device=device,revoked_at__isnull=False).count()==1
+
+@pytest.mark.django_db
 def test_device_worker_updates_node_without_failing_running_lab(monkeypatch):
     owner=User.objects.create_user("device-worker",password="long-enough-password")
     project=Project.objects.create(owner=owner,name="device-worker-project")

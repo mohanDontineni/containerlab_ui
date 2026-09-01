@@ -896,11 +896,15 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
     def device_operations(self,request,pk=None):
         deployment=self.get_object(); self._require_operator(deployment)
         operation=str(request.data.get("operation",""))
-        if operation not in ("restart_device","stop_device","start_device","suspend_device","resume_device","collect_configuration","get_device_logs"):
-            return Response({"error":{"code":"unsupported_operation","details":"Supported device operations are start, stop, restart, suspend, resume, configuration collection, and bounded runtime logs."}},status=422)
+        if operation not in ("restart_device","reset_device","stop_device","start_device","suspend_device","resume_device","collect_configuration","get_device_logs"):
+            return Response({"error":{"code":"unsupported_operation","details":"Supported device operations are start, stop, restart, reset, suspend, resume, configuration collection, and bounded runtime logs."}},status=422)
         try: device_id=uuid.UUID(str(request.data.get("device_id")))
         except (ValueError,TypeError,AttributeError): return Response({"error":{"code":"invalid_device"}},status=422)
         operation_payload={"device_id":str(device_id)}
+        if operation=="reset_device":
+            expected=request.headers.get("X-Expected-Device-Updated-At")
+            if not expected: return Response({"error":{"code":"expected_device_updated_at_required"}},status=400)
+            operation_payload["expected_updated_at"]=expected
         if operation=="get_device_logs":
             source=str(request.data.get("source","appliance"));tail=request.data.get("tail",200)
             if source not in ("appliance","launcher") or not isinstance(tail,int) or isinstance(tail,bool) or not 20<=tail<=1000:
@@ -916,6 +920,15 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
         with transaction.atomic():
             device=deployment.devices.select_for_update().select_related("lab_node").filter(id=device_id).first()
             if not device: return Response({"error":{"code":"invalid_device"}},status=422)
+            if operation=="reset_device":
+                if device.updated_at.isoformat()!=expected:
+                    return Response({"error":{"code":"device_changed","details":"The device changed after reset was previewed.",
+                        "updated_at":device.updated_at.isoformat()}},status=409)
+                active_captures=models.CaptureSession.objects.filter(deployment=deployment,interface__node=device.lab_node,
+                    status__in=("scheduled","capturing")).count()
+                if active_captures:
+                    return Response({"error":{"code":"device_reset_blocked","details":"Wait for the active packet capture to finish.",
+                        "active_captures":active_captures}},status=409)
             desired_state=device.runtime_resources.get("manual_desired_state")
             desired_suspended=desired_state=="suspended";desired_stopped=desired_state=="stopped"
             if operation=="resume_device":
@@ -941,6 +954,31 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
                 target_type="DeviceInstance",target_id=device.id,correlation_id=getattr(request,"correlation_id",""),metadata=metadata)
             transaction.on_commit(lambda: execute_operation.delay(str(job.id)))
         return Response(serializers.OperationSerializer(job).data,status=202)
+    @action(detail=True,methods=["get"],url_path="device-reset-preview")
+    def device_reset_preview(self,request,pk=None):
+        deployment=self.get_object();self._require_operator(deployment)
+        try: device_id=uuid.UUID(str(request.query_params.get("device_id")))
+        except (ValueError,TypeError,AttributeError): return Response({"error":{"code":"invalid_device"}},status=422)
+        device=deployment.devices.select_related("lab_node__startup_configuration").filter(id=device_id).first()
+        if not device: return Response({"error":{"code":"invalid_device"}},status=422)
+        active_operation=models.OperationJob.objects.filter(target_id=device.id,state__in=("accepted","scheduled","started")).first()
+        active_captures=models.CaptureSession.objects.filter(deployment=deployment,interface__node=device.lab_node,
+            status__in=("scheduled","capturing")).count()
+        active_consoles=models.ConsoleSession.objects.filter(device=device,revoked_at__isnull=True,
+            expires_at__gt=timezone.now()).count()
+        ready=device.observed_readiness=="ready" and bool(device.runtime_resources.get("pod"))
+        blocked_by=(f"{active_operation.operation_type.replace('_',' ')} is already in progress." if active_operation else
+            f"{active_captures} packet capture(s) must finish first." if active_captures else
+            "The device must be ready before it can be reset." if not ready else "")
+        response=Response({"device_id":str(device.id),"device":device.lab_node.name,
+            "revision":deployment.revision.revision_number,"updated_at":device.updated_at.isoformat(),
+            "current_pod":device.runtime_resources.get("pod"),"saved_configuration":bool(device.lab_node.startup_configuration_id),
+            "active_consoles":active_consoles,"active_captures":active_captures,"can_reset":not blocked_by,"blocked_by":blocked_by,
+            "impact":["Only this device launcher and its ephemeral appliance state will be replaced.",
+                "The device will boot from the immutable deployed revision and its pinned startup configuration, or the image default when none is saved.",
+                "Topology wiring, other devices, the lab draft, revision history, and collected configurations remain unchanged.",
+                "Open console sessions for this device will be revoked; reconnect after it becomes ready."]})
+        response["Cache-Control"]="no-store";return response
     @action(detail=True,methods=["post"])
     def diagnostics(self,request,pk=None):
         deployment=self.get_object(); self._require_operator(deployment)
@@ -1053,6 +1091,8 @@ class DeploymentViewSet(viewsets.ReadOnlyModelViewSet):
         interface=models.LabInterface.objects.filter(id=interface_id,node__revision=deployment.revision).select_related("node").first()
         if not device or not interface or interface.node_id!=device.lab_node_id: return Response({"error":{"code":"invalid_capture_target"}},status=422)
         if device.observed_readiness!="ready" or not device.runtime_resources.get("pod"): return Response({"error":{"code":"device_not_ready"}},status=409)
+        if models.OperationJob.objects.filter(target_id=device.id,state__in=("accepted","scheduled","started")).exists():
+            return Response({"error":{"code":"device_operation_in_progress","details":"Wait for the active device operation before starting a capture."}},status=409)
         duration=request.data.get("duration",10); packet_limit=request.data.get("packet_limit",500)
         if not isinstance(duration,int) or not 1<=duration<=30 or not isinstance(packet_limit,int) or not 1<=packet_limit<=5000:
             return Response({"error":{"code":"invalid_capture_bounds","details":"Duration must be 1-30 seconds and packet limit 1-5000."}},status=422)
