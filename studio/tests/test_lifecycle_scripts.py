@@ -64,3 +64,27 @@ def test_chart_retains_every_persistent_claim_and_owned_registry_volume():
     assert data.count("helm.sh/resource-policy: keep")==5
     for name in ("containerlab-studio-postgres","containerlab-studio-redis","containerlab-studio-artifacts","containerlab-studio-registry","containerlab-studio-registry-pv"):
         assert name in data
+
+def test_smoke_check_accepts_custom_namespace_without_optional_runtime_fixture(tmp_path):
+    bin_dir=tmp_path/"bin";bin_dir.mkdir();log=tmp_path/"calls.log"
+    curl=bin_dir/"curl";curl.write_text("""#!/bin/sh
+echo "curl $*" >>"$CALL_LOG"
+printf 200
+""")
+    kubectl=bin_dir/"kubectl";kubectl.write_text("""#!/bin/sh
+echo "kubectl $*" >>"$CALL_LOG"
+case "$*" in
+  *"get deployment"*) printf 1;;
+  "get crd topologies.c9s.run") exit 0;;
+  *"get topology.c9s.run/studio-smoke"*) exit 1;;
+  *) exit 1;;
+esac
+""")
+    curl.chmod(0o755);kubectl.chmod(0o755)
+    env={**os.environ,"PATH":f"{bin_dir}:{os.environ['PATH']}","CALL_LOG":str(log),"NAMESPACE":"custom-studio","STUDIO_HOST":"studio.test"}
+    result=run("smoke-test.sh",env=env)
+    assert result.returncode==0 and "no optional studio-smoke runtime fixture" in result.stdout
+    calls=log.read_text()
+    assert "https://studio.test:30444/admin/login/" in calls
+    assert calls.count("-n custom-studio get deployment") == 4
+    assert "-n containerlab" not in calls

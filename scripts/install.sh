@@ -37,5 +37,5 @@ kubectl get secret containerlab-studio-secrets -n "$namespace" >/dev/null
 upgrade
 lock_checksum=$(cksum "$root/versions.lock.yaml"|awk '{print $1":"$2}')
 kubectl -n "$namespace" create configmap containerlab-studio-installation --from-literal=release="$release" --from-literal=selected-context="$context" --from-literal=image="$image_repository:$image_tag" --from-literal=version-lock-checksum="$lock_checksum" --dry-run=client -o yaml|kubectl apply -f -
-NAMESPACE="$namespace" HOST=${HOST:-192.168.1.148} "$root/scripts/smoke-test.sh"
-echo "Installed $release from $context. GUI: https://${HOST:-192.168.1.148}:30444/"
+NAMESPACE="$namespace" STUDIO_HOST=${STUDIO_HOST:-192.168.1.148} "$root/scripts/smoke-test.sh"
+echo "Installed $release from $context. GUI: https://${STUDIO_HOST:-192.168.1.148}:30444/"
