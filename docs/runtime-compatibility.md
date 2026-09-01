@@ -19,6 +19,7 @@ Kubernetes 1.36.3/amd64 was verified. Native Linux containers work. VM-backed de
 | Live link impairment | Supported | Bidirectional latency, loss/disable, and clean qdisc restore were verified through Studio operations. |
 | Structured appliance network state | Supported | Fixed bounded interface, address, route, and neighbor queries were verified against live FRR without arbitrary shell input. |
 | Launcher Kubernetes events | Supported | UID-scoped, 200-record-bounded lifecycle and warning evidence is rendered in the device diagnostics GUI. |
+| Containerlab topology import/export | Supported | GUI preview maps supported point-to-point nodes to active templates and immutable project images; unsafe host fields are rejected and external startup paths are explicitly omitted. |
 | Shared Linux bridge network | Unsupported here | Containerlab requires a pre-existing host bridge; Clabernetes workloads are namespace-isolated and Studio does not mutate worker host networking. |
 | VM-backed vendor devices | Unsupported here | KVM missing; licensed images not supplied. |
 | Protected private-registry references | Supported | Project-scoped create/rotate/deactivate, encrypted persistence, redacted API/UI, host matching, and digest-pinned image linkage are verified. |

@@ -77,6 +77,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 | `65-template-image-compatibility.png` | Template-to-image compatibility | Evaluates accessible immutable publications against template architecture, category, verification, format, and lifecycle requirements. |
 | `66-explicit-deployment-plan.png` | Explicit deployment plan | Reviews immutable publication, new-namespace creation, quota impact, active pinned runtimes, and required operator acknowledgement before scheduling. |
 | `67-server-topology-preflight.png` | Server topology preflight | Runs pinned adapter validation and presents platform checks plus per-device image, interface, configuration, and resource evidence. |
+| `68-containerlab-interoperability.png` | Containerlab interoperability | Exports a saved visual graph and previews a guarded re-import with explicit active-template and immutable-image mapping. |
 
 ## No-YAML operating model
 
@@ -118,6 +119,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 35. Review each template version's image policy and accessible publication matrix; the topology editor disables incompatible choices, explains warnings, and the server revalidates compatibility during draft save and runtime preflight.
 36. Review the server-generated deployment plan before publishing a draft; Studio creates a separate runtime, leaves active pinned revisions unchanged, requires explicit acknowledgement, and keeps quota-blocked plans non-actionable.
 37. Run Validate on a saved draft to inspect a server-authoritative readiness report; resolve blocking device, image, configuration, interface, or adapter findings before opening the deployment plan.
+38. Use the optional Interop workspace to export a saved visual graph or import an existing supported `.clab.yml`; Studio rejects unsafe fields, requires explicit mappings, omits untrusted external configuration paths, and leaves normal design and operation GUI-only.
 
 Containerlab/Kubernetes YAML is an internal adapter concern. It may be inspected by platform administrators for troubleshooting, but it is not part of the normal user workflow.
 
