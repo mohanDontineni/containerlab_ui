@@ -55,6 +55,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 | `43-native-user-administration.png` | Native user administration | Creates local operators and previews guarded sign-in deactivation while preserving project roles and history. |
 | `44-guarded-password-recovery.png` | Guarded password recovery | Issues a policy-compliant temporary password, previews active browser and console revocation, signs the operator out, and requires personal password rotation at next login. |
 | `45-live-device-network-state.png` | Live device network state | Collects bounded interface, address, route, and neighbor data from a ready appliance and presents it as structured GUI tables. |
+| `46-guarded-selected-device-reset.png` | Guarded selected-device reset | Preflights several devices together, reports saved baselines and session impact, then resets every eligible selection through independently tracked jobs. |
 
 ## No-YAML operating model
 
@@ -76,6 +77,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 16. Create operator accounts, search the directory, and safely activate or deactivate sign-in from the native staff-only user administration page.
 17. Reset an operator credential through the guarded preview; Studio revokes active sessions and requires the temporary password to be replaced before any other operation.
 18. Inspect a ready device's live interfaces, addresses, forwarding routes, and neighbor cache through structured tables without opening a shell.
+19. Select two or more ready devices and review the reset-to-saved-revision impact before Studio discards ephemeral state, revokes consoles, and replaces each launcher.
 
 Containerlab/Kubernetes YAML is an internal adapter concern. It may be inspected by platform administrators for troubleshooting, but it is not part of the normal user workflow.
 

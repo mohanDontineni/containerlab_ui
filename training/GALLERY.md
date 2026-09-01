@@ -271,3 +271,9 @@ A platform administrator searches for an operator and opens the credential-recov
 ![Live device network state](45-live-device-network-state.png)
 
 The operator opens a ready FRR device's live network-state inspector directly from the runtime inventory. Studio executes only fixed, bounded `iproute2` queries inside the selected appliance and renders interface state, assigned IPv4/IPv6 addresses, forwarding routes, gateways, protocols, metrics, and neighbor reachability as searchable visual evidence. Firefox verified 3 real interfaces, 23 real routes—including the learned BGP route to `10.2.2.2`—and one data-plane neighbor with no console errors or failed application requests.
+
+## 46 — Guarded selected-device reset
+
+![Guarded selected-device reset](46-guarded-selected-device-reset.png)
+
+The operator selects both live BGP routers and opens one guarded reset preview. Studio rechecks readiness, active captures, saved startup baselines, console impact, and an optimistic version for every selected device before scheduling anything. Confirmation creates an independent audited reset job per router, revokes its console sessions, replaces each launcher, and restores the immutable deployed configuration without changing topology wiring or history. Firefox verified both launcher UIDs changed, both routers returned ready, and routed reachability recovered to 3/3 packets with 0% loss.
