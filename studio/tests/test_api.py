@@ -683,6 +683,9 @@ def test_device_logs_are_operator_only_bounded_async_no_store_and_audited(monkey
     assert job.state=="succeeded" and job.result_payload["output"]=="launcher ready\n"
     runtime=client.get(f"/api/v1/deployments/{deployment.id}/runtime/")
     assert runtime["Cache-Control"]=="no-store" and runtime["X-Content-Type-Options"]=="nosniff"
+    expected=node.template_version.resource_requirements
+    assert runtime.data["devices"][0]["resource_profile"]=={"cpu":expected.get("cpu"),"memory":expected.get("memory"),
+        "template_version":node.template_version.version}
 
 @pytest.mark.django_db
 def test_console_authorization_is_session_bound_and_viewer_read_only():
