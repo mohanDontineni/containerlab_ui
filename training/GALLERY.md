@@ -373,3 +373,11 @@ Project administrators and editors manage private OCI access in a dedicated no-Y
 ![Automatic stale-upload cleanup](62-stale-upload-cleanup.png)
 
 The image onboarding page retains the operator's 20 most recent upload sessions with exact byte progress, resume deadline, lifecycle state, and quarantine disposition. Celery Beat schedules a bounded cleanup every 15 minutes; the worker row-locks expired active or failed sessions, removes only files resolved beneath Studio's quarantine root, persists an idempotent cleanup result, releases reservation accounting, and emits system audit evidence. Firefox created a real 4 KiB upload session and transferred 1 KiB into quarantine. Acceptance moved only that test deadline into the past, dispatched the actual Celery task `669c775e…`, and verified `Expired / Released`, 1 KiB of retained progress, no internal path in the API, and a visible `image.upload_expired` audit event. Both production routers remained ready.
+
+## 63 — Dashboard failure triage and project capacity
+
+![Dashboard failure triage and project capacity](63-dashboard-failure-capacity.png)
+
+The overview reports running, pending/deploying, stopped/removed, degraded, and failed runtime totals without collapsing lifecycle states into an ambiguous count. Each visible project shows actual lab, active-runtime, member, image, upload-reservation, and largest-draft consumption beside its enforced limits. CPU and memory are never invented: the dashboard directs operators to measured live deployment telemetry only while the Metrics API capability is verified, otherwise it says `Unavailable`.
+
+The recovery workspace presents bounded failure type and message evidence without exposing request payloads or internal storage. Each job receives a resource-specific next step instead of an unsafe generic retry. Firefox rendered a real failed packet-capture operation, followed `Open deployment` to production deployment `c4b5d50e…`, and reached `BGP Reference 76c24c1`. The exact release `73813bd` was running on all four Studio services, while production routers `r1` and `r2` remained Running/Ready.

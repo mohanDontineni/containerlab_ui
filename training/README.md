@@ -72,6 +72,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 | `60-image-metadata-management.png` | Image catalog metadata | Assigns searchable vendor, category, and version details without changing immutable archive or publication identity. |
 | `61-protected-registry-credentials.png` | Protected registry credentials | Creates and rotates an encrypted project credential while displaying only its fingerprint, references, and lifecycle state. |
 | `62-stale-upload-cleanup.png` | Automatic stale-upload cleanup | Shows a partial upload after its 24-hour resume window expired and its quarantined storage was safely released. |
+| `63-dashboard-failure-capacity.png` | Failure triage and project capacity | Summarizes every runtime state, real project quota consumption, telemetry availability, and failed jobs with resource-specific recovery actions. |
 
 ## No-YAML operating model
 
@@ -108,6 +109,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 30. Edit a device image's vendor, category, and version in the catalog; Studio protects against stale saves, audits the change, and keeps checksums and publication digests immutable.
 31. Add, rotate, and deactivate project-scoped private-registry access; verify the browser and API expose only a one-way fingerprint and never return the password or token.
 32. Review upload-session history to distinguish resumable, completed, failed, cancelled, and expired sessions; stale quarantine storage is released automatically and audited.
+33. Triage failed background work from the overview, follow its bounded error evidence to the affected resource, and compare project usage with enforced quota allocations; live CPU and memory are shown only when measured telemetry is available.
 
 Containerlab/Kubernetes YAML is an internal adapter concern. It may be inspected by platform administrators for troubleshooting, but it is not part of the normal user workflow.
 
