@@ -128,6 +128,7 @@ class DeviceInstanceSerializer(serializers.ModelSerializer):
     interfaces=serializers.SerializerMethodField()
     configuration_collection_supported=serializers.SerializerMethodField()
     resource_profile=serializers.SerializerMethodField()
+    startup_order=serializers.SerializerMethodField()
     def get_interfaces(self,obj):
         return [{"id":str(interface.id),"name":interface.name} for interface in obj.lab_node.interfaces.all() if not interface.reserved_management]
     def get_configuration_collection_supported(self,obj):
@@ -136,4 +137,5 @@ class DeviceInstanceSerializer(serializers.ModelSerializer):
         requirements=obj.lab_node.template_version.resource_requirements or {}
         return {"cpu":requirements.get("cpu"),"memory":requirements.get("memory"),
             "template_version":obj.lab_node.template_version.version}
-    class Meta: model=models.DeviceInstance; fields=("id","node_id","name","kind","template_name","position","interfaces","configuration_collection_supported","resource_profile","observed_readiness","worker_placement","runtime_resources","console_endpoints")
+    def get_startup_order(self,obj): return obj.lab_node.properties.get("startupOrder")
+    class Meta: model=models.DeviceInstance; fields=("id","node_id","name","kind","template_name","position","interfaces","configuration_collection_supported","resource_profile","startup_order","observed_readiness","worker_placement","runtime_resources","console_endpoints")

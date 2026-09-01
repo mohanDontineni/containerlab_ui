@@ -345,6 +345,13 @@ def topology_document(request, lab_id):
     names = [str(node.get("name", "")).strip()[:63] for node in payload.get("nodes", []) if isinstance(node, dict)]
     if len(names) != len(payload.get("nodes", [])) or any(not name for name in names) or len(names) != len(set(names)):
         return JsonResponse({"error": "Every node needs a unique name"}, status=422)
+    for node in payload.get("nodes",[]):
+        properties=node.get("properties",{})
+        if not isinstance(properties,dict) or len(json.dumps(properties,separators=(",",":"),ensure_ascii=False).encode("utf-8"))>16*1024:
+            return JsonResponse({"error":"Node properties must be an object no larger than 16 KiB"},status=422)
+        order=properties.get("startupOrder")
+        if order is not None and (isinstance(order,bool) or not isinstance(order,int) or not 1<=order<=250):
+            return JsonResponse({"error":f"{node.get('name','Node')}: startup order must be from 1 to 250"},status=422)
     try:
         node_ids = [str(uuid.UUID(str(node["id"]))) for node in payload.get("nodes", [])]
         link_ids = [str(uuid.UUID(str(link["id"]))) for link in payload.get("links", [])]
@@ -386,9 +393,11 @@ def topology_document(request, lab_id):
                     version=(ConfigurationVersion.objects.filter(project=lab.project,name=config_name).aggregate(n=Max("version"))["n"] or 0)+1
                     startup=ConfigurationVersion.objects.create(project=lab.project,name=config_name,version=version,
                         encrypted_content=encrypt_configuration(startup_content),checksum=checksum,created_by=request.user)
+            properties=dict(data.get("properties",{}));properties.pop("startupOrder",None)
+            if data.get("properties",{}).get("startupOrder") is not None:properties["startupOrder"]=data["properties"]["startupOrder"]
             node = LabNode.objects.create(id=uuid.UUID(data["id"]), revision=revision, name=data["name"][:63], template_version=template,
                 published_image=images.get(str(data.get("publishedImageId"))),
-                position=data.get("position", {}), properties=data.get("properties", {}),startup_configuration=startup)
+                position=data.get("position", {}), properties=properties,startup_configuration=startup)
             node_map[data["id"]] = node
             for name in _interfaces(template.interface_rules):
                 iface = LabInterface.objects.create(node=node, name=name); interface_map[(data["id"], name)] = iface
@@ -400,7 +409,8 @@ def topology_document(request, lab_id):
         AuditEvent.objects.create(actor=request.user,project=lab.project,action="lab.topology_saved",target_type="LabRevision",target_id=revision.id,
             correlation_id=getattr(request,"correlation_id",""),metadata={"lab":str(lab.id),"revision_number":revision.revision_number,
                 "edit_version":revision.edit_version,"topology_checksum":revision.topology_checksum,"node_count":len(node_map),
-                "link_count":len(payload.get("links",[])),"configured_node_count":sum(1 for item in payload.get("nodes",[]) if item.get("startupConfiguration"))})
+                "link_count":len(payload.get("links",[])),"configured_node_count":sum(1 for item in payload.get("nodes",[]) if item.get("startupConfiguration")),
+                "startup_plan_nodes":sum(1 for item in payload.get("nodes",[]) if item.get("properties",{}).get("startupOrder") is not None)})
     return JsonResponse({"revisionId": str(revision.id), "editVersion": revision.edit_version, "checksum": revision.topology_checksum})
 
 @login_required

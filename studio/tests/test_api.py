@@ -756,6 +756,7 @@ def test_device_logs_are_operator_only_bounded_async_no_store_and_audited(monkey
     expected=node.template_version.resource_requirements
     assert runtime.data["devices"][0]["resource_profile"]=={"cpu":expected.get("cpu"),"memory":expected.get("memory"),
         "template_version":node.template_version.version}
+    assert runtime.data["devices"][0]["startup_order"] is None
 
 @pytest.mark.django_db
 def test_console_authorization_is_session_bound_and_viewer_read_only():

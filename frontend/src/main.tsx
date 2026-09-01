@@ -52,6 +52,7 @@ type Template = {
   startupConfigSupported: boolean;
   startupConfigRequired: boolean;
   requiredInterfaces: number;
+  startupOrder: number | null;
 };
 type DeviceData = {
   label: string;
@@ -244,6 +245,7 @@ function Workspace() {
                 startupConfigSupported: t?.startupConfigSupported || false,
                 startupConfigRequired: t?.startupConfigRequired || false,
                 requiredInterfaces: t?.requiredInterfaces || 0,
+                startupOrder: Number.isInteger(n.properties?.startupOrder) ? Number(n.properties.startupOrder) : null,
               },
             };
           }),
@@ -412,6 +414,7 @@ function Workspace() {
           startupConfigSupported: template.startupConfigSupported,
           startupConfigRequired: template.startupConfigRequired,
           requiredInterfaces: template.requiredInterfaces,
+          startupOrder: null,
         },
       };
       setNodes((n) => [...n, node]);
@@ -453,7 +456,7 @@ function Workspace() {
         templateVersionId: n.data.templateId,
         publishedImageId: n.data.imageId || null,
         position: n.position,
-        properties: { kind: n.data.kind },
+        properties: { kind: n.data.kind, ...(Number.isInteger(n.data.startupOrder)?{startupOrder:n.data.startupOrder}:{}) },
         startupConfiguration: n.data.startupConfig || "",
       })),
       links: edges.map((e) => ({
@@ -909,6 +912,12 @@ function Workspace() {
                     ? `${selectedNode.data.configurationLanguage} · Encrypted at rest · Maximum 1 MiB`
                     : "This template does not support startup configuration"}
                 </small>
+              </label>
+              <label>
+                Saved startup order
+                <input type="number" min="1" max="250" value={selectedNode.data.startupOrder??""} placeholder="Not included"
+                  onChange={(e)=>{const value=e.target.value===""?null:Math.max(1,Math.min(250,Number(e.target.value)));setNodes(ns=>ns.map(n=>n.id===selectedNode.id?{...n,data:{...n.data,startupOrder:value}}:n));setDirty(true)}} />
+                <small className="field-help">Devices with an order are offered as a saved staged-start plan in the runtime page. Equal values are ordered by name.</small>
               </label>
               <div className="property-block">
                 <span>Runtime status</span>
