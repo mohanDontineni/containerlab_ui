@@ -508,6 +508,35 @@ def test_image_evidence_is_project_scoped_no_store_and_excludes_storage_path():
     assert client.get(f"/api/v1/images/{artifact.id}/evidence/").status_code==404
 
 @pytest.mark.django_db
+def test_image_metadata_is_operator_only_validated_optimistic_and_audited():
+    owner=User.objects.create_user("image-metadata-owner",password="long-enough-password")
+    editor=User.objects.create_user("image-metadata-editor",password="long-enough-password")
+    viewer=User.objects.create_user("image-metadata-viewer",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="image-metadata-project")
+    ProjectMembership.objects.create(project=project,user=editor,role="editor");ProjectMembership.objects.create(project=project,user=viewer,role="viewer")
+    artifact=ImageArtifact.objects.create(project=project,owner=owner,source_type="upload",original_filename="frr.tar",detected_format="docker-archive",
+        byte_size=4096,checksum="9"*64,architecture="amd64",storage_reference="/private/frr.tar",validation_status="validated",license_acknowledged=True)
+    endpoint=f"/api/v1/images/{artifact.id}/metadata/";payload={"vendor":"FRRouting","category":"router","version":"10.4.1"}
+    client=APIClient();client.force_authenticate(viewer)
+    assert client.put(endpoint,payload,format="json",HTTP_X_EXPECTED_UPDATED_AT=artifact.updated_at.isoformat()).status_code==403
+    client.force_authenticate(editor)
+    assert client.put(endpoint,payload,format="json").status_code==400
+    invalid=client.put(endpoint,{**payload,"vendor":"FRR\nInjected"},format="json",HTTP_X_EXPECTED_UPDATED_AT=artifact.updated_at.isoformat())
+    assert invalid.status_code==400
+    expected=artifact.updated_at.isoformat();response=client.put(endpoint,payload,format="json",HTTP_X_EXPECTED_UPDATED_AT=expected)
+    assert response.status_code==200 and (response.data["vendor"],response.data["category"],response.data["version"])==("FRRouting","router","10.4.1")
+    artifact.refresh_from_db();assert artifact.checksum=="9"*64 and artifact.original_filename=="frr.tar"
+    listing=client.get("/api/v1/images/");retrieved=client.get(f"/api/v1/images/{artifact.id}/")
+    assert "storage_reference" not in listing.data["results"][0] and "storage_reference" not in retrieved.data
+    assert "/private/frr.tar" not in str(listing.data) and "/private/frr.tar" not in str(retrieved.data)
+    event=AuditEvent.objects.get(action="image.metadata_updated",target_id=artifact.id)
+    assert event.actor==editor and event.metadata["changed"]["vendor"]=={"from":"","to":"FRRouting"}
+    stale=client.put(endpoint,{**payload,"version":"10.5"},format="json",HTTP_X_EXPECTED_UPDATED_AT=expected)
+    assert stale.status_code==409 and stale.data["error"]["code"]=="image_changed"
+    replay=client.put(endpoint,payload,format="json",HTTP_X_EXPECTED_UPDATED_AT=artifact.updated_at.isoformat())
+    assert replay.status_code==200 and AuditEvent.objects.filter(action="image.metadata_updated",target_id=artifact.id).count()==1
+
+@pytest.mark.django_db
 def test_image_deletion_is_previewed_guarded_audited_idempotent_and_releases_storage(settings,tmp_path):
     settings.MEDIA_ROOT=tmp_path
     owner=User.objects.create_user("image-delete-owner",password="long-enough-password")

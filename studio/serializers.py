@@ -62,7 +62,21 @@ class UploadSessionSerializer(serializers.ModelSerializer):
         return value
     class Meta: model=models.UploadSession; fields="__all__"; read_only_fields=("owner","received_bytes","received_parts","expires_at","status","computed_checksum","artifact_destination")
 class ImageArtifactSerializer(serializers.ModelSerializer):
-    class Meta: model=models.ImageArtifact; fields="__all__"
+    class Meta:
+        model=models.ImageArtifact
+        fields=("id","project","owner","upload_session","source_type","registry_reference","original_filename","detected_format","byte_size",
+            "checksum","vendor","category","version","architecture","license_acknowledged","inspection_result","validation_status","deleted_at","created_at","updated_at")
+        read_only_fields=fields
+class ImageMetadataSerializer(serializers.Serializer):
+    vendor=serializers.CharField(max_length=80,allow_blank=True,trim_whitespace=True)
+    category=serializers.ChoiceField(choices=("router","switch","firewall","host","network-os","traffic-generator","other"),allow_blank=True)
+    version=serializers.CharField(max_length=80,allow_blank=True,trim_whitespace=True)
+    def validate_vendor(self,value):
+        if any(ord(character)<32 for character in value): raise serializers.ValidationError("Control characters are not allowed.")
+        return value
+    def validate_version(self,value):
+        if any(ord(character)<32 for character in value): raise serializers.ValidationError("Control characters are not allowed.")
+        return value
 class PublishedImageSerializer(serializers.ModelSerializer):
     class Meta: model=models.PublishedImage; fields="__all__"
 class DeviceTemplateSerializer(serializers.ModelSerializer):

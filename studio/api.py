@@ -649,6 +649,31 @@ class ImageArtifactViewSet(viewsets.ReadOnlyModelViewSet):
         artifact=self.get_object()
         if artifact.deleted_at: return Response({"error":{"code":"image_not_found"}},status=404)
         return Response(self.get_serializer(artifact).data)
+    @action(detail=True,methods=["get","put"],url_path="metadata")
+    def metadata(self,request,pk=None):
+        artifact=self.get_object()
+        if project_role(request.user,artifact.project) not in (models.ProjectMembership.Role.ADMIN,models.ProjectMembership.Role.EDITOR):
+            from rest_framework.exceptions import PermissionDenied; raise PermissionDenied()
+        if artifact.deleted_at: return Response({"error":{"code":"image_not_found"}},status=404)
+        if request.method=="GET":
+            response=Response({"id":str(artifact.id),"name":artifact.original_filename,"vendor":artifact.vendor,"category":artifact.category,
+                "version":artifact.version,"updated_at":artifact.updated_at.isoformat()})
+            response["Cache-Control"]="no-store";response["X-Content-Type-Options"]="nosniff";return response
+        expected=request.headers.get("X-Expected-Updated-At")
+        if not expected: return Response({"error":{"code":"expected_version_required","details":"Refresh the image library before saving metadata."}},status=400)
+        serializer=serializers.ImageMetadataSerializer(data=request.data);serializer.is_valid(raise_exception=True)
+        with transaction.atomic():
+            artifact=models.ImageArtifact.objects.select_for_update().select_related("project").get(pk=artifact.id)
+            if artifact.updated_at.isoformat()!=expected:
+                return Response({"error":{"code":"image_changed","details":"Image metadata changed after this page loaded. Refresh and review the latest values."}},status=409)
+            previous={field:getattr(artifact,field) for field in ("vendor","category","version")}
+            for field,value in serializer.validated_data.items(): setattr(artifact,field,value)
+            changed={field:{"from":previous[field],"to":getattr(artifact,field)} for field in previous if previous[field]!=getattr(artifact,field)}
+            if changed:
+                artifact.save(update_fields=[*changed,"updated_at"])
+                models.AuditEvent.objects.create(actor=request.user,project=artifact.project,action="image.metadata_updated",target_type="ImageArtifact",
+                    target_id=artifact.id,correlation_id=getattr(request,"correlation_id",""),metadata={"changed":changed,"checksum":artifact.checksum})
+        return Response(self.get_serializer(artifact).data)
     @action(detail=True,methods=["get"],url_path="evidence")
     def evidence(self,request,pk=None):
         artifact=self.get_object()
