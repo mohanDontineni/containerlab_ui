@@ -83,6 +83,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 | `71-platform-network-isolation.png` | Verified platform network isolation | Shows five workload-scoped ingress policies verified by the worker after authorized service traffic succeeds and cross-namespace database, cache, and registry probes are denied. |
 | `72-whole-lab-configuration-export.png` | Whole-lab configuration archive | Collects live configurations from both routers and exports the latest version per device as one audited ZIP with a checksum inventory. |
 | `73-whole-lab-configuration-collection.png` | Whole-lab configuration collection | Runs one GUI action that atomically preflights every supported device, schedules independently tracked collection jobs, and advances both encrypted router histories. |
+| `74-whole-lab-running-configuration-checkpoint.png` | Running configuration checkpoint | Reviews a checksum-bound preview and saves every latest collected device configuration into a new editable draft without changing the running revision or launcher identities. |
 
 ## No-YAML operating model
 
@@ -130,6 +131,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 41. Confirm the dashboard reports all platform ingress policies verified; web/console traffic is limited to the gateway, data services to named application workloads, and registry publication to the worker job boundary.
 42. Export the latest collected configuration for every device as one integrity-described ZIP from the runtime page; no YAML, shell, or per-device download sequence is required.
 43. Collect current configurations across every supported ready device with one runtime-page action; Studio refuses partial collection when any supported device is unavailable and shows each resulting version in encrypted history.
+44. Save the latest whole-lab running state into a guarded editable draft; Studio revalidates both configuration history and the current draft while the deployed immutable revision remains untouched.
 
 Containerlab/Kubernetes YAML is an internal adapter concern. It may be inspected by platform administrators for troubleshooting, but it is not part of the normal user workflow.
 
