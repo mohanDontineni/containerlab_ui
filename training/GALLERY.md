@@ -447,3 +447,21 @@ Firefox opened the real production `r1` and `r2` FRR appliances, received two in
 The visual workspace now includes the explicitly required lab-scoped job/event panel. Its read-only API projects at most 24 newest records from at most 50 recent revisions and 50 deployments, merging durable operation state, percentage progress, timestamps, actors, deployment identity, and redacted failure evidence with content-free audit actions. Request payloads, result payloads, audit metadata, configurations, and unrelated same-project activity are excluded. Viewers can inspect authorized lab evidence, guessed or foreign lab identifiers remain isolated, and the canvas provides manual refresh plus a path to the full job center.
 
 Firefox opened the production `BGP Reference 76c24c1` topology and rendered eight newest rows beside the two-router graph. The bounded API returned 15 retained jobs and 9 audit events, including topology traffic, reachability, ping, and network-health archive evidence; independent inspection found none of the forbidden payload fields. Exact release `d82ee2d` ran on web, worker, scheduler, and console while both routers remained Running/Ready.
+
+## 86 — Protected concurrent topology editing
+
+![Protected concurrent topology editing](86-protected-read-only-topology.png)
+
+Studio allows one authorized editor to hold a renewable five-minute topology lease. A second editor receives the complete saved graph in a clearly labeled read-only workspace with the current owner and expiry, while every mutation path—including canvas changes, save, deploy, restore, and imports—remains disabled or server-protected by the lease token. Firefox opened the same production BGP draft in independent `admin` and editor sessions and verified that the second session could inspect both routers, their link, validation, and lab activity without obtaining write access.
+
+## 87 — Live editing handoff availability
+
+![Live editing handoff availability](87-topology-editing-handoff-available.png)
+
+Read-only workspaces now check lease status through a no-store read every 15 seconds. When the owner releases the workspace or the lease expires, the banner changes from amber protection to green availability and offers `Try editing now`; it never silently turns a potentially stale canvas into an editable document. Firefox closed the owner session and observed this state transition in the waiting session without reloading the browser.
+
+## 88 — Safe topology editing handoff
+
+![Safe topology editing handoff](88-topology-editing-handoff-complete.png)
+
+The handoff request remains transactional and conflict-aware. If another operator acquired the lease first, Studio retains read-only mode with the authoritative owner. On success, Studio reloads the latest server draft before enabling mutation controls, preventing the waiting operator's earlier in-memory view from overwriting the first editor's saved work. Firefox acquired the released lease, reloaded both routers, one link, and one annotation, and rendered `Draft loaded · editing session secured`. Exact release `21456f5` ran on all four Studio services while both production router pods remained Running/Ready.

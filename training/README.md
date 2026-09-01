@@ -95,6 +95,9 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 | `83-network-health-evidence-export.png` | Network-health evidence export | Downloads the latest normalized traffic and reachability observations as CSV files in one ZIP with a machine-readable SHA-256 integrity manifest, without YAML or CLI access. |
 | `84-multi-device-split-console.png` | Multi-device split console | Opens authenticated consoles for two owned routers as closable tabs, displays both real shells side by side, and lets the operator reconnect or securely revoke each session independently. |
 | `85-topology-jobs-events-panel.png` | Topology jobs and events | Reviews the current lab's recent jobs, progress, failures, and audit events beside the visual topology without exposing operation payloads or unrelated project activity. |
+| `86-protected-read-only-topology.png` | Concurrent editor protection | A second authorized operator sees who owns the renewable editing lease, its expiry, disabled mutation controls, and an intact live topology without being able to overwrite it. |
+| `87-topology-editing-handoff-available.png` | Editing handoff available | The waiting workspace detects that the first editor released the lease and offers a safe editing request without requiring a manual browser reload. |
+| `88-topology-editing-handoff-complete.png` | Editing handoff complete | The second operator obtains the lease only after Studio reloads the latest saved draft, restoring mutation controls on the complete two-router topology. |
 
 ## No-YAML operating model
 
@@ -113,7 +116,7 @@ Screenshots are generated from the deployed product with `scripts/capture-traini
 12. Arrange linked groups automatically, align selected devices into rows or columns, and filter the device palette by name, kind, or category.
 13. Reset one ready device to its immutable deployed revision through a guarded preview; Studio preserves peers and topology while restoring the pinned startup configuration.
 14. Select several runtime devices and preview a lifecycle action before Studio schedules independently tracked start, stop, restart, suspend, or resume jobs.
-15. Open a topology with one active editor; additional editors receive a clearly labeled read-only view until the renewable five-minute editing session is released or expires.
+15. Open a topology with one active editor; additional editors receive a clearly labeled read-only view, automatically detect release or expiry, and request editing access through a latest-draft refresh that prevents stale overwrites.
 16. Create operator accounts, search the directory, and safely activate or deactivate sign-in from the native staff-only user administration page.
 17. Reset an operator credential through the guarded preview; Studio revokes active sessions and requires the temporary password to be replaced before any other operation.
 18. Inspect a ready device's live interfaces, addresses, forwarding routes, and neighbor cache through structured tables without opening a shell.
