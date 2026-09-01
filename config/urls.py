@@ -15,6 +15,7 @@ urlpatterns = [
     path("api/v1/", include("studio.urls")), path("", dashboard, name="dashboard"),
     path("projects/", portal_views.projects, name="portal-projects"),
     path("projects/new/", portal_views.project_create, name="portal-project-create"),
+    path("projects/<uuid:project_id>/edit/", portal_views.project_edit, name="portal-project-edit"),
     path("projects/<uuid:project_id>/", portal_views.project_detail, name="portal-project-detail"),
     path("labs/", portal_views.labs, name="portal-labs"),
     path("labs/new/", portal_views.lab_create, name="portal-lab-create"),

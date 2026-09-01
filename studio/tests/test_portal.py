@@ -131,6 +131,20 @@ def test_project_access_ui_is_available_only_to_administrators(client):
     assert viewer_page.status_code==200 and b"Add member" not in viewer_page.content and b"member-role" not in viewer_page.content
 
 @pytest.mark.django_db
+def test_native_project_edit_and_retirement_controls_are_admin_only(client):
+    owner=User.objects.create_user("project-ui-owner",password="long-enough-password")
+    editor=User.objects.create_user("project-ui-editor",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="Project before");ProjectMembership.objects.create(project=project,user=editor,role="editor")
+    client.force_login(editor);page=client.get(f"/projects/{project.id}/")
+    assert page.status_code==200 and b"Edit project" not in page.content and b"Retire" not in page.content
+    assert client.post(f"/projects/{project.id}/edit/",{"name":"Denied","description":"","tags":"[]"}).status_code==403
+    client.force_login(owner);page=client.get(f"/projects/{project.id}/")
+    assert b"Edit project" in page.content and b"Retire" in page.content and b"project-retire-dialog" in page.content
+    response=client.post(f"/projects/{project.id}/edit/",{"name":"Project after","description":"Purpose","tags":'["training"]'},follow=True)
+    assert response.status_code==200 and b"updated" in response.content
+    project.refresh_from_db();assert project.name=="Project after" and AuditEvent.objects.filter(action="project.metadata_updated",target_id=project.id).exists()
+
+@pytest.mark.django_db
 def test_native_lab_edit_is_operator_only_and_audited(client):
     owner=User.objects.create_user("portal-lab-owner",password="long-enough-password")
     viewer=User.objects.create_user("portal-lab-viewer",password="long-enough-password")

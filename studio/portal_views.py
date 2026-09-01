@@ -19,7 +19,7 @@ from .configurations import decrypt_configuration, encrypt_configuration
 from .quotas import normalized_quotas,project_usage,quota_exceeded
 
 def visible_projects(user):
-    return Project.objects.filter(Q(owner=user) | Q(memberships__user=user)).distinct()
+    return Project.objects.filter(Q(owner=user) | Q(memberships__user=user),deleted_at__isnull=True).distinct()
 
 @login_required
 def projects(request):
@@ -31,9 +31,12 @@ def projects(request):
 def project_create(request):
     form = ProjectForm(request.POST or None)
     if request.method == "POST" and form.is_valid():
-        project = form.save(commit=False); project.owner = request.user; project.save()
-        messages.success(request, f'Project “{project.name}” created.')
-        return redirect("portal-projects")
+        if Project.objects.filter(owner=request.user,name=form.cleaned_data["name"],deleted_at__isnull=True).exists():
+            form.add_error("name","You already have an active project with this name.")
+        else:
+            project = form.save(commit=False); project.owner = request.user; project.save()
+            messages.success(request, f'Project “{project.name}” created.')
+            return redirect("portal-projects")
     return render(request, "studio/form.html", {"form": form, "title": "Create project", "eyebrow": "NEW WORKSPACE", "cancel_url": "/projects/", "submit_label": "Create project"})
 
 @login_required
@@ -42,6 +45,24 @@ def project_detail(request, project_id):
     return render(request, "studio/project_detail.html", {"project": project, "labs": project.labs.filter(deleted_at__isnull=True).order_by("name"),
         "members": project.memberships.select_related("user").order_by("user__username"),"can_manage_access":project_role(request.user,project)==ProjectMembership.Role.ADMIN,
         "quota_limits":normalized_quotas(project),"quota_usage":project_usage(project)})
+
+@login_required
+def project_edit(request,project_id):
+    project=get_object_or_404(visible_projects(request.user),id=project_id)
+    if project_role(request.user,project)!=ProjectMembership.Role.ADMIN:
+        return JsonResponse({"error":"Administrator access is required to edit this project"},status=403)
+    form=ProjectForm(request.POST or None,instance=project)
+    if request.method=="POST" and form.is_valid():
+        with transaction.atomic():
+            locked=Project.objects.select_for_update().get(pk=project.pk);before={key:getattr(locked,key) for key in ("name","description","tags")}
+            locked.name=form.cleaned_data["name"];locked.description=form.cleaned_data["description"];locked.tags=form.cleaned_data["tags"]
+            locked.save(update_fields=["name","description","tags","updated_at"])
+            changed=[key for key,value in before.items() if value!=getattr(locked,key)]
+            AuditEvent.objects.create(actor=request.user,project=locked,action="project.metadata_updated",target_type="Project",target_id=locked.id,
+                correlation_id=getattr(request,"correlation_id",""),metadata={"changed_fields":changed})
+        messages.success(request,f'Project “{locked.name}” updated.');return redirect("portal-project-detail",project_id=locked.id)
+    return render(request,"studio/form.html",{"form":form,"title":f"Edit {project.name}","eyebrow":"PROJECT SETTINGS",
+        "cancel_url":f"/projects/{project.id}/","submit_label":"Save changes"})
 
 @login_required
 def labs(request):
@@ -230,7 +251,7 @@ def images(request):
 @login_required
 @ensure_csrf_cookie
 def image_upload(request):
-    editable=Project.objects.filter(Q(owner=request.user)|Q(memberships__user=request.user,memberships__role__in=(ProjectMembership.Role.ADMIN,ProjectMembership.Role.EDITOR))).distinct().order_by("name")
+    editable=Project.objects.filter(Q(owner=request.user)|Q(memberships__user=request.user,memberships__role__in=(ProjectMembership.Role.ADMIN,ProjectMembership.Role.EDITOR)),deleted_at__isnull=True).distinct().order_by("name")
     return render(request,"studio/image_upload.html",{"projects":editable})
 
 @login_required

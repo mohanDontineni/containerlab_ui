@@ -34,12 +34,84 @@ def exception_handler(exc,context):
     return response
 
 def visible_projects(user):
-    return models.Project.objects.filter(Q(owner=user)|Q(memberships__user=user)).distinct()
+    return models.Project.objects.filter(Q(owner=user)|Q(memberships__user=user),deleted_at__isnull=True).distinct()
 
 class ProjectViewSet(viewsets.ModelViewSet):
     serializer_class=serializers.ProjectSerializer; permission_classes=[ProjectAccess]
     def get_queryset(self): return visible_projects(self.request.user)
     def perform_create(self,serializer): serializer.save(owner=self.request.user)
+    def perform_update(self,serializer):
+        project=serializer.instance
+        if project_role(self.request.user,project)!=models.ProjectMembership.Role.ADMIN:
+            from rest_framework.exceptions import PermissionDenied; raise PermissionDenied()
+        before={key:getattr(project,key) for key in ("name","description","tags")};updated=serializer.save()
+        changed=[key for key,value in before.items() if value!=getattr(updated,key)]
+        models.AuditEvent.objects.create(actor=self.request.user,project=updated,action="project.metadata_updated",target_type="Project",target_id=updated.id,
+            correlation_id=getattr(self.request,"correlation_id",""),metadata={"changed_fields":changed})
+    def destroy(self,request,*args,**kwargs):
+        return Response({"error":{"code":"guarded_delete_required","details":"Preview and confirm project retirement using the guarded operation."}},status=405)
+    @staticmethod
+    def _retirement_preview(project):
+        active_states=(models.LabDeployment.State.PENDING,models.LabDeployment.State.DEPLOYING,models.LabDeployment.State.RUNNING,
+            models.LabDeployment.State.DEGRADED,models.LabDeployment.State.DELETING)
+        active_labs=project.labs.filter(deleted_at__isnull=True).count()
+        active_images=project.image_artifacts.filter(deleted_at__isnull=True).count()
+        active_uploads=project.upload_sessions.filter(status=models.UploadSession.Status.ACTIVE,expires_at__gt=timezone.now()).count()
+        deployments=models.LabDeployment.objects.filter(revision__lab__project=project)
+        active_deployments=deployments.filter(observed_state__in=active_states).count()
+        active_operations=models.OperationJob.objects.filter(Q(deployment__revision__lab__project=project)|Q(target_id__in=project.labs.values("id"))|
+            Q(target_id__in=project.image_artifacts.values("id"))|Q(target_id__in=project.upload_sessions.values("id")),
+            state__in=("accepted","scheduled","started")).distinct().count()
+        blockers=[]
+        for count,label in ((active_labs,"active lab"),(active_images,"active image artifact"),(active_uploads,"active upload"),
+            (active_deployments,"active deployment"),(active_operations,"active operation")):
+            if count: blockers.append(f"{count} {label}{'s' if count!=1 else ''}")
+        return {"project_id":str(project.id),"name":project.name,"updated_at":project.updated_at.isoformat(),"can_retire":not blockers,"blockers":blockers,
+            "references":{"active_labs":active_labs,"active_images":active_images,"active_uploads":active_uploads,
+                "active_deployments":active_deployments,"active_operations":active_operations,"members":project.memberships.count(),
+                "historical_deployments":deployments.count()},
+            "impact":["Remove the project from dashboards, libraries, selectors, and collaboration access.",
+                "Preserve memberships, deleted labs and images, deployments, configurations, operations, and audit history.",
+                "Allow the owner to reuse this project name."]}
+    @action(detail=True,methods=["get"],url_path="retirement-preview")
+    def retirement_preview(self,request,pk=None):
+        project=self.get_object()
+        if project_role(request.user,project)!=models.ProjectMembership.Role.ADMIN:
+            from rest_framework.exceptions import PermissionDenied; raise PermissionDenied()
+        response=Response(self._retirement_preview(project));response["Cache-Control"]="no-store";return response
+    @action(detail=True,methods=["post"],url_path="retire")
+    def retire(self,request,pk=None):
+        project=models.Project.objects.filter(Q(owner=request.user)|Q(memberships__user=request.user),pk=pk).distinct().first()
+        if not project: return Response({"error":{"code":"not_found"}},status=404)
+        if project_role(request.user,project)!=models.ProjectMembership.Role.ADMIN:
+            from rest_framework.exceptions import PermissionDenied; raise PermissionDenied()
+        key=request.headers.get("Idempotency-Key")
+        if not key: return Response({"error":{"code":"idempotency_key_required"}},status=400)
+        existing=models.OperationJob.objects.filter(owner=request.user,idempotency_key=key).first()
+        if existing:
+            if existing.operation_type!="retire_project" or existing.target_id!=project.id: return Response({"error":{"code":"idempotency_conflict"}},status=409)
+            return Response(existing.result_payload)
+        expected=request.headers.get("X-Expected-Updated-At")
+        if not expected: return Response({"error":{"code":"expected_updated_at_required"}},status=400)
+        if project.deleted_at: return Response({"error":{"code":"project_already_retired"}},status=410)
+        try:
+            with transaction.atomic():
+                locked=models.Project.objects.select_for_update().get(pk=project.pk)
+                if locked.updated_at.isoformat()!=expected:
+                    return Response({"error":{"code":"project_changed","details":"The project changed after retirement was previewed.",
+                        "updated_at":locked.updated_at.isoformat()}},status=409)
+                preview=self._retirement_preview(locked)
+                if not preview["can_retire"]: return Response({"error":{"code":"project_retirement_blocked","details":preview["blockers"],
+                    "references":preview["references"]}},status=409)
+                locked.deleted_at=timezone.now();locked.save(update_fields=["deleted_at","updated_at"])
+                result={"project_id":str(locked.id),"retired_at":locked.deleted_at.isoformat(),"preserved":preview["references"]}
+                job=models.OperationJob.objects.create(owner=request.user,operation_type="retire_project",target_id=locked.id,idempotency_key=key,
+                    state="succeeded",progress=100,request_payload={"expected_updated_at":expected},result_payload=result)
+                result["operation_id"]=str(job.id);job.result_payload=result;job.save(update_fields=["result_payload","updated_at"])
+                models.AuditEvent.objects.create(actor=request.user,project=locked,action="project.retired",target_type="Project",target_id=locked.id,
+                    correlation_id=getattr(request,"correlation_id",""),metadata={"operation":str(job.id),"preserved":preview["references"]})
+        except IntegrityError: return Response({"error":{"code":"operation_conflict"}},status=409)
+        return Response(result)
     @action(detail=True,methods=["get","patch"])
     def quotas(self,request,pk=None):
         project=self.get_object()

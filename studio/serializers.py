@@ -2,7 +2,15 @@ from rest_framework import serializers
 from . import models
 
 class ProjectSerializer(serializers.ModelSerializer):
-    class Meta: model=models.Project; fields="__all__"; read_only_fields=("owner",)
+    class Meta: model=models.Project; fields="__all__"; read_only_fields=("owner","deleted_at"); validators=[]
+    def validate(self,attrs):
+        owner=self.instance.owner if self.instance else self.context["request"].user
+        name=attrs.get("name",self.instance.name if self.instance else None)
+        if name:
+            matches=models.Project.objects.filter(owner=owner,name=name,deleted_at__isnull=True)
+            if self.instance: matches=matches.exclude(pk=self.instance.pk)
+            if matches.exists(): raise serializers.ValidationError({"name":"You already have an active project with this name."})
+        return attrs
 class MembershipSerializer(serializers.ModelSerializer):
     username=serializers.CharField(source="user.username",read_only=True)
     display_name=serializers.SerializerMethodField()
@@ -11,6 +19,7 @@ class MembershipSerializer(serializers.ModelSerializer):
 class LabSerializer(serializers.ModelSerializer):
     class Meta: model=models.Lab; fields="__all__"; read_only_fields=("current_draft","deleted_at"); validators=[]
     def validate_project(self,value):
+        if value.deleted_at: raise serializers.ValidationError("This project has been retired.")
         if self.instance and value.id!=self.instance.project_id:
             raise serializers.ValidationError("A lab cannot be moved between projects.")
         return value
@@ -42,6 +51,9 @@ class UploadSessionSerializer(serializers.ModelSerializer):
         if value and (len(value)!=64 or any(character not in "0123456789abcdefABCDEF" for character in value)):
             raise serializers.ValidationError("Expected checksum must be a 64-character SHA-256 hex digest.")
         return value.lower()
+    def validate_project(self,value):
+        if value.deleted_at: raise serializers.ValidationError("This project has been retired.")
+        return value
     class Meta: model=models.UploadSession; fields="__all__"; read_only_fields=("owner","received_bytes","received_parts","expires_at","status","computed_checksum","artifact_destination")
 class ImageArtifactSerializer(serializers.ModelSerializer):
     class Meta: model=models.ImageArtifact; fields="__all__"

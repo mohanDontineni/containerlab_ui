@@ -21,8 +21,9 @@ class Project(UUIDModel):
     description = models.TextField(blank=True)
     tags = models.JSONField(default=list, blank=True)
     quotas = models.JSONField(default=dict, blank=True)
+    deleted_at = models.DateTimeField(null=True, blank=True)
     class Meta:
-        constraints = [models.UniqueConstraint(fields=["owner", "name"], name="unique_project_name_per_owner")]
+        constraints = [models.UniqueConstraint(fields=["owner", "name"], condition=Q(deleted_at__isnull=True), name="unique_active_project_name_per_owner")]
 
 class ProjectMembership(UUIDModel):
     class Role(models.TextChoices): ADMIN="administrator"; EDITOR="editor"; VIEWER="viewer"

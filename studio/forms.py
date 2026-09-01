@@ -44,7 +44,7 @@ class LabForm(forms.ModelForm):
         }
     def __init__(self, user, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["project"].queryset = Project.objects.filter(Q(owner=user) | Q(memberships__user=user, memberships__role__in=("administrator", "editor"))).distinct()
+        self.fields["project"].queryset = Project.objects.filter(Q(owner=user) | Q(memberships__user=user, memberships__role__in=("administrator", "editor")),deleted_at__isnull=True).distinct()
 
 class LabEditForm(forms.ModelForm):
     class Meta:
@@ -63,4 +63,4 @@ class RegistryImageForm(forms.Form):
     version = forms.CharField(max_length=80, required=False)
     def __init__(self, user, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["project"].queryset = Project.objects.filter(Q(owner=user) | Q(memberships__user=user, memberships__role__in=("administrator", "editor"))).distinct()
+        self.fields["project"].queryset = Project.objects.filter(Q(owner=user) | Q(memberships__user=user, memberships__role__in=("administrator", "editor")),deleted_at__isnull=True).distinct()

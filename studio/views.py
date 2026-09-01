@@ -6,7 +6,7 @@ from .models import Lab, LabDeployment, OperationJob, Project
 def dashboard(request):
     project_filter = Q(revision__lab__project__owner=request.user) | Q(revision__lab__project__memberships__user=request.user)
     deployments = LabDeployment.objects.filter(project_filter).select_related("revision__lab").distinct().order_by("-updated_at")[:8]
-    visible_projects = Project.objects.filter(Q(owner=request.user) | Q(memberships__user=request.user)).distinct()
+    visible_projects = Project.objects.filter(Q(owner=request.user) | Q(memberships__user=request.user),deleted_at__isnull=True).distinct()
     all_deployments = LabDeployment.objects.filter(project_filter).distinct()
     summary = {
         "active": all_deployments.filter(observed_state="running").count(),

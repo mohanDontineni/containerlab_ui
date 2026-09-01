@@ -79,6 +79,70 @@ def test_project_membership_prevents_owner_duplication_and_cross_project_mutatio
     assert client.get(f"/api/v1/projects/{other.id}/members/").status_code==200
 
 @pytest.mark.django_db
+def test_project_metadata_is_admin_only_audited_and_active_name_unique():
+    owner=User.objects.create_user("project-edit-owner",password="long-enough-password")
+    editor=User.objects.create_user("project-edit-editor",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="Before",description="old",tags=["old"])
+    ProjectMembership.objects.create(project=project,user=editor,role="editor")
+    client=APIClient();client.force_authenticate(editor)
+    assert client.patch(f"/api/v1/projects/{project.id}/",{"name":"Denied"},format="json").status_code==403
+    client.force_authenticate(owner)
+    changed=client.patch(f"/api/v1/projects/{project.id}/",{"name":"After","description":"new","tags":["network"]},format="json")
+    assert changed.status_code==200
+    project.refresh_from_db();assert (project.name,project.description,project.tags)==("After","new",["network"])
+    event=AuditEvent.objects.get(action="project.metadata_updated",target_id=project.id)
+    assert set(event.metadata["changed_fields"])=={"name","description","tags"} and "new" not in str(event.metadata)
+    duplicate=client.post("/api/v1/projects/",{"name":"After","description":"","tags":[]},format="json")
+    assert duplicate.status_code==400
+
+@pytest.mark.django_db
+def test_guarded_project_retirement_blocks_dependencies_then_hides_workspace_preserves_history_and_reuses_name():
+    owner=User.objects.create_user("project-retire-owner",password="long-enough-password")
+    admin=User.objects.create_user("project-retire-admin",password="long-enough-password")
+    editor=User.objects.create_user("project-retire-editor",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="Reusable project")
+    ProjectMembership.objects.create(project=project,user=admin,role="administrator")
+    ProjectMembership.objects.create(project=project,user=editor,role="editor")
+    lab=Lab.objects.create(project=project,name="active lab");revision=LabRevision.objects.create(lab=lab,revision_number=1,topology_checksum="f"*64,immutable=True)
+    deployment=LabDeployment.objects.create(revision=revision,cluster_identity="test",namespace="clab-project-retire",runtime_version="0.8.0",observed_state="running")
+    artifact=ImageArtifact.objects.create(project=project,owner=owner,original_filename="active.bin",detected_format="unknown",byte_size=10,
+        checksum="a"*64,storage_reference="",validation_status="unsupported")
+    upload=UploadSession.objects.create(owner=owner,project=project,original_filename="active.tar",expected_size=20,
+        expires_at=timezone.now()+timezone.timedelta(hours=1),artifact_destination="/tmp/not-written")
+    job=OperationJob.objects.create(deployment=deployment,owner=owner,operation_type="diagnostic_ping",target_id=deployment.id,
+        idempotency_key="active-project-job",state="started")
+    client=APIClient();client.force_authenticate(editor)
+    assert client.get(f"/api/v1/projects/{project.id}/retirement-preview/").status_code==403
+    client.force_authenticate(admin);blocked=client.get(f"/api/v1/projects/{project.id}/retirement-preview/")
+    assert blocked.status_code==200 and not blocked.data["can_retire"]
+    assert blocked.data["references"]|{"active_labs":1,"active_images":1,"active_uploads":1,"active_deployments":1,"active_operations":1}==blocked.data["references"]
+    lab.deleted_at=timezone.now();lab.save(update_fields=["deleted_at","updated_at"]);artifact.deleted_at=timezone.now();artifact.save(update_fields=["deleted_at","updated_at"])
+    upload.status="cancelled";upload.save(update_fields=["status","updated_at"]);deployment.observed_state="stopped";deployment.save(update_fields=["observed_state","updated_at"])
+    job.state="succeeded";job.save(update_fields=["state","updated_at"])
+    preview=client.get(f"/api/v1/projects/{project.id}/retirement-preview/");assert preview.data["can_retire"]
+    key="retire-project-once";headers={"HTTP_IDEMPOTENCY_KEY":key,"HTTP_X_EXPECTED_UPDATED_AT":preview.data["updated_at"]}
+    retired=client.post(f"/api/v1/projects/{project.id}/retire/",{},format="json",**headers)
+    replay=client.post(f"/api/v1/projects/{project.id}/retire/",{},format="json",**headers)
+    assert retired.status_code==replay.status_code==200 and retired.data==replay.data
+    project.refresh_from_db();assert project.deleted_at and ProjectMembership.objects.filter(project=project).count()==2
+    assert LabRevision.objects.filter(id=revision.id).exists() and LabDeployment.objects.filter(id=deployment.id).exists()
+    assert client.get(f"/api/v1/projects/{project.id}/").status_code==404
+    assert client.post("/api/v1/labs/",{"project":str(project.id),"name":"blocked","tags":[]},format="json").status_code==400
+    client.force_authenticate(owner)
+    replacement=client.post("/api/v1/projects/",{"name":"Reusable project","description":"replacement","tags":[]},format="json")
+    assert replacement.status_code==201 and AuditEvent.objects.filter(action="project.retired",target_id=project.id).count()==1
+
+@pytest.mark.django_db
+def test_project_retirement_rejects_stale_preview_and_normal_destroy():
+    owner=User.objects.create_user("project-retire-stale",password="long-enough-password")
+    project=Project.objects.create(owner=owner,name="Stale project");client=APIClient();client.force_authenticate(owner)
+    endpoint=f"/api/v1/projects/{project.id}/";assert client.delete(endpoint).status_code==405
+    preview=client.get(endpoint+"retirement-preview/");project.description="changed";project.save(update_fields=["description","updated_at"])
+    response=client.post(endpoint+"retire/",{},format="json",HTTP_IDEMPOTENCY_KEY="stale-project-retire",
+        HTTP_X_EXPECTED_UPDATED_AT=preview.data["updated_at"])
+    assert response.status_code==409 and response.data["error"]["code"]=="project_changed"
+
+@pytest.mark.django_db
 def test_project_quotas_are_admin_managed_reported_and_enforced_for_labs_members_and_uploads():
     owner=User.objects.create_user("quota-owner",password="long-enough-password")
     editor=User.objects.create_user("quota-editor",password="long-enough-password")
