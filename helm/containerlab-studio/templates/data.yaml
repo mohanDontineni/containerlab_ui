@@ -34,6 +34,7 @@ spec:
   storageClassName: {{ .Values.storageClass }}
   {{- end }}
 ---
+{{- if .Values.registry.localPersistence.enabled }}
 apiVersion: v1
 kind: PersistentVolume
 metadata:
@@ -51,6 +52,7 @@ spec:
       - matchExpressions: [{key: kubernetes.io/hostname,operator: In,values: [{{ .Values.registry.localPersistence.nodeHostname | quote }}]}]
   claimRef: {namespace: {{ .Release.Namespace }},name: containerlab-studio-registry}
 ---
+{{- end }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -59,7 +61,11 @@ metadata:
 spec:
   accessModes: [ReadWriteOnce]
   resources: {requests: {storage: {{ .Values.storage.registry }}}}
+  {{- if .Values.registry.localPersistence.enabled }}
   storageClassName: {{ .Values.registry.storageClass }}
+  {{- else if .Values.storageClass }}
+  storageClassName: {{ .Values.storageClass }}
+  {{- end }}
 ---
 apiVersion: apps/v1
 kind: StatefulSet

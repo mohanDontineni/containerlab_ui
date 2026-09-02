@@ -2,7 +2,20 @@
 
 These commands are for platform administrators. Normal project, image, topology, runtime, console, configuration, and diagnostic workflows remain GUI-only.
 
-Both lifecycle scripts fail closed when the active Kubernetes context differs from `KUBE_CONTEXT` (default `kubernetes-admin@kubernetes`). They accept `NAMESPACE`, `RELEASE_NAME`, `VALUES_FILE`, `IMAGE_REPOSITORY`, `IMAGE_TAG`, and `STORAGE_CLASS` instead of requiring manifest edits. Plan is always the default and makes no cluster changes.
+## Quick start
+
+With `kubectl` pointed at the intended cluster and Helm 3 plus OpenSSL installed:
+
+```bash
+./studioctl install
+./studioctl credentials
+```
+
+Quick start creates the namespace, installs the pinned Clabernetes chart when absent, generates strong database/application/bootstrap secrets, creates a self-signed certificate for the discovered node IP, waits for Helm readiness, and runs the smoke test. Existing Secrets are never overwritten. The generated administrator must rotate the password on first sign-in.
+
+Defaults may be changed without editing manifests: `KUBE_CONTEXT`, `NAMESPACE`, `STUDIO_HOST`, `IMAGE_REPOSITORY`, `IMAGE_TAG`, `STORAGE_CLASS`, `ADMIN_USERNAME`, and `ADMIN_PASSWORD_FILE`. The default registry PVC uses the cluster's dynamic StorageClass. Optional node-local registry storage requires an explicit values file, node hostname, and prepared host path.
+
+Both lifecycle scripts fail closed when the active Kubernetes context differs from `KUBE_CONTEXT` (default: the currently selected context). They accept `NAMESPACE`, `RELEASE_NAME`, `VALUES_FILE`, `IMAGE_REPOSITORY`, `IMAGE_TAG`, and `STORAGE_CLASS` instead of requiring manifest edits. Plan is always the default and makes no cluster changes.
 
 ## Install or upgrade
 
@@ -18,7 +31,7 @@ PLAN_OUTPUT=/tmp/containerlab-studio-plan.yaml \
 scripts/install.sh plan
 ```
 
-The plan runs the read-only cluster preflight, lints the chart, renders the complete manifest, and identifies context, namespace, release, image, and output path. Review the output and provision `containerlab-studio-tls` and `containerlab-studio-secrets` in the target namespace before applying.
+The plan runs the read-only cluster preflight, lints the chart, renders the complete manifest, and identifies context, namespace, release, image, and output path. Review the output and provision `containerlab-studio-tls`, `containerlab-studio-secrets`, and `containerlab-studio-initial-admin` before applying. `./studioctl install` does this automatically for a new installation.
 
 Apply uses the same variables and refuses `IMAGE_TAG=latest`:
 

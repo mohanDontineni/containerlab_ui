@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 set -eu
-host=${STUDIO_HOST:-192.168.1.148}
+host=${STUDIO_HOST:-$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')}
 namespace=${NAMESPACE:-containerlab}
 code=$(curl -ksS -o /dev/null -w '%{http_code}' "https://${host}:30444/admin/login/")
 [ "$code" = 200 ] || { echo "GUI returned $code" >&2; exit 1; }

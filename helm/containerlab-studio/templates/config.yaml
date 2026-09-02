@@ -8,8 +8,8 @@ data:
   POSTGRES_DB: containerlab
   POSTGRES_USER: containerlab
   REDIS_URL: redis://containerlab-studio-redis:6379/0
-  CLUSTER_IDENTITY: kubernetes-admin@kubernetes@https://192.168.1.148:6443
-  LAB_NAMESPACE_PREFIX: containerlab-lab-
+  CLUSTER_IDENTITY: {{ default .Release.Name .Values.clusterIdentity | quote }}
+  LAB_NAMESPACE_PREFIX: {{ .Values.labNamespacePrefix | quote }}
   ARTIFACT_ROOT: /artifacts
   STUDIO_NAMESPACE: {{ .Release.Namespace | quote }}
   PUBLISHER_IMAGE: "ghcr.io/clabernetes/clabernetes/clabernetes-launcher:0.8.0"

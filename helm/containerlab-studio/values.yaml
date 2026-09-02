@@ -1,12 +1,14 @@
 image:
-  repository: containerlab-studio
-  tag: latest
+  repository: ghcr.io/mohandontineni/containerlab-studio
+  tag: main
   pullPolicy: IfNotPresent
 gateway:
   image: nginx:1.29.1-alpine
   nodePort: 30444
   tlsSecret: containerlab-studio-tls
 host: 192.168.1.148
+clusterIdentity: ""
+labNamespacePrefix: containerlab-lab-
 storageClass: ""
 storage:
   postgres: 10Gi
@@ -21,9 +23,9 @@ registry:
   image: registry:3.1.1
   storageClass: studio-local
   localPersistence:
-    enabled: true
+    enabled: false
     path: /var/lib/containerlab-studio/registry
-    nodeHostname: trading
+    nodeHostname: ""
 resources:
   web: {requests: {cpu: 100m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
   worker: {requests: {cpu: 100m, memory: 256Mi}, limits: {cpu: "2", memory: 2Gi}}

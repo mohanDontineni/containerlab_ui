@@ -1,2 +1,2 @@
 {{- if ne (int .Values.gateway.nodePort) 30444 }}{{ fail "gateway.nodePort must be exactly 30444" }}{{- end }}
-
+{{- if and .Values.registry.localPersistence.enabled (not .Values.registry.localPersistence.nodeHostname) }}{{ fail "registry.localPersistence.nodeHostname is required when local persistence is enabled" }}{{- end }}

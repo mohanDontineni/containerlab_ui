@@ -129,6 +129,13 @@ spec:
       - name: migrate
         image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
         imagePullPolicy: {{ .Values.image.pullPolicy }}
-        command: [python,manage.py,migrate,--noinput]
+        command: [sh,-c]
+        args:
+        - |
+          python manage.py migrate --noinput
+          python manage.py shell -c 'import os; from studio.models import User; u, created = User.objects.get_or_create(username=os.environ["INITIAL_ADMIN_USERNAME"], defaults={"is_staff": True, "is_superuser": True, "must_change_password": True}); created and u.set_password(os.environ["INITIAL_ADMIN_PASSWORD"]); created and u.save()'
         envFrom: [{configMapRef: {name: containerlab-studio-config}},{secretRef: {name: containerlab-studio-secrets}}]
+        env:
+        - {name: INITIAL_ADMIN_USERNAME, valueFrom: {secretKeyRef: {name: containerlab-studio-initial-admin,key: username}}}
+        - {name: INITIAL_ADMIN_PASSWORD, valueFrom: {secretKeyRef: {name: containerlab-studio-initial-admin,key: password}}}
         securityContext: {allowPrivilegeEscalation: false,capabilities: {drop: [ALL]}}

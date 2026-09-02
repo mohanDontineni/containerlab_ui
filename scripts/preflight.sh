@@ -1,7 +1,8 @@
 #!/usr/bin/env sh
 set -eu
 namespace=${NAMESPACE:-containerlab}
-[ "$(kubectl config current-context)" = "${KUBE_CONTEXT:-kubernetes-admin@kubernetes}" ] || { echo "Unexpected Kubernetes context" >&2; exit 2; }
+current=$(kubectl config current-context)
+[ "$current" = "${KUBE_CONTEXT:-$current}" ] || { echo "Unexpected Kubernetes context" >&2; exit 2; }
 kubectl get nodes
 if kubectl get svc -A -o jsonpath='{range .items[*].spec.ports[*]}{.nodePort}{"\n"}{end}' | grep -qx 30444; then
   kubectl get svc containerlab-studio-gateway -n "$namespace" -o jsonpath='{range .spec.ports[*]}{.nodePort}{"\n"}{end}' 2>/dev/null | grep -qx 30444 || {

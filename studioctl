@@ -1,0 +1,42 @@
+#!/usr/bin/env sh
+set -eu
+
+root=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+command=${1:-help}
+[ "$#" -eq 0 ] || shift
+
+usage() {
+  cat <<'EOF'
+ContainerLab Studio
+
+Usage:
+  ./studioctl install       Install Clabernetes and Studio into Kubernetes
+  ./studioctl verify        Run the live deployment smoke checks
+  ./studioctl credentials   Print the generated first-login credentials
+  ./studioctl plan          Render and validate without changing the cluster
+  ./studioctl uninstall     Preview removal (non-destructive)
+
+Common environment overrides:
+  KUBE_CONTEXT, NAMESPACE, STUDIO_HOST, IMAGE_REPOSITORY, IMAGE_TAG,
+  STORAGE_CLASS, ADMIN_USERNAME, ADMIN_PASSWORD_FILE
+EOF
+}
+
+case "$command" in
+  install) exec "$root/scripts/quickstart.sh" "$@" ;;
+  verify)
+    export NAMESPACE=${NAMESPACE:-containerlab}
+    export STUDIO_HOST=${STUDIO_HOST:-$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')}
+    exec "$root/scripts/smoke-test.sh"
+    ;;
+  credentials)
+    namespace=${NAMESPACE:-containerlab}
+    context=${KUBE_CONTEXT:-$(kubectl config current-context)}
+    printf 'Username: '; kubectl --context "$context" -n "$namespace" get secret containerlab-studio-initial-admin -o jsonpath='{.data.username}' | base64 -d; printf '\n'
+    printf 'Password: '; kubectl --context "$context" -n "$namespace" get secret containerlab-studio-initial-admin -o jsonpath='{.data.password}' | base64 -d; printf '\n'
+    ;;
+  plan) exec "$root/scripts/install.sh" plan ;;
+  uninstall) exec "$root/scripts/uninstall.sh" plan ;;
+  help|-h|--help) usage ;;
+  *) usage >&2; exit 64 ;;
+esac
